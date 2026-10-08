@@ -1,5 +1,6 @@
 plugins {
     alias(libs.plugins.kotlin.jvm)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 kotlin {
@@ -13,5 +14,6 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 dependencies {
+    implementation(libs.kotlinx.serialization.json)
     testImplementation(libs.junit)
 }
