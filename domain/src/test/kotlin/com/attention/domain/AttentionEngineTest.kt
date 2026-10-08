@@ -91,4 +91,83 @@ class AttentionEngineTest {
         assertEquals(20_000L, cumulativeMilestoneReward(500))
         assertEquals(30_000L, cumulativeMilestoneReward(1000))
     }
+
+    @Test
+    fun future_rules_and_snapshots_preserve_previous_period() {
+        val state = AttentionState().addTarget("项目")
+        val target = state.targets.single()
+        val stage = state.addGoalStage(target.id, GoalCadence.WEEKLY, 120, date.toString()).goalStages.single()
+        val snapshot = state.addTimeEntry(date.toString(), 90, target.id)
+            .snapshot(stage, date.minusDays(3), date.plusDays(3))
+        val future = state.addFutureGoalRule(FutureGoalRule(targetId = target.id, cadence = GoalCadence.WEEKLY, targetMinutes = 180, effectiveFrom = date.plusDays(7).toString()))
+            .addPeriodSnapshot(snapshot)
+
+        assertEquals(180, future.goalRulesAt(target.id, date.plusDays(8)).single().targetMinutes)
+        assertEquals(1, future.periodSnapshots.size)
+        assertEquals(30, future.periodSnapshots.single().gapMinutes)
+    }
+
+    @Test
+    fun unowned_batch_assignment_updates_experience_once() {
+        val state = AttentionState().addTarget("学习")
+        val target = state.targets.single()
+        val withEntries = state.addTimeEntry(date.toString(), 15)
+            .addTimeEntry(date.toString(), 10)
+        assertEquals(0L, withEntries.recalculateExperience().experience)
+        val assigned = withEntries.assignUnowned(withEntries.timeEntries.map { it.id }.toSet(), target.id)
+        assertEquals(25L, assigned.experience)
+        assertEquals(25, assigned.subtreeMinutes(target.id))
+    }
+
+    @Test
+    fun milestone_instance_is_awarded_once() {
+        val state = AttentionState().addTarget("每日投入")
+        val target = state.targets.single()
+        val dayState = (0..6).fold(state) { current, offset ->
+            current.addTimeEntry(date.plusDays(offset.toLong()).toString(), 1, target.id)
+        }
+        val awarded = dayState.awardEligibleMilestones(date.plusDays(6))
+        assertTrue(awarded.milestones.any { it.instanceKey == "streak:${target.id}:7" })
+        assertEquals(500L, awarded.milestones.single().reward)
+        assertEquals(1, awarded.awardEligibleMilestones(date.plusDays(6)).milestones.size)
+    }
+
+    @Test
+    fun csv_exports_keep_analysis_columns_and_escape_values() {
+        val state = AttentionState().addTarget("学习,英语")
+        val target = state.targets.single()
+        val exported = state
+            .addTimeEntry(date.toString(), 20, target.id, note = "带,逗号")
+            .addSchedule(ScheduleEntry(planningDate = date.toString(), title = "复习\"章节", estimatedMinutes = 30, targetId = target.id))
+        assertTrue(exported.timeEntriesCsv().contains("\"带,逗号\""))
+        assertTrue(exported.timeEntriesCsv().contains("target_title"))
+        assertTrue(exported.schedulesCsv().contains("planning_date,title,completed"))
+        assertTrue(exported.schedulesCsv().contains("\"复习\"\"章节\""))
+    }
+
+    @Test
+    fun future_target_move_does_not_rewrite_historical_parent_rollup() {
+        val state = AttentionState().addTarget("旧父目标").addTarget("新父目标")
+        val oldParent = state.targets.first()
+        val newParent = state.targets.last()
+        val moved = state.addTarget("子计划", oldParent.id)
+        val child = moved.targets.single { it.title == "子计划" }
+        val withHistory = moved
+            .addTimeEntry(date.toString(), 20, child.id)
+            .addTimeEntry(date.plusDays(2).toString(), 15, child.id)
+            .addFutureTargetMove(child.id, newParent.id, date.plusDays(1).toString())
+        assertEquals(20, withHistory.subtreeMinutes(oldParent.id, date.toString()))
+        assertEquals(0, withHistory.subtreeMinutes(oldParent.id, date.plusDays(2).toString()))
+        assertEquals(0, withHistory.subtreeMinutes(newParent.id, date.toString()))
+        assertEquals(15, withHistory.subtreeMinutes(newParent.id, date.plusDays(2).toString()))
+    }
+
+    @Test
+    fun siblings_can_be_reordered_without_changing_stable_ids() {
+        val state = AttentionState().addTarget("一").addTarget("二").addTarget("三")
+        val third = state.targets.single { it.title == "三" }
+        val reordered = state.reorderTarget(third.id, 0)
+        assertEquals(listOf("三", "一", "二"), reordered.targetChildren(null).map { it.title })
+        assertEquals(third.id, reordered.targetChildren(null).first().id)
+    }
 }

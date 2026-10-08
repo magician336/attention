@@ -21,6 +21,7 @@ interface AttentionStateRepository {
     suspend fun replace(state: AttentionState)
     suspend fun exportJson(): String
     suspend fun importJson(json: String, clearExisting: Boolean): AttentionState
+    suspend fun lastImportBackup(): String?
 }
 
 class DataStoreAttentionStateRepository(
@@ -62,27 +63,27 @@ class DataStoreAttentionStateRepository(
 
     override suspend fun importJson(encoded: String, clearExisting: Boolean): AttentionState {
         val incoming = json.decodeFromString<AttentionState>(encoded)
-        if (clearExisting) {
-            replace(incoming)
-            return incoming
-        }
         var result = AttentionState()
         mutex.withLock {
             dataStore.edit { preferences ->
                 val current = preferences[STATE_KEY]?.let { value ->
                     runCatching { json.decodeFromString<AttentionState>(value) }.getOrDefault(AttentionState())
                 } ?: AttentionState()
+                preferences[BACKUP_KEY] = json.encodeToString(current)
                 result = merge(current, incoming)
-                preferences[STATE_KEY] = json.encodeToString(result)
+                preferences[STATE_KEY] = json.encodeToString(if (clearExisting) incoming else result)
             }
         }
-        return result
+        return if (clearExisting) incoming else result
     }
+
+    override suspend fun lastImportBackup(): String? = dataStore.data.first()[BACKUP_KEY]
 
     private suspend fun stateFirst(): AttentionState = state.first()
 
     private companion object {
         val STATE_KEY = stringPreferencesKey("attention_state_json")
+        val BACKUP_KEY = stringPreferencesKey("attention_import_backup_json")
         val defaultJson = Json {
             ignoreUnknownKeys = true
             encodeDefaults = true
@@ -103,6 +104,9 @@ class DataStoreAttentionStateRepository(
                 schedules = mergeById(current.schedules, incoming.schedules) { it.id },
                 recurrenceRules = mergeById(current.recurrenceRules, incoming.recurrenceRules) { it.id },
                 migrations = mergeById(current.migrations, incoming.migrations) { it.id },
+                futureGoalRules = mergeById(current.futureGoalRules, incoming.futureGoalRules) { it.id },
+                periodSnapshots = mergeById(current.periodSnapshots, incoming.periodSnapshots) { it.id },
+                targetMoves = mergeById(current.targetMoves, incoming.targetMoves) { it.id },
                 milestones = mergeById(current.milestones, incoming.milestones) { it.id },
                 experience = maxOf(current.experience, incoming.experience),
             )

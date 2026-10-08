@@ -109,6 +109,38 @@ data class Migration(
 )
 
 @Serializable
+data class FutureGoalRule(
+    val id: String = newId(),
+    val targetId: String,
+    val cadence: GoalCadence,
+    val targetMinutes: Int,
+    val effectiveFrom: String,
+    val dueDate: String? = null,
+)
+
+@Serializable
+data class PeriodSnapshot(
+    val id: String = newId(),
+    val targetId: String,
+    val cadence: GoalCadence,
+    val periodStart: String,
+    val periodEnd: String,
+    val targetMinutes: Int,
+    val actualMinutes: Int,
+    val gapMinutes: Int,
+    val excessMinutes: Int,
+    val completed: Boolean,
+)
+
+@Serializable
+data class TargetMove(
+    val id: String = newId(),
+    val targetId: String,
+    val parentId: String?,
+    val effectiveFrom: String,
+)
+
+@Serializable
 data class ActiveTimer(
     val targetId: String?,
     val startedAtEpochMillis: Long,
@@ -135,6 +167,9 @@ data class AttentionState(
     val schedules: List<ScheduleEntry> = emptyList(),
     val recurrenceRules: List<RecurrenceRule> = emptyList(),
     val migrations: List<Migration> = emptyList(),
+    val futureGoalRules: List<FutureGoalRule> = emptyList(),
+    val periodSnapshots: List<PeriodSnapshot> = emptyList(),
+    val targetMoves: List<TargetMove> = emptyList(),
     val milestones: List<Milestone> = emptyList(),
     val experience: Long = 0,
     val activeTimer: ActiveTimer? = null,
@@ -155,5 +190,14 @@ data class GoalProgress(
 
 data class CapacitySummary(val capacityMinutes: Int?, val usedMinutes: Int, val overloaded: Boolean)
 
-data class TimerResult(val state: AttentionState, val entries: List<TimeEntry>)
+data class PeriodStats(
+    val range: ClosedRange<LocalDate>,
+    val targetMinutes: Int,
+    val actualMinutes: Int,
+    val unownedMinutes: Int,
+    val migrationMinutes: Int,
+    val excessMinutes: Int,
+    val byTargetMinutes: Map<String, Int>,
+)
 
+data class TimerResult(val state: AttentionState, val entries: List<TimeEntry>)

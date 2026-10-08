@@ -1,6 +1,9 @@
 package com.attention.app
 
 import android.content.Context
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,6 +16,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -36,23 +40,30 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.attention.app.data.DataStoreAttentionStateRepository
+import com.attention.app.timer.AttentionTimerService
+import com.attention.app.reminder.ReminderScheduler
 import com.attention.domain.AttentionState
 import com.attention.domain.GoalCadence
 import com.attention.domain.LaunchDestination
 import com.attention.domain.ScheduleEntry
+import com.attention.domain.ScheduleFrequency
+import com.attention.domain.RecurrenceRule
 import com.attention.domain.StoredSettings
 import com.attention.domain.Target
 import com.attention.domain.capacitySummary
 import com.attention.domain.directMinutes
+import com.attention.domain.descendantIds
 import com.attention.domain.levelForExperience
 import com.attention.domain.planningDate
+import com.attention.domain.periodStats
 import com.attention.domain.progress
 import com.attention.domain.subtreeMinutes
 import com.attention.domain.targetChildren
 import java.time.Instant
 import java.time.LocalDate
+import kotlinx.serialization.json.Json
 
-private val Context.attentionStateDataStore by preferencesDataStore(name = "attention_state")
+internal val Context.attentionStateDataStore by preferencesDataStore(name = "attention_state")
 
 private class WorkspaceViewModelFactory(
     private val repository: DataStoreAttentionStateRepository,
@@ -69,7 +80,23 @@ fun WorkspaceApp() {
     val viewModel: AttentionViewModel = viewModel(factory = WorkspaceViewModelFactory(repository))
     val state by viewModel.state.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
-    var destination by remember { mutableStateOf(LaunchDestination.TODAY) }
+    var destination by remember(state.launchDestination, state.lastOpenedDestination) {
+        mutableStateOf(resolveLaunchDestination(state.launchDestination, state.lastOpenedDestination))
+    }
+    var jsonPreview by remember { mutableStateOf<String?>(null) }
+    var csvPreview by remember { mutableStateOf<String?>(null) }
+    var pendingImport by remember { mutableStateOf<String?>(null) }
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            val encoded = runCatching {
+                context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+            }.getOrNull()
+            if (!encoded.isNullOrBlank()) {
+                pendingImport = encoded
+            }
+        }
+    }
+    androidx.compose.runtime.LaunchedEffect(destination) { viewModel.saveLastOpened(destination) }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Attention") }) },
@@ -96,14 +123,45 @@ fun WorkspaceApp() {
                 LaunchDestination.TODAY, LaunchDestination.LAST_OPENED -> WorkspaceTodayScreen(state, viewModel)
                 LaunchDestination.TARGETS -> TargetsScreen(state, viewModel)
                 LaunchDestination.ALL_DATES -> AgendaScreen(state, viewModel)
-                LaunchDestination.STATISTICS -> StatisticsScreen(state)
+                LaunchDestination.STATISTICS -> StatisticsScreen(
+                    state = state,
+                    viewModel = viewModel,
+                    onExportJson = { viewModel.exportJson { jsonPreview = it.take(800) } },
+                    onExportCsv = { viewModel.exportCsv { time, schedules -> csvPreview = "时间记录\n$time\n日程\n$schedules" } },
+                    onImportJson = { importLauncher.launch(arrayOf("application/json", "text/plain")) },
+                )
             }
+            jsonPreview?.let { Text("JSON 预览：\n$it", modifier = Modifier.padding(16.dp)) }
+            csvPreview?.let { Text("CSV 预览：\n${it.take(800)}", modifier = Modifier.padding(16.dp)) }
         }
+    }
+    pendingImport?.let { encoded ->
+        val preview = runCatching { Json { ignoreUnknownKeys = true }.decodeFromString<AttentionState>(encoded) }.getOrNull()
+        AlertDialog(
+            onDismissRequest = { pendingImport = null },
+            title = { Text("导入预览") },
+            text = {
+                Text(
+                    preview?.let { "目标 ${it.targets.size} 个，阶段 ${it.goalStages.size} 个，时间记录 ${it.timeEntries.size} 条，日程 ${it.schedules.size} 条。导入前会自动备份当前数据。" }
+                        ?: "JSON 无法解析，现有数据不会改变。",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { if (preview != null) viewModel.importJson(encoded, false); pendingImport = null }) { Text("合并导入") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { if (preview != null) viewModel.importJson(encoded, true); pendingImport = null }) { Text("清空后恢复") }
+                    TextButton(onClick = { pendingImport = null }) { Text("取消") }
+                }
+            },
+        )
     }
 }
 
 @Composable
 private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionViewModel) {
+    val context = LocalContext.current
     val date = state.planningDate(Instant.now()).toString()
     val capacity = state.capacitySummary(date)
     var minutes by remember { mutableStateOf("15") }
@@ -143,6 +201,14 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
                         OutlinedButton(onClick = { viewModel.addTime(date, amount, null) }) { Text("+$amount") }
                     }
                 }
+                state.targets.filter { !it.archived }.take(4).forEach { target ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Text(target.title, Modifier.weight(1f))
+                        listOf(15, 30).forEach { amount ->
+                            TextButton(onClick = { viewModel.addTime(date, amount, target.id) }) { Text("+$amount") }
+                        }
+                    }
+                }
                 Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                     OutlinedTextField(minutes, { minutes = it.filter(Char::isDigit) }, label = { Text("分钟") }, modifier = Modifier.width(120.dp), singleLine = true)
                     Spacer(Modifier.width(8.dp))
@@ -157,13 +223,28 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
                 val timer = state.activeTimer
                 if (timer == null) {
                     Text("计时结束时会按规划日界线自动切分时间记录。")
-                    Button(onClick = { viewModel.startTimer(state.targets.firstOrNull()?.id) }) { Text("开始计时") }
+                    Button(onClick = {
+                        viewModel.startTimer(null)
+                        ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
+                    }) { Text("开始未归属计时") }
+                    state.targets.filter { !it.archived }.take(4).forEach { target ->
+                        OutlinedButton(onClick = {
+                            viewModel.startTimer(target.id)
+                            ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
+                        }) { Text("计时：${target.title}") }
+                    }
                 } else {
                     Text(if (timer.paused) "计时已暂停" else "正在计时")
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (timer.paused) Button(onClick = viewModel::resumeTimer) { Text("继续") }
                         else Button(onClick = viewModel::pauseTimer) { Text("暂停") }
-                        OutlinedButton(onClick = viewModel::stopTimer) { Text("结束并保存") }
+                        OutlinedButton(onClick = {
+                            viewModel.stopTimer()
+                            context.stopService(AttentionTimerService.intent(context))
+                        }) { Text("结束并保存") }
+                    }
+                    state.targets.filter { !it.archived && it.id != timer.targetId }.take(3).forEach { target ->
+                        OutlinedButton(onClick = { viewModel.switchTimer(target.id) }) { Text("切换到 ${target.title}") }
                     }
                 }
             }
@@ -194,6 +275,11 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
 private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) {
     var title by remember { mutableStateOf("") }
     var parentId by remember { mutableStateOf<String?>(null) }
+    var goalMinutes by remember { mutableStateOf("") }
+    var goalCadence by remember { mutableStateOf(GoalCadence.DAILY) }
+    var pendingDelete by remember { mutableStateOf<Target?>(null) }
+    var renameTarget by remember { mutableStateOf<Target?>(null) }
+    var renameText by remember { mutableStateOf("") }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("目标树", style = MaterialTheme.typography.headlineMedium)
         Text("父目标显示整个子树的实际投入；归档目标会从默认列表隐藏。")
@@ -205,14 +291,63 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
         if (parentId != null) {
             Text("当前父目标：${state.targets.firstOrNull { it.id == parentId }?.title ?: ""}")
             TextButton(onClick = { parentId = null }) { Text("改为根计划") }
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("为这个计划设置时间目标", style = MaterialTheme.typography.titleSmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        GoalCadence.entries.forEach { value ->
+                            if (goalCadence == value) Button(onClick = {}) { Text(value.label()) }
+                            else OutlinedButton(onClick = { goalCadence = value }) { Text(value.label()) }
+                        }
+                    }
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        OutlinedTextField(goalMinutes, { goalMinutes = it.filter(Char::isDigit) }, label = { Text("目标分钟") }, modifier = Modifier.width(140.dp), singleLine = true)
+                        Spacer(Modifier.width(8.dp))
+                        Button(onClick = {
+                            goalMinutes.toIntOrNull()?.takeIf { it > 0 }?.let {
+                                viewModel.addGoal(parentId!!, goalCadence, it, state.planningDate(Instant.now()).toString())
+                                goalMinutes = ""
+                            }
+                        }) { Text("保存目标") }
+                    }
+                }
+            }
         }
-        TargetTree(state, viewModel, null, 0) { parentId = it }
+        renameTarget?.let { target ->
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                OutlinedTextField(renameText, { renameText = it }, label = { Text("重命名 ${target.title}") }, modifier = Modifier.weight(1f), singleLine = true)
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = { if (renameText.isNotBlank()) viewModel.renameTarget(target.id, renameText); renameTarget = null }) { Text("保存") }
+            }
+        }
+        TargetTree(state, viewModel, null, 0, chooseParent = { parentId = it }, rename = { target -> renameTarget = target; renameText = target.title })
         if (state.targets.none { !it.archived }) Text("还没有计划。")
+        if (state.targets.any { it.archived }) {
+            Text("已归档目标", style = MaterialTheme.typography.titleMedium)
+            state.targets.filter { it.archived }.forEach { target ->
+                Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Text(target.title, Modifier.weight(1f))
+                    TextButton(onClick = { viewModel.restoreTarget(target.id) }) { Text("恢复") }
+                    TextButton(onClick = { pendingDelete = target }) { Text("安全删除") }
+                }
+            }
+        }
+    }
+    pendingDelete?.let { target ->
+        val affectedTime = state.timeEntries.count { it.targetId in state.descendantIds(target.id) }
+        val affectedSchedules = state.schedules.count { it.targetId in state.descendantIds(target.id) }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("删除目标关系？") },
+            text = { Text("将移除目标树关系，保留 $affectedTime 条时间记录并解除 $affectedSchedules 条日程的目标关联。历史经验和里程碑保留。") },
+            confirmButton = { TextButton(onClick = { viewModel.deleteTargetRelations(setOf(target.id)); pendingDelete = null }) { Text("确认删除") } },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } },
+        )
     }
 }
 
 @Composable
-private fun TargetTree(state: AttentionState, viewModel: AttentionViewModel, parentId: String?, depth: Int, chooseParent: (String) -> Unit) {
+private fun TargetTree(state: AttentionState, viewModel: AttentionViewModel, parentId: String?, depth: Int, chooseParent: (String) -> Unit, rename: (Target) -> Unit) {
     state.targetChildren(parentId).forEach { target ->
         val children = state.targetChildren(target.id)
         Column(Modifier.padding(start = (depth * 16).dp)) {
@@ -225,9 +360,14 @@ private fun TargetTree(state: AttentionState, viewModel: AttentionViewModel, par
             Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 TextButton(onClick = { viewModel.toggleTarget(target.id, !target.expanded) }) { Text(if (target.expanded) "折叠" else "展开") }
                 TextButton(onClick = { chooseParent(target.id) }) { Text("添加子计划") }
+                TextButton(onClick = { rename(target) }) { Text("重命名") }
+                val siblings = state.targetChildren(parentId)
+                val index = siblings.indexOf(target)
+                if (index > 0) TextButton(onClick = { viewModel.reorderTarget(target.id, index - 1) }) { Text("上移") }
+                if (index < siblings.lastIndex) TextButton(onClick = { viewModel.reorderTarget(target.id, index + 1) }) { Text("下移") }
                 TextButton(onClick = { viewModel.archiveTarget(target.id) }) { Text("归档") }
             }
-            if (target.expanded) TargetTree(state, viewModel, target.id, depth + 1, chooseParent)
+            if (target.expanded) TargetTree(state, viewModel, target.id, depth + 1, chooseParent, rename)
         }
     }
 }
@@ -237,12 +377,41 @@ private fun AgendaScreen(state: AttentionState, viewModel: AttentionViewModel) {
     var date by remember { mutableStateOf(state.planningDate(Instant.now()).toString()) }
     var title by remember { mutableStateOf("") }
     var estimate by remember { mutableStateOf("") }
+    var recurrenceTitle by remember { mutableStateOf("") }
+    var recurrenceFrequency by remember { mutableStateOf(ScheduleFrequency.DAILY) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("所有日期", style = MaterialTheme.typography.headlineMedium)
         Text("日程条目可带预计时长；它不会自动变成实际投入。")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(date, { date = it }, label = { Text("规划日 YYYY-MM-DD") }, modifier = Modifier.weight(1f), singleLine = true)
             OutlinedTextField(estimate, { estimate = it.filter(Char::isDigit) }, label = { Text("预计分钟") }, modifier = Modifier.width(110.dp), singleLine = true)
+        }
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("重复日程", style = MaterialTheme.typography.titleSmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedTextField(recurrenceTitle, { recurrenceTitle = it }, label = { Text("重复标题") }, modifier = Modifier.weight(1f), singleLine = true)
+                    ScheduleFrequency.entries.forEach { value ->
+                        if (recurrenceFrequency == value) Button(onClick = {}) { Text(value.label()) }
+                        else OutlinedButton(onClick = { recurrenceFrequency = value }) { Text(value.label()) }
+                    }
+                }
+                Button(onClick = {
+                    if (recurrenceTitle.isNotBlank()) {
+                        val rule = RecurrenceRule(title = recurrenceTitle, startDate = date, frequency = recurrenceFrequency, weekdays = if (recurrenceFrequency == ScheduleFrequency.WEEKLY) listOf(LocalDate.parse(date).dayOfWeek.value) else emptyList())
+                        viewModel.addRecurrence(rule)
+                        viewModel.materializeRecurrence(rule, LocalDate.parse(date).plusDays(30))
+                        recurrenceTitle = ""
+                    }
+                }) { Text("创建并生成未来 30 天") }
+                state.recurrenceRules.forEach { rule ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Text("${rule.title} · ${rule.frequency.label()}", Modifier.weight(1f))
+                        if (rule.active) TextButton(onClick = { viewModel.stopRecurrence(rule.id) }) { Text("停止未来生成") }
+                        else Text("已停止")
+                    }
+                }
+            }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(title, { title = it }, label = { Text("日程标题") }, modifier = Modifier.weight(1f), singleLine = true)
@@ -260,6 +429,7 @@ private fun AgendaScreen(state: AttentionState, viewModel: AttentionViewModel) {
 
 @Composable
 private fun ScheduleRow(entry: ScheduleEntry, viewModel: AttentionViewModel) {
+    val context = LocalContext.current
     Card(Modifier.fillMaxWidth()) {
         Row(Modifier.padding(12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -267,18 +437,49 @@ private fun ScheduleRow(entry: ScheduleEntry, viewModel: AttentionViewModel) {
                 Text("${entry.planningDate} · ${entry.estimatedMinutes ?: 0} 分钟${if (entry.completed) " · 已完成" else ""}")
             }
             TextButton(onClick = { viewModel.updateSchedule(entry.copy(completed = !entry.completed)) }) { Text(if (entry.completed) "取消完成" else "完成") }
+            TextButton(onClick = {
+                val updated = entry.copy(reminderEpochMillis = if (entry.reminderEpochMillis == null) System.currentTimeMillis() + 3_600_000 else null)
+                viewModel.updateSchedule(updated)
+                if (updated.reminderEpochMillis == null) ReminderScheduler(context).cancel(entry.id) else ReminderScheduler(context).schedule(updated)
+            }) { Text(if (entry.reminderEpochMillis == null) "提醒" else "取消提醒") }
         }
     }
 }
 
 @Composable
-private fun StatisticsScreen(state: AttentionState) {
+private fun StatisticsScreen(
+    state: AttentionState,
+    viewModel: AttentionViewModel,
+    onExportJson: () -> Unit,
+    onExportCsv: () -> Unit,
+    onImportJson: () -> Unit,
+) {
     val date = state.planningDate(Instant.now()).toString()
+    var cadence by remember { mutableStateOf(GoalCadence.DAILY) }
+    val stats = state.periodStats(LocalDate.parse(date), cadence)
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("统计与成长", style = MaterialTheme.typography.headlineMedium)
-        Text("规划日 $date：${state.timeEntries.filter { it.planningDate == date }.sumOf { it.durationMinutes }} 分钟")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            GoalCadence.entries.forEach { value ->
+                if (cadence == value) Button(onClick = {}) { Text(value.label()) }
+                else OutlinedButton(onClick = { cadence = value }) { Text(value.label()) }
+            }
+        }
+        Text("${stats.range.start} 至 ${stats.range.endInclusive}：实际 ${stats.actualMinutes} 分钟 · 目标 ${stats.targetMinutes} 分钟 · 缺口 ${stats.targetMinutes.minus(stats.actualMinutes).coerceAtLeast(0)} 分钟 · 超额 ${stats.excessMinutes} 分钟")
         Text("未归属活动：${state.unownedMinutesForUi()} 分钟")
+        Text("迁移目标：${stats.migrationMinutes} 分钟")
         Text("投入经验：${state.experience} · 等级 ${levelForExperience(state.experience)}")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onExportJson) { Text("预览 JSON 备份") }
+            OutlinedButton(onClick = onImportJson) { Text("导入 JSON") }
+            OutlinedButton(onClick = onExportCsv) { Text("预览 CSV") }
+        }
+        Text("首屏入口", style = MaterialTheme.typography.titleMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            listOf(LaunchDestination.TODAY to "今天", LaunchDestination.TARGETS to "目标树", LaunchDestination.ALL_DATES to "所有日期", LaunchDestination.STATISTICS to "统计", LaunchDestination.LAST_OPENED to "上次打开").forEach { (value, label) ->
+                OutlinedButton(onClick = { viewModel.setLaunchDestination(value) }) { Text(label) }
+            }
+        }
         state.targets.filter { !it.archived }.forEach { target ->
             val total = state.subtreeMinutes(target.id)
             Text("${target.title}：$total 分钟")
@@ -291,6 +492,11 @@ private fun StatisticsScreen(state: AttentionState) {
     }
 }
 
+private fun resolveLaunchDestination(requested: LaunchDestination, lastOpened: LaunchDestination): LaunchDestination = when (requested) {
+    LaunchDestination.LAST_OPENED -> if (lastOpened == LaunchDestination.LAST_OPENED) LaunchDestination.TODAY else lastOpened
+    else -> requested
+}
+
 private fun AttentionState.unownedMinutesForUi(): Int = timeEntries.filter { it.targetId == null }.sumOf { it.durationMinutes }
 
 private fun GoalCadence.label(): String = when (this) {
@@ -298,6 +504,12 @@ private fun GoalCadence.label(): String = when (this) {
     GoalCadence.WEEKLY -> "每周"
     GoalCadence.MONTHLY -> "每月"
     GoalCadence.ONE_TIME -> "一次性"
+}
+
+private fun ScheduleFrequency.label(): String = when (this) {
+    ScheduleFrequency.DAILY -> "每日"
+    ScheduleFrequency.WEEKLY -> "每周"
+    ScheduleFrequency.MONTHLY -> "每月"
 }
 
 private fun formatMinutes(minutes: Int): String = "%02d:%02d".format(minutes / 60, minutes % 60)

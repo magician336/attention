@@ -29,15 +29,30 @@ fun AttentionState.descendantIds(targetId: String): Set<String> {
     return result
 }
 
+private fun AttentionState.isDescendantAt(candidateId: String, ancestorId: String, date: LocalDate): Boolean {
+    var current: String? = candidateId
+    val seen = mutableSetOf<String>()
+    while (current != null && seen.add(current)) {
+        if (current == ancestorId) return true
+        current = parentAt(current, date)
+    }
+    return false
+}
+
 fun AttentionState.directMinutes(targetId: String, date: String? = null): Int = timeEntries
     .asSequence()
     .filter { it.targetId == targetId && (date == null || it.planningDate == date) }
     .sumOf { it.durationMinutes }
 
 fun AttentionState.subtreeMinutes(targetId: String, date: String? = null): Int {
-    val ids = descendantIds(targetId)
-    return timeEntries.filter { it.targetId in ids && (date == null || it.planningDate == date) }
-        .sumOf { it.durationMinutes }
+    return if (date == null) {
+        val ids = descendantIds(targetId)
+        timeEntries.filter { it.targetId in ids }.sumOf { it.durationMinutes }
+    } else {
+        val parsed = LocalDate.parse(date)
+        timeEntries.filter { it.planningDate == date && it.targetId != null && isDescendantAt(it.targetId, targetId, parsed) }
+            .sumOf { it.durationMinutes }
+    }
 }
 
 fun AttentionState.periodRange(
@@ -58,9 +73,9 @@ fun AttentionState.progress(stage: GoalStage, onDate: LocalDate): GoalProgress {
         val end = stage.dueDate?.let(LocalDate::parse) ?: onDate
         LocalDate.parse(stage.startDate)..end
     } else periodRange(onDate, stage.cadence)
-    val ids = descendantIds(stage.targetId)
-    val actual = timeEntries.filter { it.targetId in ids }
+    val actual = timeEntries.filter { it.targetId != null }
         .filter { LocalDate.parse(it.planningDate) in range }
+        .filter { isDescendantAt(it.targetId!!, stage.targetId, LocalDate.parse(it.planningDate)) }
         .sumOf { it.durationMinutes }
     val gap = (stage.targetMinutes - actual).coerceAtLeast(0)
     return GoalProgress(stage.targetMinutes, actual, gap, (actual - stage.targetMinutes).coerceAtLeast(0), actual >= stage.targetMinutes)
@@ -72,6 +87,31 @@ fun AttentionState.capacitySummary(date: String): CapacitySummary {
         schedule.estimatedMinutes ?: schedule.startMinute?.let { start -> schedule.endMinute?.minus(start) } ?: 0
     }
     return CapacitySummary(capacity, used, capacity != null && used > capacity)
+}
+
+fun AttentionState.periodStats(date: LocalDate, cadence: GoalCadence): PeriodStats {
+    val range = periodRange(date, cadence)
+    val entries = timeEntries.filter { LocalDate.parse(it.planningDate) in range }
+    val actual = entries.sumOf { it.durationMinutes }
+    val unowned = entries.filter { it.targetId == null }.sumOf { it.durationMinutes }
+    val byTarget = entries.filter { it.targetId != null }
+        .groupBy { it.targetId!! }
+        .mapValues { (_, values) -> values.sumOf { it.durationMinutes } }
+    val targetMinutes = goalStages
+        .filter { it.cadence == cadence && LocalDate.parse(it.startDate) <= range.endInclusive }
+        .sumOf { stage ->
+            when (stage.cadence) {
+                GoalCadence.DAILY -> stage.targetMinutes * (range.endInclusive.toEpochDay() - maxOf(range.start.toEpochDay(), LocalDate.parse(stage.startDate).toEpochDay()) + 1).toInt()
+                GoalCadence.ONE_TIME -> if (stage.dueDate == null || LocalDate.parse(stage.dueDate) >= range.start) stage.targetMinutes else 0
+                else -> stage.targetMinutes
+            }
+        }
+    val migrationMinutes = migrations.filterNot { it.cancelled }.filter {
+        val start = LocalDate.parse(it.destinationStartDate)
+        val end = it.destinationEndDate?.let(LocalDate::parse) ?: start
+        start <= range.endInclusive && end >= range.start
+    }.sumOf { it.minutes }
+    return PeriodStats(range, targetMinutes, actual, unowned, migrationMinutes, (actual - targetMinutes).coerceAtLeast(0), byTarget)
 }
 
 fun AttentionState.validTarget(targetId: String?): Boolean = targetId == null || targets.any { it.id == targetId }
@@ -100,6 +140,16 @@ fun AttentionState.moveTarget(targetId: String, newParentId: String?): Attention
     return copy(targets = targets.map { if (it.id == targetId) it.copy(parentId = newParentId) else it })
 }
 
+fun AttentionState.reorderTarget(targetId: String, newIndex: Int): AttentionState {
+    val target = targets.firstOrNull { it.id == targetId } ?: error("目标不存在")
+    val siblings = targets.filter { it.parentId == target.parentId }.sortedBy { it.sortOrder }.toMutableList()
+    require(newIndex in siblings.indices)
+    siblings.remove(target)
+    siblings.add(newIndex, target)
+    val order = siblings.mapIndexed { index, item -> item.id to index }.toMap()
+    return copy(targets = targets.map { item -> order[item.id]?.let { item.copy(sortOrder = it) } ?: item })
+}
+
 fun AttentionState.archiveTarget(targetId: String, archived: Boolean = true): AttentionState = copy(
     targets = targets.map { if (it.id == targetId) it.copy(archived = archived) else it },
 )
@@ -112,6 +162,8 @@ fun AttentionState.deleteTargetRelations(targetIds: Set<String>): AttentionState
         timeEntries = timeEntries.map { if (it.targetId in ids) it.copy(targetId = null) else it },
         schedules = schedules.map { if (it.targetId in ids) it.copy(targetId = null) else it },
         migrations = migrations.filterNot { it.targetId in ids },
+        futureGoalRules = futureGoalRules.filterNot { it.targetId in ids },
+        targetMoves = targetMoves.filterNot { it.targetId in ids },
     )
 }
 
@@ -150,6 +202,13 @@ fun AttentionState.editTimeEntry(entryId: String, durationMinutes: Int, targetId
 }
 
 fun AttentionState.deleteTimeEntry(entryId: String): AttentionState = copy(timeEntries = timeEntries.filterNot { it.id == entryId })
+
+fun AttentionState.assignUnowned(entryIds: Set<String>, targetId: String): AttentionState {
+    require(targets.any { it.id == targetId })
+    return copy(timeEntries = timeEntries.map {
+        if (it.id in entryIds && it.targetId == null) it.copy(targetId = targetId) else it
+    }).recalculateExperience()
+}
 
 fun AttentionState.addSchedule(entry: ScheduleEntry): AttentionState {
     require(entry.title.isNotBlank())
@@ -210,10 +269,80 @@ fun AttentionState.cancelMigration(migrationId: String): AttentionState = copy(
     migrations = migrations.map { if (it.id == migrationId) it.copy(cancelled = true) else it },
 )
 
+fun AttentionState.gapFor(stage: GoalStage, onDate: LocalDate): Int = progress(stage, onDate).gapMinutes
+
+fun AttentionState.addFutureGoalRule(rule: FutureGoalRule): AttentionState {
+    require(targets.any { it.id == rule.targetId })
+    require(rule.targetMinutes > 0)
+    LocalDate.parse(rule.effectiveFrom)
+    rule.dueDate?.let(LocalDate::parse)
+    return copy(futureGoalRules = futureGoalRules + rule)
+}
+
+fun AttentionState.updateFutureGoalRule(rule: FutureGoalRule): AttentionState = copy(
+    futureGoalRules = futureGoalRules.map { if (it.id == rule.id) rule else it },
+)
+
+fun AttentionState.cancelFutureGoalRule(ruleId: String): AttentionState = copy(
+    futureGoalRules = futureGoalRules.filterNot { it.id == ruleId },
+)
+
+fun AttentionState.goalRulesAt(targetId: String, onDate: LocalDate): List<FutureGoalRule> = futureGoalRules
+    .filter { it.targetId == targetId && !LocalDate.parse(it.effectiveFrom).isAfter(onDate) }
+    .sortedBy { it.effectiveFrom }
+
+fun AttentionState.addPeriodSnapshot(snapshot: PeriodSnapshot): AttentionState {
+    require(periodSnapshots.none { it.targetId == snapshot.targetId && it.periodStart == snapshot.periodStart && it.cadence == snapshot.cadence })
+    return copy(periodSnapshots = periodSnapshots + snapshot)
+}
+
+fun AttentionState.snapshot(stage: GoalStage, periodStart: LocalDate, periodEnd: LocalDate): PeriodSnapshot {
+    val result = progress(stage, periodStart)
+    return PeriodSnapshot(
+        targetId = stage.targetId,
+        cadence = stage.cadence,
+        periodStart = periodStart.toString(),
+        periodEnd = periodEnd.toString(),
+        targetMinutes = result.targetMinutes,
+        actualMinutes = result.actualMinutes,
+        gapMinutes = result.gapMinutes,
+        excessMinutes = result.excessMinutes,
+        completed = result.completed,
+    )
+}
+
+fun AttentionState.addFutureTargetMove(targetId: String, parentId: String?, effectiveFrom: String): AttentionState {
+    require(targets.any { it.id == targetId })
+    require(parentId == null || targets.any { it.id == parentId })
+    require(parentId == null || parentId !in descendantIds(targetId))
+    LocalDate.parse(effectiveFrom)
+    return copy(targetMoves = targetMoves + TargetMove(targetId = targetId, parentId = parentId, effectiveFrom = effectiveFrom))
+}
+
+fun AttentionState.parentAt(targetId: String, date: LocalDate): String? = targetMoves
+    .filter { it.targetId == targetId && !LocalDate.parse(it.effectiveFrom).isAfter(date) }
+    .maxByOrNull { it.effectiveFrom }
+    ?.parentId
+    ?: targets.firstOrNull { it.id == targetId }?.parentId
+
+fun AttentionState.materializeOccurrences(rule: RecurrenceRule, through: LocalDate): AttentionState {
+    val generated = occurrences(rule, through)
+    val existing = schedules.map { it.recurrenceRuleId to it.planningDate }.toSet()
+    val additions = generated.filterNot { (it.recurrenceRuleId to it.planningDate) in existing }
+        .map { it.copy(id = newId()) }
+    return copy(schedules = schedules + additions)
+}
+
 fun AttentionState.startTimer(targetId: String?, now: Instant, zone: ZoneId = ZoneId.systemDefault()): AttentionState {
     require(validTarget(targetId))
     require(activeTimer == null)
     return copy(activeTimer = ActiveTimer(targetId = targetId, startedAtEpochMillis = now.toEpochMilli(), lastPlanningDate = planningDate(now, zone).toString()))
+}
+
+fun AttentionState.switchTimer(targetId: String?, now: Instant, zone: ZoneId = ZoneId.systemDefault()): TimerResult {
+    if (activeTimer == null) return TimerResult(startTimer(targetId, now, zone), emptyList())
+    val stopped = stopTimer(now, zone)
+    return TimerResult(stopped.state.startTimer(targetId, now, zone), stopped.entries)
 }
 
 fun AttentionState.pauseTimer(now: Instant): AttentionState {
@@ -260,8 +389,57 @@ private fun splitMinutes(start: Instant, end: Instant, wholeMinutes: Int, target
 }
 
 fun AttentionState.recalculateExperience(): AttentionState = copy(
-    experience = timeEntries.filter { it.targetId != null }.sumOf { it.durationMinutes.toLong() },
+    experience = timeEntries.filter { it.targetId != null }.sumOf { it.durationMinutes.toLong() } + milestones.sumOf { it.reward },
 )
+
+fun AttentionState.continuousPlanningDays(targetId: String? = null): Int {
+    val dates = timeEntries.asSequence()
+        .filter { it.targetId != null && (targetId == null || it.targetId in descendantIds(targetId)) }
+        .map { LocalDate.parse(it.planningDate) }
+        .toSet()
+    if (dates.isEmpty()) return 0
+    var best = 0
+    var run = 0
+    var previous: LocalDate? = null
+    dates.sorted().forEach { date ->
+        run = if (previous?.plusDays(1) == date) run + 1 else 1
+        best = maxOf(best, run)
+        previous = date
+    }
+    return best
+}
+
+fun AttentionState.eligibleMilestones(onDate: LocalDate): List<Milestone> {
+    val existing = milestones.map { it.instanceKey }.toSet()
+    val result = mutableListOf<Milestone>()
+    goalStages.forEach { stage ->
+        val progress = progress(stage, onDate)
+        if (progress.completed) {
+            val kind = if (stage.cadence == GoalCadence.ONE_TIME) "one_time_goal" else "goal_period"
+            val key = "$kind:${stage.id}:${stage.startDate}"
+            if (key !in existing) result += Milestone(kind = kind, instanceKey = key, reward = if (stage.cadence == GoalCadence.ONE_TIME) 10_000 else 500, achievedAtEpochMillis = System.currentTimeMillis())
+        }
+    }
+    targets.filter { !it.archived }.forEach { target ->
+        val days = continuousPlanningDays(target.id)
+        listOf(7 to 500L, 30 to 1_000L, 100 to 10_000L).forEach { (threshold, reward) ->
+            val key = "streak:${target.id}:$threshold"
+            if (days >= threshold && key !in existing) result += Milestone(kind = "streak", instanceKey = key, reward = reward, achievedAtEpochMillis = System.currentTimeMillis())
+        }
+    }
+    val totalHours = timeEntries.filter { it.targetId != null }.sumOf { it.durationMinutes }.toLong() / 60
+    (100L..totalHours step 100L).forEach { hours ->
+        val key = "cumulative:$hours"
+        val reward = cumulativeMilestoneReward(hours)
+        if (reward != null && key !in existing) result += Milestone(kind = "cumulative", instanceKey = key, reward = reward, achievedAtEpochMillis = System.currentTimeMillis())
+    }
+    return result
+}
+
+fun AttentionState.awardEligibleMilestones(onDate: LocalDate): AttentionState {
+    val additions = eligibleMilestones(onDate)
+    return if (additions.isEmpty()) this else copy(milestones = milestones + additions).recalculateExperience()
+}
 
 fun levelForExperience(experience: Long): Int {
     var level = 1
