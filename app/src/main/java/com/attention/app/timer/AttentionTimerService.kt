@@ -12,6 +12,7 @@ import androidx.core.app.NotificationCompat
 import com.attention.app.MainActivity
 import com.attention.app.R
 import com.attention.app.data.RoomAttentionStateRepository
+import com.attention.app.data.backup.FileImportBackupStore
 import com.attention.app.data.room.AttentionDatabase
 import com.attention.app.data.room.RoomBusinessDataRepository
 import com.attention.app.data.settings.createSettingsStore
@@ -36,6 +37,7 @@ class AttentionTimerService : Service() {
         RoomAttentionStateRepository(
             business = RoomBusinessDataRepository(database),
             settings = createSettingsStore(),
+            backupStore = FileImportBackupStore(this),
         )
     }
 

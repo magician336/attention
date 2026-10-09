@@ -9,6 +9,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.attention.app.MainActivity
 import com.attention.app.data.RoomAttentionStateRepository
+import com.attention.app.data.backup.FileImportBackupStore
 import com.attention.app.data.room.AttentionDatabase
 import com.attention.app.data.room.RoomBusinessDataRepository
 import com.attention.app.data.settings.createSettingsStore
@@ -29,6 +30,7 @@ class AttentionBootReceiver : BroadcastReceiver() {
                         RoomAttentionStateRepository(
                             business = RoomBusinessDataRepository(database),
                             settings = context.createSettingsStore(),
+                            backupStore = FileImportBackupStore(context),
                         ).state.first()
                     }.getOrNull()
                         ?.takeIf { it.activeTimer != null }

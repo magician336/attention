@@ -1,153 +1,28 @@
 package com.attention.app.data
 
-import androidx.datastore.core.DataStore
-import androidx.datastore.preferences.core.Preferences
-import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.stringPreferencesKey
 import com.attention.domain.AttentionState
+import com.attention.domain.LaunchDestination
+import com.attention.domain.StoredSettings
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.serialization.SerializationException
-import kotlinx.serialization.json.Json
-import java.io.IOException
 
+/** Runtime data boundary: Room business data, DataStore settings and versioned backups. */
 interface AttentionStateRepository {
     val state: Flow<AttentionState>
-    suspend fun update(transform: (AttentionState) -> AttentionState)
-    /** Applies a domain command to business data without using a JSON round trip. */
-    suspend fun updateBusiness(transform: (AttentionState) -> AttentionState) = update(transform)
 
-    /** Updates only the planner settings owned by Preferences DataStore. */
-    suspend fun setPlannerSettings(settings: com.attention.domain.StoredSettings) = update {
-        it.copy(settings = settings)
-    }
+    suspend fun updateBusiness(transform: (AttentionState) -> AttentionState)
+    suspend fun setPlannerSettings(settings: StoredSettings)
+    suspend fun setPlanningDayBoundaryMinutes(minutes: Int)
+    suspend fun setWeekStartDay(day: Int)
+    suspend fun setDailyCapacityMinutes(minutes: Int?)
+    suspend fun setLaunchDestination(destination: LaunchDestination)
+    suspend fun setLastOpenedDestination(destination: LaunchDestination)
+    suspend fun setOnboardingCompleted(completed: Boolean)
+    suspend fun setNotificationsEnabled(enabled: Boolean)
 
-    suspend fun setPlanningDayBoundaryMinutes(minutes: Int) = update {
-        it.copy(settings = it.settings.copy(planningDayBoundaryMinutes = minutes))
-    }
-
-    suspend fun setWeekStartDay(day: Int) = update {
-        it.copy(settings = it.settings.copy(weekStartDay = day))
-    }
-
-    suspend fun setDailyCapacityMinutes(minutes: Int?) = update {
-        it.copy(settings = it.settings.copy(dailyCapacityMinutes = minutes))
-    }
-
-    suspend fun setLaunchDestination(destination: com.attention.domain.LaunchDestination) = update {
-        it.copy(launchDestination = destination)
-    }
-
-    suspend fun setLastOpenedDestination(destination: com.attention.domain.LaunchDestination) = update {
-        it.copy(lastOpenedDestination = destination)
-    }
-
-    suspend fun setOnboardingCompleted(completed: Boolean) = update {
-        it.copy(onboardingCompleted = completed)
-    }
-
-    suspend fun setNotificationsEnabled(enabled: Boolean) = update {
-        it.copy(notificationsEnabled = enabled)
-    }
-
+    /** Explicit full-state replacement used by the backup coordinator. */
     suspend fun replace(state: AttentionState)
+
     suspend fun exportJson(): String
-    suspend fun importJson(json: String, clearExisting: Boolean): AttentionState
+    suspend fun importJson(encoded: String, clearExisting: Boolean): AttentionState
     suspend fun lastImportBackup(): String?
 }
-
-class DataStoreAttentionStateRepository(
-    private val dataStore: DataStore<Preferences>,
-    private val json: Json = defaultJson,
-) : AttentionStateRepository {
-    private val mutex = Mutex()
-
-    override val state: Flow<AttentionState> = dataStore.data
-        .catch { error ->
-            if (error is IOException || error is SerializationException) emit(emptyPreferences()) else throw error
-        }
-        .map { preferences ->
-            preferences[STATE_KEY]?.let { encoded ->
-                runCatching { json.decodeFromString<AttentionState>(encoded) }.getOrElse { AttentionState() }
-            } ?: AttentionState()
-        }
-
-    override suspend fun update(transform: (AttentionState) -> AttentionState) {
-        mutex.withLock {
-            dataStore.edit { preferences ->
-                val current = preferences[STATE_KEY]?.let { encoded ->
-                    runCatching { json.decodeFromString<AttentionState>(encoded) }.getOrDefault(AttentionState())
-                } ?: AttentionState()
-                preferences[STATE_KEY] = json.encodeToString(transform(current))
-            }
-        }
-    }
-
-    override suspend fun replace(state: AttentionState) {
-        mutex.withLock {
-            dataStore.edit { it[STATE_KEY] = json.encodeToString(state) }
-        }
-    }
-
-    override suspend fun exportJson(): String {
-        return stateFirst().let(json::encodeToString)
-    }
-
-    override suspend fun importJson(encoded: String, clearExisting: Boolean): AttentionState {
-        val incoming = json.decodeFromString<AttentionState>(encoded)
-        var result = AttentionState()
-        mutex.withLock {
-            dataStore.edit { preferences ->
-                val current = preferences[STATE_KEY]?.let { value ->
-                    runCatching { json.decodeFromString<AttentionState>(value) }.getOrDefault(AttentionState())
-                } ?: AttentionState()
-                preferences[BACKUP_KEY] = json.encodeToString(current)
-                result = merge(current, incoming)
-                preferences[STATE_KEY] = json.encodeToString(if (clearExisting) incoming else result)
-            }
-        }
-        return if (clearExisting) incoming else result
-    }
-
-    override suspend fun lastImportBackup(): String? = dataStore.data.first()[BACKUP_KEY]
-
-    private suspend fun stateFirst(): AttentionState = state.first()
-
-    private companion object {
-        val STATE_KEY = stringPreferencesKey("attention_state_json")
-        val BACKUP_KEY = stringPreferencesKey("attention_import_backup_json")
-        val defaultJson = Json {
-            ignoreUnknownKeys = true
-            encodeDefaults = true
-        }
-
-        fun merge(current: AttentionState, incoming: AttentionState): AttentionState {
-            fun <T> mergeById(existing: List<T>, added: List<T>, id: (T) -> String): List<T> {
-                val result = existing.toMutableList()
-                val ids = existing.mapTo(mutableSetOf(), id)
-                added.forEach { if (ids.add(id(it))) result += it }
-                return result
-            }
-            return current.copy(
-                settings = incoming.settings,
-                targets = mergeById(current.targets, incoming.targets) { it.id },
-                goalStages = mergeById(current.goalStages, incoming.goalStages) { it.id },
-                timeEntries = mergeById(current.timeEntries, incoming.timeEntries) { it.id },
-                schedules = mergeById(current.schedules, incoming.schedules) { it.id },
-                recurrenceRules = mergeById(current.recurrenceRules, incoming.recurrenceRules) { it.id },
-                migrations = mergeById(current.migrations, incoming.migrations) { it.id },
-                futureGoalRules = mergeById(current.futureGoalRules, incoming.futureGoalRules) { it.id },
-                periodSnapshots = mergeById(current.periodSnapshots, incoming.periodSnapshots) { it.id },
-                targetMoves = mergeById(current.targetMoves, incoming.targetMoves) { it.id },
-                milestones = mergeById(current.milestones, incoming.milestones) { it.id },
-                experience = maxOf(current.experience, incoming.experience),
-            )
-        }
-    }
-}
-
-private fun emptyPreferences(): Preferences = androidx.datastore.preferences.core.emptyPreferences()

@@ -1,6 +1,6 @@
 # Room / DataStore 存储架构切换开发方案
 
-状态：Issue #28 已完成 Room 业务写路径、Workspace/ViewModel 与计时入口切换；版本化备份适配、持久化导入前备份和旧 JSON 清理由 #29 完成
+状态：Issue #29 已完成版本化 JSON 备份、Room/DataStore 导入协调、导入前持久化备份、失败回滚与旧 JSON 主路径清理
 
 ## 目标
 

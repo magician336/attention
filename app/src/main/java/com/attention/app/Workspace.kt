@@ -45,6 +45,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.attention.app.data.AttentionStateRepository
 import com.attention.app.data.RoomAttentionStateRepository
+import com.attention.app.data.backup.AttentionBackupCodec
+import com.attention.app.data.backup.FileImportBackupStore
 import com.attention.app.data.room.AttentionDatabase
 import com.attention.app.data.room.RoomBusinessDataRepository
 import com.attention.app.data.settings.createSettingsStore
@@ -72,7 +74,6 @@ import com.attention.domain.subtreeMinutes
 import com.attention.domain.targetChildren
 import java.time.Instant
 import java.time.LocalDate
-import kotlinx.serialization.json.Json
 
 private class WorkspaceViewModelFactory(
     private val repository: AttentionStateRepository,
@@ -90,6 +91,7 @@ fun WorkspaceApp() {
         RoomAttentionStateRepository(
             business = RoomBusinessDataRepository(database),
             settings = context.createSettingsStore(),
+            backupStore = FileImportBackupStore(context),
         )
     }
     val viewModel: AttentionViewModel = viewModel(factory = WorkspaceViewModelFactory(repository))
@@ -151,7 +153,7 @@ fun WorkspaceApp() {
         }
     }
     pendingImport?.let { encoded ->
-        val preview = runCatching { Json { ignoreUnknownKeys = true }.decodeFromString<AttentionState>(encoded) }.getOrNull()
+        val preview = runCatching { AttentionBackupCodec.decode(encoded) }.getOrNull()
         AlertDialog(
             onDismissRequest = { pendingImport = null },
             title = { Text("导入预览") },
