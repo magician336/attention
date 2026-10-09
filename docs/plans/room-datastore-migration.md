@@ -1,6 +1,6 @@
 # Room / DataStore 存储架构切换开发方案
 
-状态：Issue #26 Room 业务数据层已实现；运行时切换与 DataStore 业务字段清理由 #27–#29 完成
+状态：Issue #27 Room 业务流、DataStore 设置仓库与组合读模型已实现；Workspace/ViewModel 的生产接入、运行时写路径切换与备份清理由 #28–#29 完成
 
 ## 目标
 

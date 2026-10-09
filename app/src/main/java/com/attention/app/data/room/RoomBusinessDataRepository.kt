@@ -6,11 +6,11 @@ import com.attention.app.data.room.mapper.toDomain
 import com.attention.app.data.room.mapper.toEntity
 import com.attention.domain.AttentionState
 import com.attention.domain.descendantIds
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 
-/**
- * Room-only business data boundary. Settings and UI state remain outside this
- * repository until the following migration issues define their own stores.
- */
+/** Room-only business data boundary; settings are composed by AttentionStateReader. */
 class RoomBusinessDataRepository(
     private val database: AttentionDatabase,
 ) {
@@ -45,6 +45,55 @@ class RoomBusinessDataRepository(
             experience = database.experienceDao().find()?.points ?: 0,
             activeTimer = database.activeTimerDao().find()?.toDomain(),
         )
+    }
+
+    /**
+     * Emits the complete Room-backed business read model whenever any business
+     * table changes. Settings are deliberately absent and are composed by
+     * [com.attention.app.data.AttentionStateReader].
+     */
+    fun observe(): Flow<AttentionState> {
+        val targets = database.targetDao().observeAll().map { rows -> rows.map { it.toDomain() } }
+        val goalStages = database.goalStageDao().observeAll().map { rows -> rows.map { it.toDomain() } }
+        val timeEntries = database.timeEntryDao().observeAll().map { rows -> rows.map { it.toDomain() } }
+        val schedules = database.scheduleEntryDao().observeAll().map { rows -> rows.map { it.toDomain() } }
+        val recurrenceRules = database.recurrenceRuleDao().observeAll().map { rows -> rows.map { it.toDomain() } }
+        val migrations = database.migrationDao().observeAll().map { rows -> rows.map { it.toDomain() } }
+        val futureGoalRules = database.futureGoalRuleDao().observeAll().map { rows -> rows.map { it.toDomain() } }
+        val periodSnapshots = database.periodSnapshotDao().observeAll().map { rows -> rows.map { it.toDomain() } }
+        val targetMoves = database.targetMoveDao().observeAll().map { rows -> rows.map { it.toDomain() } }
+        val milestones = database.milestoneDao().observeAll().map { rows -> rows.map { it.toDomain() } }
+        val experience = database.experienceDao().observe().map { it?.points ?: 0 }
+        val activeTimer = database.activeTimerDao().observe().map { it?.toDomain() }
+
+        val targetData = combine(targets, goalStages) { loadedTargets, loadedStages ->
+            TargetData(loadedTargets, loadedStages)
+        }
+        val scheduleData = combine(timeEntries, schedules, recurrenceRules) { loadedEntries, loadedSchedules, loadedRules ->
+            ScheduleData(loadedEntries, loadedSchedules, loadedRules)
+        }
+        val planningData = combine(migrations, futureGoalRules, periodSnapshots, targetMoves) { loadedMigrations, loadedFutureRules, loadedSnapshots, loadedMoves ->
+            PlanningData(loadedMigrations, loadedFutureRules, loadedSnapshots, loadedMoves)
+        }
+        val rewardData = combine(milestones, experience, activeTimer) { loadedMilestones, loadedExperience, loadedTimer ->
+            RewardData(loadedMilestones, loadedExperience, loadedTimer)
+        }
+        return combine(targetData, scheduleData, planningData, rewardData) { targetsAndStages, schedulesAndEntries, planning, rewards ->
+            AttentionState(
+                targets = targetsAndStages.targets,
+                goalStages = targetsAndStages.goalStages,
+                timeEntries = schedulesAndEntries.timeEntries,
+                schedules = schedulesAndEntries.schedules,
+                recurrenceRules = schedulesAndEntries.recurrenceRules,
+                migrations = planning.migrations,
+                futureGoalRules = planning.futureGoalRules,
+                periodSnapshots = planning.periodSnapshots,
+                targetMoves = planning.targetMoves,
+                milestones = rewards.milestones,
+                experience = rewards.experience,
+                activeTimer = rewards.activeTimer,
+            )
+        }
     }
 
     suspend fun deleteTargetRelations(targetIds: Set<String>) = database.withTransaction {
@@ -110,6 +159,30 @@ class RoomBusinessDataRepository(
         database.targetDao().deleteAll()
     }
 }
+
+private data class TargetData(
+    val targets: List<com.attention.domain.Target>,
+    val goalStages: List<com.attention.domain.GoalStage>,
+)
+
+private data class ScheduleData(
+    val timeEntries: List<com.attention.domain.TimeEntry>,
+    val schedules: List<com.attention.domain.ScheduleEntry>,
+    val recurrenceRules: List<com.attention.domain.RecurrenceRule>,
+)
+
+private data class PlanningData(
+    val migrations: List<com.attention.domain.Migration>,
+    val futureGoalRules: List<com.attention.domain.FutureGoalRule>,
+    val periodSnapshots: List<com.attention.domain.PeriodSnapshot>,
+    val targetMoves: List<com.attention.domain.TargetMove>,
+)
+
+private data class RewardData(
+    val milestones: List<com.attention.domain.Milestone>,
+    val experience: Long,
+    val activeTimer: com.attention.domain.ActiveTimer?,
+)
 
 private fun existingTargetsState(targets: List<com.attention.domain.Target>): AttentionState =
     AttentionState(targets = targets)

@@ -68,6 +68,9 @@ interface TimeEntryDao {
     @Query("SELECT * FROM time_entries ORDER BY planningDate, occurredAtEpochMillis, id")
     suspend fun getAll(): List<TimeEntryEntity>
 
+    @Query("SELECT * FROM time_entries ORDER BY planningDate, occurredAtEpochMillis, id")
+    fun observeAll(): Flow<List<TimeEntryEntity>>
+
     @Query("SELECT * FROM time_entries WHERE planningDate = :planningDate ORDER BY occurredAtEpochMillis, id")
     fun observeByPlanningDate(planningDate: String): Flow<List<TimeEntryEntity>>
 
@@ -89,6 +92,9 @@ interface ScheduleEntryDao {
     @Query("SELECT * FROM schedule_entries ORDER BY planningDate, startMinute, id")
     suspend fun getAll(): List<ScheduleEntryEntity>
 
+    @Query("SELECT * FROM schedule_entries ORDER BY planningDate, startMinute, id")
+    fun observeAll(): Flow<List<ScheduleEntryEntity>>
+
     @Query("SELECT * FROM schedule_entries WHERE planningDate = :planningDate ORDER BY startMinute, id")
     fun observeByPlanningDate(planningDate: String): Flow<List<ScheduleEntryEntity>>
 
@@ -109,6 +115,9 @@ interface ScheduleEntryDao {
 interface RecurrenceRuleDao {
     @Query("SELECT * FROM recurrence_rules ORDER BY startDate, id")
     suspend fun getAll(): List<RecurrenceRuleEntity>
+
+    @Query("SELECT * FROM recurrence_rules ORDER BY startDate, id")
+    fun observeAll(): Flow<List<RecurrenceRuleEntity>>
 
     @Query(
         "SELECT * FROM recurrence_rules " +
@@ -133,6 +142,9 @@ interface MigrationDao {
     @Query("SELECT * FROM migrations ORDER BY destinationStartDate, id")
     suspend fun getAll(): List<MigrationEntity>
 
+    @Query("SELECT * FROM migrations ORDER BY destinationStartDate, id")
+    fun observeAll(): Flow<List<MigrationEntity>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(entities: List<MigrationEntity>)
 
@@ -150,6 +162,9 @@ interface MigrationDao {
 interface FutureGoalRuleDao {
     @Query("SELECT * FROM future_goal_rules ORDER BY effectiveFrom, id")
     suspend fun getAll(): List<FutureGoalRuleEntity>
+
+    @Query("SELECT * FROM future_goal_rules ORDER BY effectiveFrom, id")
+    fun observeAll(): Flow<List<FutureGoalRuleEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(entities: List<FutureGoalRuleEntity>)
@@ -169,6 +184,9 @@ interface PeriodSnapshotDao {
     @Query("SELECT * FROM period_snapshots ORDER BY periodStart, id")
     suspend fun getAll(): List<PeriodSnapshotEntity>
 
+    @Query("SELECT * FROM period_snapshots ORDER BY periodStart, id")
+    fun observeAll(): Flow<List<PeriodSnapshotEntity>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(entities: List<PeriodSnapshotEntity>)
 
@@ -183,6 +201,9 @@ interface PeriodSnapshotDao {
 interface TargetMoveDao {
     @Query("SELECT * FROM target_moves ORDER BY effectiveFrom, id")
     suspend fun getAll(): List<TargetMoveEntity>
+
+    @Query("SELECT * FROM target_moves ORDER BY effectiveFrom, id")
+    fun observeAll(): Flow<List<TargetMoveEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(entities: List<TargetMoveEntity>)
@@ -202,6 +223,9 @@ interface MilestoneDao {
     @Query("SELECT * FROM milestones ORDER BY achievedAtEpochMillis, id")
     suspend fun getAll(): List<MilestoneEntity>
 
+    @Query("SELECT * FROM milestones ORDER BY achievedAtEpochMillis, id")
+    fun observeAll(): Flow<List<MilestoneEntity>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(entities: List<MilestoneEntity>)
 
@@ -213,6 +237,9 @@ interface MilestoneDao {
 interface ExperienceDao {
     @Query("SELECT * FROM experience WHERE id = :id")
     suspend fun find(id: Int = ExperienceEntity.SINGLETON_ID): ExperienceEntity?
+
+    @Query("SELECT * FROM experience WHERE id = :id")
+    fun observe(id: Int = ExperienceEntity.SINGLETON_ID): Flow<ExperienceEntity?>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entity: ExperienceEntity)
