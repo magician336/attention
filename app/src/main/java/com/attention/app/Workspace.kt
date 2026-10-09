@@ -44,7 +44,9 @@ import com.attention.app.timer.AttentionTimerService
 import com.attention.app.reminder.ReminderScheduler
 import com.attention.domain.AttentionState
 import com.attention.domain.GoalCadence
+import com.attention.domain.FutureGoalRule
 import com.attention.domain.LaunchDestination
+import com.attention.domain.Migration
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.ScheduleFrequency
 import com.attention.domain.RecurrenceRule
@@ -303,6 +305,9 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
     var parentId by remember { mutableStateOf<String?>(null) }
     var goalMinutes by remember { mutableStateOf("") }
     var goalCadence by remember { mutableStateOf(GoalCadence.DAILY) }
+    var futureDate by remember { mutableStateOf(LocalDate.now().plusDays(7).toString()) }
+    var futureMinutes by remember { mutableStateOf("") }
+    var futureCadence by remember { mutableStateOf(GoalCadence.WEEKLY) }
     var pendingDelete by remember { mutableStateOf<Target?>(null) }
     var renameTarget by remember { mutableStateOf<Target?>(null) }
     var renameText by remember { mutableStateOf("") }
@@ -340,6 +345,40 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                     if (unownedIds.isNotEmpty()) {
                         Text("未归属活动 ${unownedIds.size} 条")
                         OutlinedButton(onClick = { viewModel.assignUnowned(unownedIds, parentId!!); parentId = null }) { Text("全部归入当前计划") }
+                    }
+                    Text("未来生效的目标规则", style = MaterialTheme.typography.titleSmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        OutlinedTextField(futureDate, { futureDate = it }, label = { Text("生效日") }, modifier = Modifier.width(145.dp), singleLine = true)
+                        OutlinedTextField(futureMinutes, { futureMinutes = it.filter(Char::isDigit) }, label = { Text("未来分钟") }, modifier = Modifier.width(120.dp), singleLine = true)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        GoalCadence.entries.forEach { value ->
+                            if (futureCadence == value) Button(onClick = {}) { Text(value.label()) }
+                            else OutlinedButton(onClick = { futureCadence = value }) { Text(value.label()) }
+                        }
+                    }
+                    Button(onClick = {
+                        futureMinutes.toIntOrNull()?.takeIf { it > 0 }?.let {
+                            viewModel.addFutureGoal(FutureGoalRule(targetId = parentId!!, cadence = futureCadence, targetMinutes = it, effectiveFrom = futureDate))
+                            futureMinutes = ""
+                        }
+                    }) { Text("保存未来规则") }
+                    state.futureGoalRules.filter { it.targetId == parentId }.forEach { rule ->
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            Text("${rule.effectiveFrom} · ${rule.cadence.label()} ${rule.targetMinutes} 分钟", Modifier.weight(1f))
+                            TextButton(onClick = { viewModel.cancelFutureGoal(rule.id) }) { Text("取消") }
+                        }
+                    }
+                    val stage = state.goalStages.firstOrNull { it.targetId == parentId }
+                    val gap = stage?.let { state.gapForUi(it, state.planningDate(Instant.now())) } ?: 0
+                    if (stage != null && gap > 0) {
+                        OutlinedButton(onClick = {
+                            viewModel.addMigration(Migration(targetId = parentId!!, sourceStageId = stage.id, minutes = gap, destinationStartDate = state.planningDate(Instant.now()).plusDays(7).toString()))
+                        }) { Text("将当前缺口 $gap 分钟迁移到下周") }
+                    }
+                    val target = state.targets.firstOrNull { it.id == parentId }
+                    if (target?.parentId != null) {
+                        OutlinedButton(onClick = { viewModel.moveTargetFrom(target.id, null, state.planningDate(Instant.now()).plusDays(1).toString()) }) { Text("从明日起移到根计划") }
                     }
                 }
             }
@@ -499,7 +538,20 @@ private fun StatisticsScreen(
         Text("${stats.range.start} 至 ${stats.range.endInclusive}：实际 ${stats.actualMinutes} 分钟 · 目标 ${stats.targetMinutes} 分钟 · 缺口 ${stats.targetMinutes.minus(stats.actualMinutes).coerceAtLeast(0)} 分钟 · 超额 ${stats.excessMinutes} 分钟")
         Text("未归属活动：${state.unownedMinutesForUi()} 分钟")
         Text("迁移目标：${stats.migrationMinutes} 分钟")
+        state.migrations.filterNot { it.cancelled }.forEach { migration ->
+            Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Text("主动迁移 ${migration.minutes} 分钟 · ${migration.destinationStartDate}", Modifier.weight(1f))
+                TextButton(onClick = { viewModel.cancelMigration(migration.id) }) { Text("取消") }
+            }
+        }
+        state.periodSnapshots.takeLast(5).forEach { snapshot ->
+            Text("周期快照 ${snapshot.periodStart}～${snapshot.periodEnd}：${snapshot.actualMinutes}/${snapshot.targetMinutes} 分钟${if (snapshot.completed) " · 达成" else " · 缺口 ${snapshot.gapMinutes}"}")
+        }
         Text("投入经验：${state.experience} · 等级 ${levelForExperience(state.experience)}")
+        Button(onClick = viewModel::awardMilestones) { Text("结算可达成里程碑") }
+        state.milestones.takeLast(8).forEach { milestone ->
+            Text("里程碑 ${milestone.kind}：+${milestone.reward}（${milestone.instanceKey}）")
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onExportJson) { Text("预览 JSON 备份") }
             OutlinedButton(onClick = onImportJson) { Text("导入 JSON") }
@@ -529,6 +581,8 @@ private fun resolveLaunchDestination(requested: LaunchDestination, lastOpened: L
 }
 
 private fun AttentionState.unownedMinutesForUi(): Int = timeEntries.filter { it.targetId == null }.sumOf { it.durationMinutes }
+
+private fun AttentionState.gapForUi(stage: com.attention.domain.GoalStage, date: LocalDate): Int = progress(stage, date).gapMinutes
 
 private fun GoalCadence.label(): String = when (this) {
     GoalCadence.DAILY -> "每日"
