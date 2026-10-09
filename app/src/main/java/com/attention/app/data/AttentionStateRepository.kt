@@ -18,6 +18,42 @@ import java.io.IOException
 interface AttentionStateRepository {
     val state: Flow<AttentionState>
     suspend fun update(transform: (AttentionState) -> AttentionState)
+    /** Applies a domain command to business data without using a JSON round trip. */
+    suspend fun updateBusiness(transform: (AttentionState) -> AttentionState) = update(transform)
+
+    /** Updates only the planner settings owned by Preferences DataStore. */
+    suspend fun setPlannerSettings(settings: com.attention.domain.StoredSettings) = update {
+        it.copy(settings = settings)
+    }
+
+    suspend fun setPlanningDayBoundaryMinutes(minutes: Int) = update {
+        it.copy(settings = it.settings.copy(planningDayBoundaryMinutes = minutes))
+    }
+
+    suspend fun setWeekStartDay(day: Int) = update {
+        it.copy(settings = it.settings.copy(weekStartDay = day))
+    }
+
+    suspend fun setDailyCapacityMinutes(minutes: Int?) = update {
+        it.copy(settings = it.settings.copy(dailyCapacityMinutes = minutes))
+    }
+
+    suspend fun setLaunchDestination(destination: com.attention.domain.LaunchDestination) = update {
+        it.copy(launchDestination = destination)
+    }
+
+    suspend fun setLastOpenedDestination(destination: com.attention.domain.LaunchDestination) = update {
+        it.copy(lastOpenedDestination = destination)
+    }
+
+    suspend fun setOnboardingCompleted(completed: Boolean) = update {
+        it.copy(onboardingCompleted = completed)
+    }
+
+    suspend fun setNotificationsEnabled(enabled: Boolean) = update {
+        it.copy(notificationsEnabled = enabled)
+    }
+
     suspend fun replace(state: AttentionState)
     suspend fun exportJson(): String
     suspend fun importJson(json: String, clearExisting: Boolean): AttentionState

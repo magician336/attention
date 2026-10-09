@@ -1,6 +1,6 @@
 # Room / DataStore 存储架构切换开发方案
 
-状态：Issue #27 Room 业务流、DataStore 设置仓库与组合读模型已实现；Workspace/ViewModel 的生产接入、运行时写路径切换与备份清理由 #28–#29 完成
+状态：Issue #28 已完成 Room 业务写路径、Workspace/ViewModel 与计时入口切换；版本化备份适配、持久化导入前备份和旧 JSON 清理由 #29 完成
 
 ## 目标
 

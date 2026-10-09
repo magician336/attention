@@ -11,8 +11,10 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.attention.app.MainActivity
 import com.attention.app.R
-import com.attention.app.attentionStateDataStore
-import com.attention.app.data.DataStoreAttentionStateRepository
+import com.attention.app.data.RoomAttentionStateRepository
+import com.attention.app.data.room.AttentionDatabase
+import com.attention.app.data.room.RoomBusinessDataRepository
+import com.attention.app.data.settings.createSettingsStore
 import com.attention.domain.AttentionState
 import com.attention.domain.pauseTimer
 import com.attention.domain.recalculateExperience
@@ -29,7 +31,13 @@ import kotlinx.coroutines.launch
 
 class AttentionTimerService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val repository by lazy { DataStoreAttentionStateRepository(this.attentionStateDataStore) }
+    private val database by lazy { AttentionDatabase.create(this) }
+    private val repository by lazy {
+        RoomAttentionStateRepository(
+            business = RoomBusinessDataRepository(database),
+            settings = createSettingsStore(),
+        )
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -40,10 +48,10 @@ class AttentionTimerService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         scope.launch {
             when (intent?.action) {
-                ACTION_PAUSE -> repository.update { it.pauseTimer(Instant.now()) }
-                ACTION_RESUME -> repository.update { it.resumeTimer(Instant.now()) }
+                ACTION_PAUSE -> repository.updateBusiness { it.pauseTimer(Instant.now()) }
+                ACTION_RESUME -> repository.updateBusiness { it.resumeTimer(Instant.now()) }
                 ACTION_STOP -> {
-                    repository.update { it.stopTimer(Instant.now(), ZoneId.systemDefault()).state.recalculateExperience() }
+                    repository.updateBusiness { it.stopTimer(Instant.now(), ZoneId.systemDefault()).state.recalculateExperience() }
                     stopSelfResult(startId)
                 }
             }
@@ -85,6 +93,7 @@ class AttentionTimerService : Service() {
 
     override fun onDestroy() {
         scope.cancel()
+        runCatching { database.close() }
         super.onDestroy()
     }
 

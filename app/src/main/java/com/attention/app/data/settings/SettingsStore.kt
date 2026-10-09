@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.attention.domain.LaunchDestination
@@ -51,6 +52,8 @@ data class SettingsSnapshot(
 interface SettingsStore {
     val settings: Flow<SettingsSnapshot>
 
+    /** Replaces all settings in one Preferences DataStore transaction. */
+    suspend fun setSnapshot(snapshot: SettingsSnapshot)
     suspend fun setPlannerSettings(settings: StoredSettings)
     suspend fun setPlanningDayBoundaryMinutes(minutes: Int)
     suspend fun setWeekStartDay(day: Int)
@@ -72,6 +75,10 @@ class DataStoreSettingsStore(
             if (error is IOException) emit(emptyPreferences()) else throw error
         }
         .map { preferences -> preferences.toSettingsSnapshot() }
+
+    override suspend fun setSnapshot(snapshot: SettingsSnapshot) {
+        dataStore.edit { preferences -> preferences.writeSnapshot(snapshot) }
+    }
 
     override suspend fun setPlannerSettings(settings: StoredSettings) {
         validatePlannerSettings(settings)
@@ -160,6 +167,17 @@ private fun Preferences.toSettingsSnapshot(): SettingsSnapshot = SettingsSnapsho
     onboardingCompleted = get(Keys.ONBOARDING_COMPLETED) ?: false,
     notificationsEnabled = get(Keys.NOTIFICATIONS_ENABLED) ?: true,
 )
+
+private fun MutablePreferences.writeSnapshot(snapshot: SettingsSnapshot) {
+    this[Keys.PLANNING_DAY_BOUNDARY_MINUTES] = snapshot.planningDayBoundaryMinutes
+    this[Keys.WEEK_START_DAY] = snapshot.weekStartDay
+    if (snapshot.dailyCapacityMinutes == null) remove(Keys.DAILY_CAPACITY_MINUTES)
+    else this[Keys.DAILY_CAPACITY_MINUTES] = snapshot.dailyCapacityMinutes
+    this[Keys.LAUNCH_DESTINATION] = snapshot.launchDestination.name
+    this[Keys.LAST_OPENED_DESTINATION] = snapshot.lastOpenedDestination.name
+    this[Keys.ONBOARDING_COMPLETED] = snapshot.onboardingCompleted
+    this[Keys.NOTIFICATIONS_ENABLED] = snapshot.notificationsEnabled
+}
 
 private fun String?.toLaunchDestination(): LaunchDestination = runCatching {
     this?.let(LaunchDestination::valueOf) ?: LaunchDestination.TODAY

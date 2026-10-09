@@ -39,12 +39,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
-import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.attention.app.data.DataStoreAttentionStateRepository
+import com.attention.app.data.AttentionStateRepository
+import com.attention.app.data.RoomAttentionStateRepository
+import com.attention.app.data.room.AttentionDatabase
+import com.attention.app.data.room.RoomBusinessDataRepository
+import com.attention.app.data.settings.createSettingsStore
 import com.attention.app.timer.AttentionTimerService
 import com.attention.app.reminder.ReminderScheduler
 import com.attention.domain.AttentionState
@@ -71,10 +74,8 @@ import java.time.Instant
 import java.time.LocalDate
 import kotlinx.serialization.json.Json
 
-internal val Context.attentionStateDataStore by preferencesDataStore(name = "attention_state")
-
 private class WorkspaceViewModelFactory(
-    private val repository: DataStoreAttentionStateRepository,
+    private val repository: AttentionStateRepository,
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T = AttentionViewModel(repository) as T
@@ -84,11 +85,17 @@ private class WorkspaceViewModelFactory(
 @Composable
 fun WorkspaceApp() {
     val context = LocalContext.current
-    val repository = remember { DataStoreAttentionStateRepository(context.attentionStateDataStore) }
+    val database = remember { AttentionDatabase.create(context) }
+    val repository = remember {
+        RoomAttentionStateRepository(
+            business = RoomBusinessDataRepository(database),
+            settings = context.createSettingsStore(),
+        )
+    }
     val viewModel: AttentionViewModel = viewModel(factory = WorkspaceViewModelFactory(repository))
     val state by viewModel.state.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
-    var destination by remember(state.launchDestination, state.lastOpenedDestination) {
+    var destination by remember {
         mutableStateOf(resolveLaunchDestination(state.launchDestination, state.lastOpenedDestination))
     }
     var jsonPreview by remember { mutableStateOf<String?>(null) }

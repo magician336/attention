@@ -15,6 +15,17 @@ class RoomBusinessDataRepository(
     private val database: AttentionDatabase,
 ) {
     suspend fun replace(state: AttentionState) = database.withTransaction {
+        replaceInTransaction(state)
+    }
+
+    /** Reads, applies one domain command, and persists it in one Room transaction. */
+    suspend fun update(transform: (AttentionState) -> AttentionState): AttentionState = database.withTransaction {
+        val next = transform(readInTransaction())
+        replaceInTransaction(next)
+        next
+    }
+
+    private suspend fun replaceInTransaction(state: AttentionState) {
         clearAll()
         database.targetDao().upsertAll(state.targets.map { it.toEntity() })
         database.goalStageDao().upsertAll(state.goalStages.map { it.toEntity() })
@@ -31,7 +42,11 @@ class RoomBusinessDataRepository(
     }
 
     suspend fun read(): AttentionState = database.withTransaction {
-        AttentionState(
+        readInTransaction()
+    }
+
+    private suspend fun readInTransaction(): AttentionState {
+        return AttentionState(
             targets = database.targetDao().getAll().map { it.toDomain() },
             goalStages = database.goalStageDao().getAll().map { it.toDomain() },
             timeEntries = database.timeEntryDao().getAll().map { it.toDomain() },
