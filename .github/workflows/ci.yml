@@ -95,7 +95,12 @@ jobs:
           profile: pixel_2
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           disable-animations: true
-          script: ./gradlew --no-daemon connectedDebugAndroidTest
+          script: |
+            set +e
+            ./gradlew --no-daemon connectedDebugAndroidTest
+            status=$?
+            adb logcat -d -b all -v threadtime > instrumentation-logcat.txt
+            exit $status
 
       - name: Upload instrumentation reports
         if: ${{ !cancelled() }}
@@ -107,3 +112,4 @@ jobs:
             app/build/reports
             app/build/outputs/androidTest-results
             app/build/outputs/connected_android_test_additional_output
+            instrumentation-logcat.txt
