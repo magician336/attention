@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
@@ -280,6 +281,23 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
                     val c = dailyCapacity.toIntOrNull()?.takeIf { it > 0 }
                     viewModel.setSettings(StoredSettings(b, state.settings.weekStartDay, c))
                 }) { Text("保存设置") }
+            }
+        }
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("周起始日", style = MaterialTheme.typography.titleMedium)
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    (1..7).forEach { day ->
+                        if (day == state.settings.weekStartDay) {
+                            Button(onClick = {}) { Text(weekName(day)) }
+                        } else {
+                            OutlinedButton(onClick = { viewModel.setWeekStart(day) }) { Text(weekName(day)) }
+                        }
+                    }
+                }
             }
         }
         Text("今日安排", style = MaterialTheme.typography.titleMedium)

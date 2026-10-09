@@ -10,6 +10,10 @@ import com.attention.domain.setTargetExpanded
 import com.attention.domain.targetChildren
 import java.nio.file.Files
 import java.time.LocalDate
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -17,6 +21,33 @@ import org.junit.Assert.assertNotNull
 import org.junit.Test
 
 class AttentionStateRepositoryTest {
+    @Test
+    fun settings_survive_a_new_repository_instance() = runBlocking {
+        val file = Files.createTempFile("attention-state-settings", ".preferences_pb").toFile()
+        val firstScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val firstRepository = DataStoreAttentionStateRepository(
+            PreferenceDataStoreFactory.create(scope = firstScope) { file },
+        )
+
+        firstRepository.update {
+            it.copy(settings = StoredSettings(
+                planningDayBoundaryMinutes = 90,
+                weekStartDay = 7,
+                dailyCapacityMinutes = 420,
+            ))
+        }
+        firstScope.cancel()
+        firstScope.coroutineContext[kotlinx.coroutines.Job]?.join()
+
+        val afterRestart = DataStoreAttentionStateRepository(
+            PreferenceDataStoreFactory.create { file },
+        ).state.first()
+
+        assertEquals(90, afterRestart.settings.planningDayBoundaryMinutes)
+        assertEquals(7, afterRestart.settings.weekStartDay)
+        assertEquals(420, afterRestart.settings.dailyCapacityMinutes)
+    }
+
     @Test
     fun json_round_trip_merge_deduplicates_and_creates_backup() = runBlocking {
         val file = Files.createTempFile("attention-state", ".preferences_pb").toFile()

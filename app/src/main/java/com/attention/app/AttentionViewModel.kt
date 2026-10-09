@@ -109,6 +109,10 @@ class AttentionViewModel(
     fun stopRecurrence(ruleId: String) = runCommand { it.stopRecurrence(ruleId) }
 
     fun setSettings(settings: StoredSettings) = runCommand { it.copy(settings = settings) }
+    fun setWeekStart(day: Int) = runCommand {
+        require(day in 1..7) { "周起始日必须在周一到周日之间" }
+        it.copy(settings = it.settings.copy(weekStartDay = day))
+    }
     fun setLaunchDestination(destination: LaunchDestination) = runCommand {
         it.copy(launchDestination = destination)
     }
