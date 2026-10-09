@@ -1,6 +1,6 @@
 # Room / DataStore 存储架构切换开发方案
 
-状态：已确定方案，待实现
+状态：已确定方案，Issue #25 实施中
 
 ## 目标
 
@@ -93,7 +93,8 @@ flowchart TD
 ### 1. 固化边界与依赖
 
 - 保留 ADR-0002 作为本次架构决策。
-- 增加 Room runtime、KTX、compiler/KSP 和测试依赖。
+- 构建工具链锁定 Kotlin 2.4.20、AGP 8.12.2、Gradle 8.13 和 KSP 2.3.12；Room 2.8.5 compiler 通过 KSP 处理 Kotlin 源码。
+- 增加 Room runtime、KTX、compiler 和 AndroidX 测试依赖，并导出 Room schema。
 - 建立数据库版本、实体包、DAO 包和 mapper 包。
 - 为新安装定义空数据库与设置默认值。
 
