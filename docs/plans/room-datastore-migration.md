@@ -61,6 +61,7 @@ flowchart TD
 - `PeriodSnapshotEntity`
 - `TargetMoveEntity`
 - `MilestoneEntity`
+- `ExperienceEntity`（单例记录）
 - `ActiveTimerEntity`（单例记录）
 
 关系和索引至少覆盖：
