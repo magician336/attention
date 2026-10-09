@@ -5,6 +5,9 @@ import com.attention.domain.AttentionState
 import com.attention.domain.StoredSettings
 import com.attention.domain.addTarget
 import com.attention.domain.addTimeEntry
+import com.attention.domain.reorderTarget
+import com.attention.domain.setTargetExpanded
+import com.attention.domain.targetChildren
 import java.nio.file.Files
 import java.time.LocalDate
 import kotlinx.coroutines.flow.first
@@ -30,5 +33,31 @@ class AttentionStateRepositoryTest {
         assertEquals(1, merged.timeEntries.size)
         assertEquals(300, merged.settings.dailyCapacityMinutes)
         assertNotNull(repository.lastImportBackup())
+    }
+
+    @Test
+    fun json_round_trip_preserves_nested_target_tree_order_and_expansion() = runBlocking {
+        val file = Files.createTempFile("attention-target-tree", ".preferences_pb").toFile()
+        val repository = DataStoreAttentionStateRepository(PreferenceDataStoreFactory.create { file })
+        val initial = AttentionState()
+            .addTarget("阅读")
+            .let { it.addTarget("中国文学", it.targets.single().id) }
+            .let { it.addTarget("红楼梦", it.targets.single { target -> target.title == "中国文学" }.id) }
+        val rootId = initial.targets.single { it.title == "阅读" }.id
+        val childId = initial.targets.single { it.title == "中国文学" }.id
+        val prepared = initial
+            .setTargetExpanded(rootId, false)
+            .reorderTarget(childId, 0)
+
+        repository.replace(prepared)
+        val encoded = repository.exportJson()
+        repository.importJson(encoded, clearExisting = true)
+
+        val restored = repository.state.first()
+        assertEquals(prepared.targets, restored.targets)
+        assertEquals(listOf("中国文学"), restored.targetChildren(rootId).map { it.title })
+        assertEquals(rootId, restored.targets.single { it.title == "阅读" }.id)
+        assertEquals(false, restored.targets.single { it.id == rootId }.expanded)
+        assertEquals(childId, restored.targets.single { it.title == "中国文学" }.id)
     }
 }

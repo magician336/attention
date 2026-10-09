@@ -134,7 +134,7 @@ fun AttentionState.validTarget(targetId: String?): Boolean = targetId == null ||
 fun AttentionState.addTarget(title: String, parentId: String? = null): AttentionState {
     require(title.isNotBlank())
     require(parentId == null || targets.any { it.id == parentId })
-    val siblingOrder = targets.count { it.parentId == parentId }
+    val siblingOrder = targets.filter { it.parentId == parentId }.maxOfOrNull { it.sortOrder }?.plus(1) ?: 0
     return copy(targets = targets + Target(title = title.trim(), parentId = parentId, sortOrder = siblingOrder))
 }
 
@@ -152,7 +152,11 @@ fun AttentionState.moveTarget(targetId: String, newParentId: String?): Attention
     require(targets.any { it.id == targetId })
     require(newParentId == null || targets.any { it.id == newParentId })
     require(newParentId == null || newParentId !in descendantIds(targetId))
-    return copy(targets = targets.map { if (it.id == targetId) it.copy(parentId = newParentId) else it })
+    val target = targets.first { it.id == targetId }
+    if (target.parentId == newParentId) return this
+    val nextOrder = targets.filter { it.parentId == newParentId && it.id != targetId }
+        .maxOfOrNull { it.sortOrder }?.plus(1) ?: 0
+    return copy(targets = targets.map { if (it.id == targetId) it.copy(parentId = newParentId, sortOrder = nextOrder) else it })
 }
 
 fun AttentionState.reorderTarget(targetId: String, newIndex: Int): AttentionState {

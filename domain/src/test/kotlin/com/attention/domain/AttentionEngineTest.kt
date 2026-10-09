@@ -194,4 +194,20 @@ class AttentionEngineTest {
         assertEquals(listOf("三", "一", "二"), reordered.targetChildren(null).map { it.title })
         assertEquals(third.id, reordered.targetChildren(null).first().id)
     }
+
+    @Test
+    fun moving_target_to_another_parent_keeps_id_and_places_it_after_existing_siblings() {
+        val state = AttentionState().addTarget("旧父目标").addTarget("新父目标")
+        val oldParent = state.targets.first()
+        val newParent = state.targets.last()
+        val withChild = state.addTarget("子计划", oldParent.id)
+        val child = withChild.targets.single { it.title == "子计划" }
+        val existingSibling = withChild.addTarget("已有子计划", newParent.id)
+        val moved = existingSibling.moveTarget(child.id, newParent.id)
+
+        assertEquals(newParent.id, moved.targets.single { it.id == child.id }.parentId)
+        assertEquals(child.id, moved.targetChildren(newParent.id).last().id)
+        assertEquals(child.id, moved.targets.single { it.id == child.id }.id)
+        assertEquals(listOf("已有子计划", "子计划"), moved.targetChildren(newParent.id).map { it.title })
+    }
 }

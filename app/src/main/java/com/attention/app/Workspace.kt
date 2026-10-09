@@ -320,6 +320,7 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
     var pendingDelete by remember { mutableStateOf<Target?>(null) }
     var renameTarget by remember { mutableStateOf<Target?>(null) }
     var renameText by remember { mutableStateOf("") }
+    var movingTarget by remember { mutableStateOf<Target?>(null) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("目标树", style = MaterialTheme.typography.headlineMedium)
         Text("父目标显示整个子树的实际投入；归档目标会从默认列表隐藏。")
@@ -399,7 +400,33 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                 Button(onClick = { if (renameText.isNotBlank()) viewModel.renameTarget(target.id, renameText); renameTarget = null }) { Text("保存") }
             }
         }
-        TargetTree(state, viewModel, null, 0, chooseParent = { parentId = it }, rename = { target -> renameTarget = target; renameText = target.title })
+        movingTarget?.let { target ->
+            val excludedIds = state.descendantIds(target.id)
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("移动 ${target.title}：选择新的父目标", style = MaterialTheme.typography.titleSmall)
+                    OutlinedButton(onClick = { viewModel.moveTarget(target.id, null); movingTarget = null }) { Text("移到根计划") }
+                    state.targets
+                        .filter { !it.archived && it.id !in excludedIds }
+                        .sortedBy { state.targetPath(it.id) }
+                        .forEach { candidate ->
+                            OutlinedButton(onClick = { viewModel.moveTarget(target.id, candidate.id); movingTarget = null }) {
+                                Text("移到：${state.targetPath(candidate.id)}")
+                            }
+                        }
+                    TextButton(onClick = { movingTarget = null }) { Text("取消移动") }
+                }
+            }
+        }
+        TargetTree(
+            state,
+            viewModel,
+            null,
+            0,
+            chooseParent = { parentId = it },
+            rename = { target -> renameTarget = target; renameText = target.title },
+            move = { movingTarget = it },
+        )
         if (state.targets.none { !it.archived }) Text("还没有计划。")
         if (state.targets.any { it.archived }) {
             Text("已归档目标", style = MaterialTheme.typography.titleMedium)
@@ -426,7 +453,15 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
 }
 
 @Composable
-private fun TargetTree(state: AttentionState, viewModel: AttentionViewModel, parentId: String?, depth: Int, chooseParent: (String) -> Unit, rename: (Target) -> Unit) {
+private fun TargetTree(
+    state: AttentionState,
+    viewModel: AttentionViewModel,
+    parentId: String?,
+    depth: Int,
+    chooseParent: (String) -> Unit,
+    rename: (Target) -> Unit,
+    move: (Target) -> Unit,
+) {
     state.targetChildren(parentId).forEach { target ->
         val children = state.targetChildren(target.id)
         Column(Modifier.padding(start = (depth * 16).dp)) {
@@ -440,13 +475,14 @@ private fun TargetTree(state: AttentionState, viewModel: AttentionViewModel, par
                 TextButton(onClick = { viewModel.toggleTarget(target.id, !target.expanded) }) { Text(if (target.expanded) "折叠" else "展开") }
                 TextButton(onClick = { chooseParent(target.id) }) { Text("添加子计划") }
                 TextButton(onClick = { rename(target) }) { Text("重命名") }
+                TextButton(onClick = { move(target) }) { Text("移动") }
                 val siblings = state.targetChildren(parentId)
                 val index = siblings.indexOf(target)
                 if (index > 0) TextButton(onClick = { viewModel.reorderTarget(target.id, index - 1) }) { Text("上移") }
                 if (index < siblings.lastIndex) TextButton(onClick = { viewModel.reorderTarget(target.id, index + 1) }) { Text("下移") }
                 TextButton(onClick = { viewModel.archiveTarget(target.id) }) { Text("归档") }
             }
-            if (target.expanded) TargetTree(state, viewModel, target.id, depth + 1, chooseParent, rename)
+            if (target.expanded) TargetTree(state, viewModel, target.id, depth + 1, chooseParent, rename, move)
         }
     }
 }
@@ -592,6 +628,17 @@ private fun resolveLaunchDestination(requested: LaunchDestination, lastOpened: L
 private fun AttentionState.unownedMinutesForUi(): Int = timeEntries.filter { it.targetId == null }.sumOf { it.durationMinutes }
 
 private fun AttentionState.gapForUi(stage: com.attention.domain.GoalStage, date: LocalDate): Int = progress(stage, date).gapMinutes
+
+private fun AttentionState.targetPath(targetId: String): String {
+    val names = mutableListOf<String>()
+    val seen = mutableSetOf<String>()
+    var current = targets.firstOrNull { it.id == targetId }
+    while (current != null && seen.add(current.id)) {
+        names += current.title
+        current = current.parentId?.let { parentId -> targets.firstOrNull { it.id == parentId } }
+    }
+    return names.asReversed().joinToString(" / ")
+}
 
 private fun GoalCadence.label(): String = when (this) {
     GoalCadence.DAILY -> "每日"
