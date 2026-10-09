@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - "codex/**"
   pull_request:
     branches:
       - main
@@ -44,6 +43,9 @@ jobs:
         with:
           packages: platform-tools platforms;android-${{ env.ANDROID_API_LEVEL }} build-tools;35.0.0
 
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+
       - name: Run unit tests, lint, and assembleDebug
         run: ./gradlew --no-daemon test lintDebug assembleDebug
 
@@ -80,6 +82,9 @@ jobs:
         uses: android-actions/setup-android@v4
         with:
           packages: platform-tools platforms;android-${{ env.ANDROID_API_LEVEL }} build-tools;35.0.0 emulator
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
 
       - name: Run instrumentation tests on emulator
         uses: reactivecircus/android-emulator-runner@v2
