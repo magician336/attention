@@ -1,6 +1,6 @@
 # Room / DataStore 存储架构切换开发方案
 
-状态：已确定方案，Issue #25 实施中
+状态：Issue #26 Room 业务数据层已实现；运行时切换与 DataStore 业务字段清理由 #27–#29 完成
 
 ## 目标
 
@@ -104,6 +104,8 @@ flowchart TD
 - 实现每类实体的 DAO 查询和写入。
 - 为目标关系、时间记录、日程、计时状态和里程碑建立事务用例。
 - 编写数据库重启、事务回滚、外键语义和查询结果测试。
+- 旧安装数据不在本期保留范围；Room 仅对已知的 v1/v2 预发布 schema
+  使用显式 destructive fallback，并用 instrumentation fixture 验证该策略。未知未来版本不自动清空。
 
 ### 3. 拆分设置存储
 

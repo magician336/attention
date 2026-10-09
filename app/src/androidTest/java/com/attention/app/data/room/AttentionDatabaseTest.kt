@@ -30,4 +30,30 @@ class AttentionDatabaseTest {
             context.deleteDatabase(AttentionDatabase.DATABASE_NAME)
         }
     }
+
+    @Test
+    fun known_pre_release_schema_is_explicitly_reset() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.deleteDatabase(AttentionDatabase.DATABASE_NAME)
+        val legacy = context.openOrCreateDatabase(AttentionDatabase.DATABASE_NAME, Context.MODE_PRIVATE, null)
+        try {
+            legacy.execSQL("CREATE TABLE room_metadata (id INTEGER NOT NULL, schemaVersion INTEGER NOT NULL, PRIMARY KEY(id))")
+            legacy.execSQL("CREATE TABLE room_master_table (id INTEGER PRIMARY KEY, identity_hash TEXT)")
+            legacy.execSQL(
+                "INSERT INTO room_master_table (id, identity_hash) VALUES (42, '91d9333bc58abc527205e22c49515aed')",
+            )
+            legacy.execSQL("PRAGMA user_version = 1")
+        } finally {
+            legacy.close()
+        }
+
+        val database = AttentionDatabase.create(context)
+        try {
+            assertNull(database.metadataDao().observe().first())
+            assertEquals(0, database.targetDao().getAll().size)
+        } finally {
+            database.close()
+            context.deleteDatabase(AttentionDatabase.DATABASE_NAME)
+        }
+    }
 }
