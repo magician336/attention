@@ -108,19 +108,23 @@ class AttentionViewModel(
     fun materializeRecurrence(rule: RecurrenceRule, through: LocalDate) = runCommand { it.materializeOccurrences(rule, through) }
     fun stopRecurrence(ruleId: String) = runCommand { it.stopRecurrence(ruleId) }
 
-    fun setSettings(settings: StoredSettings) = runCommand { it.copy(settings = settings) }
-    fun setLaunchDestination(destination: LaunchDestination) = runCommand {
-        it.copy(launchDestination = destination)
+    fun setSettings(settings: StoredSettings) = runSettingsCommand { repository.setPlannerSettings(settings) }
+    fun setWeekStart(day: Int) = runSettingsCommand {
+        require(day in 1..7) { "周起始日必须在周一到周日之间" }
+        repository.setWeekStartDay(day)
     }
-    fun finishOnboarding() = runCommand { it.copy(onboardingCompleted = true) }
-    fun saveLastOpened(destination: LaunchDestination) = runCommand {
-        it.copy(lastOpenedDestination = destination)
+    fun setLaunchDestination(destination: LaunchDestination) = runSettingsCommand {
+        repository.setLaunchDestination(destination)
+    }
+    fun finishOnboarding() = runSettingsCommand { repository.setOnboardingCompleted(true) }
+    fun saveLastOpened(destination: LaunchDestination) = runSettingsCommand {
+        repository.setLastOpenedDestination(destination)
     }
 
     fun startTimer(targetId: String?) = runCommand { it.startTimer(targetId, Instant.now(), zone) }
     fun switchTimer(targetId: String?) = scope.launch {
         runCatching {
-            repository.update { current -> current.switchTimer(targetId, Instant.now(), zone).state.recalculateExperience() }
+            repository.updateBusiness { current -> current.switchTimer(targetId, Instant.now(), zone).state.recalculateExperience() }
         }.onFailure { _error.value = it.message ?: "无法切换计时目标" }
     }
     fun pauseTimer() = runCommand { it.pauseTimer(Instant.now()) }
@@ -128,7 +132,7 @@ class AttentionViewModel(
     fun recoverTimer() = runCommand { it.recoverTimer(Instant.now()) }
     fun stopTimer() = scope.launch {
         runCatching {
-            repository.update { current -> current.stopTimer(Instant.now(), zone).state.recalculateExperience().awardEligibleMilestones(LocalDate.now(zone)) }
+            repository.updateBusiness { current -> current.stopTimer(Instant.now(), zone).state.recalculateExperience().awardEligibleMilestones(LocalDate.now(zone)) }
         }.onFailure { _error.value = it.message ?: "无法结束计时" }
     }
 
@@ -155,8 +159,13 @@ class AttentionViewModel(
     }
 
     private fun runCommand(transform: (AttentionState) -> AttentionState) = scope.launch {
-        runCatching { repository.update(transform) }
+        runCatching { repository.updateBusiness(transform) }
             .onFailure { _error.value = it.message ?: "操作未保存" }
+    }
+
+    private fun runSettingsCommand(command: suspend () -> Unit) = scope.launch {
+        runCatching { command() }
+            .onFailure { _error.value = it.message ?: "设置未保存" }
     }
 
     override fun onCleared() {

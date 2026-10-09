@@ -9,10 +9,10 @@ Attention v0.1.0 采用原生 Android 技术栈：Kotlin、Jetpack Compose、Roo
 
 ## 选择
 
-- Kotlin 2.4.x，Gradle Kotlin DSL 和 Version Catalog；实现时锁定与 Android Gradle Plugin 兼容的稳定版本。
+- Kotlin 2.4.20、Android Gradle Plugin 8.12.2、Gradle 8.13 和 KSP 2.3.12，使用 Gradle Kotlin DSL 与 Version Catalog；Room compiler 通过 KSP 处理 Kotlin 源码。
 - `compileSdk`/`targetSdk` 使用 Android 16 API 36，`minSdk` 使用 26。
 - UI 使用 Jetpack Compose、Material 3、Navigation Compose；页面状态使用 ViewModel、Coroutines 和 StateFlow。
-- 数据库使用 Room 3.0.x（当前稳定线），保存目标树、目标阶段、周期快照、目标迁移、时间记录、日程、重复规则、提醒、活动计时、经验和里程碑。
+- 数据库使用 Room 稳定线（当前构建锁定 2.8.5），保存目标树、目标阶段、周期快照、目标迁移、时间记录、日程、重复规则、提醒、活动计时、经验和里程碑。
 - Preferences DataStore 只保存规划日界线、周起始日、每日容量、首屏和通知偏好等小型设置。
 - JSON 备份使用 kotlinx.serialization 和版本化备份 DTO；CSV 只作为分析导出格式。
 - 全局计时器使用持久化活动计时状态和前台服务通知；日程提醒使用 AlarmManager，延迟维护工作使用 WorkManager。

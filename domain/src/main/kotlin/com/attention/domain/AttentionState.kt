@@ -182,6 +182,7 @@ data class AttentionState(
     val onboardingCompleted: Boolean = false,
     val launchDestination: LaunchDestination = LaunchDestination.TODAY,
     val lastOpenedDestination: LaunchDestination = LaunchDestination.TODAY,
+    val notificationsEnabled: Boolean = true,
 )
 
 fun newId(): String = UUID.randomUUID().toString()
