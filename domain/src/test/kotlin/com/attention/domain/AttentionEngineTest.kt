@@ -68,6 +68,18 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun paused_timer_only_counts_running_segments() {
+        val state = AttentionState().addTarget("专注")
+        val target = state.targets.single()
+        val started = state.startTimer(target.id, Instant.parse("2026-10-08T00:00:00Z"), utc)
+        val paused = started.pauseTimer(Instant.parse("2026-10-08T00:05:00Z"))
+        val resumed = paused.resumeTimer(Instant.parse("2026-10-08T00:10:00Z"))
+        val result = resumed.stopTimer(Instant.parse("2026-10-08T00:15:00Z"), utc)
+        assertEquals(1, result.entries.size)
+        assertEquals(10, result.entries.single().durationMinutes)
+    }
+
+    @Test
     fun recurrence_generates_independent_occurrences_and_can_stop() {
         val state = AttentionState().addRecurrence(
             RecurrenceRule(

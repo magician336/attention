@@ -69,16 +69,31 @@ fun AttentionState.periodRange(
 }
 
 fun AttentionState.progress(stage: GoalStage, onDate: LocalDate): GoalProgress {
-    val range = if (stage.cadence == GoalCadence.ONE_TIME) {
-        val end = stage.dueDate?.let(LocalDate::parse) ?: onDate
-        LocalDate.parse(stage.startDate)..end
-    } else periodRange(onDate, stage.cadence)
+    val effective = effectiveStage(stage, onDate)
+    if (onDate.isBefore(LocalDate.parse(effective.startDate))) return GoalProgress(0, 0, 0, 0, false)
+    val range = if (effective.cadence == GoalCadence.ONE_TIME) {
+        val end = effective.dueDate?.let(LocalDate::parse) ?: onDate
+        LocalDate.parse(effective.startDate)..end
+    } else periodRange(onDate, effective.cadence)
     val actual = timeEntries.filter { it.targetId != null }
         .filter { LocalDate.parse(it.planningDate) in range }
-        .filter { isDescendantAt(it.targetId!!, stage.targetId, LocalDate.parse(it.planningDate)) }
+        .filter { isDescendantAt(it.targetId!!, effective.targetId, LocalDate.parse(it.planningDate)) }
         .sumOf { it.durationMinutes }
-    val gap = (stage.targetMinutes - actual).coerceAtLeast(0)
-    return GoalProgress(stage.targetMinutes, actual, gap, (actual - stage.targetMinutes).coerceAtLeast(0), actual >= stage.targetMinutes)
+    val gap = (effective.targetMinutes - actual).coerceAtLeast(0)
+    return GoalProgress(effective.targetMinutes, actual, gap, (actual - effective.targetMinutes).coerceAtLeast(0), actual >= effective.targetMinutes)
+}
+
+fun AttentionState.effectiveStage(stage: GoalStage, onDate: LocalDate): GoalStage {
+    val rule = futureGoalRules.asSequence()
+        .filter { it.targetId == stage.targetId && (it.stageId.isBlank() || it.stageId == stage.id) && !LocalDate.parse(it.effectiveFrom).isAfter(onDate) }
+        .maxByOrNull { it.effectiveFrom }
+        ?: return stage
+    return stage.copy(
+        cadence = rule.cadence,
+        targetMinutes = rule.targetMinutes,
+        startDate = rule.effectiveFrom,
+        dueDate = rule.dueDate,
+    )
 }
 
 fun AttentionState.capacitySummary(date: String): CapacitySummary {
@@ -273,6 +288,7 @@ fun AttentionState.gapFor(stage: GoalStage, onDate: LocalDate): Int = progress(s
 
 fun AttentionState.addFutureGoalRule(rule: FutureGoalRule): AttentionState {
     require(targets.any { it.id == rule.targetId })
+    require(rule.stageId.isBlank() || goalStages.any { it.id == rule.stageId && it.targetId == rule.targetId })
     require(rule.targetMinutes > 0)
     LocalDate.parse(rule.effectiveFrom)
     rule.dueDate?.let(LocalDate::parse)
@@ -297,7 +313,7 @@ fun AttentionState.addPeriodSnapshot(snapshot: PeriodSnapshot): AttentionState {
 }
 
 fun AttentionState.snapshot(stage: GoalStage, periodStart: LocalDate, periodEnd: LocalDate): PeriodSnapshot {
-    val result = progress(stage, periodStart)
+    val result = progress(stage, periodEnd)
     return PeriodSnapshot(
         targetId = stage.targetId,
         cadence = stage.cadence,
@@ -349,7 +365,12 @@ fun AttentionState.pauseTimer(now: Instant): AttentionState {
     val timer = activeTimer ?: return this
     if (timer.paused) return this
     val additional = (now.toEpochMilli() - timer.startedAtEpochMillis).coerceAtLeast(0)
-    return copy(activeTimer = timer.copy(accumulatedMillis = timer.accumulatedMillis + additional, paused = true))
+    val endedAt = maxOf(timer.startedAtEpochMillis, now.toEpochMilli())
+    return copy(activeTimer = timer.copy(
+        accumulatedMillis = timer.accumulatedMillis + additional,
+        paused = true,
+        completedSegments = timer.completedSegments + TimerSegment(timer.startedAtEpochMillis, endedAt),
+    ))
 }
 
 fun AttentionState.resumeTimer(now: Instant): AttentionState {
@@ -358,34 +379,52 @@ fun AttentionState.resumeTimer(now: Instant): AttentionState {
     return copy(activeTimer = timer.copy(startedAtEpochMillis = now.toEpochMilli(), paused = false))
 }
 
+fun AttentionState.recoverTimer(now: Instant): AttentionState {
+    val timer = activeTimer ?: return this
+    return copy(activeTimer = timer.copy(startedAtEpochMillis = now.toEpochMilli(), paused = false))
+}
+
 fun AttentionState.stopTimer(now: Instant, zone: ZoneId = ZoneId.systemDefault()): TimerResult {
     val timer = activeTimer ?: return TimerResult(this, emptyList())
-    val running = if (timer.paused) 0 else (now.toEpochMilli() - timer.startedAtEpochMillis).coerceAtLeast(0)
-    val totalMillis = timer.accumulatedMillis + running
-    val wholeMinutes = totalMillis / 60_000
-    if (wholeMinutes <= 0) return TimerResult(copy(activeTimer = null), emptyList())
-    val start = Instant.ofEpochMilli(timer.startedAtEpochMillis - timer.accumulatedMillis)
-    val entries = splitMinutes(start, now, wholeMinutes.toInt(), timer.targetId, settings.planningDayBoundaryMinutes, zone)
+    val segments = timer.completedSegments.toMutableList()
+    if (!timer.paused) {
+        val endedAt = maxOf(timer.startedAtEpochMillis, now.toEpochMilli())
+        segments += TimerSegment(timer.startedAtEpochMillis, endedAt)
+    }
+    val entries = splitTimerSegments(segments, timer.targetId, settings.planningDayBoundaryMinutes, zone)
     return TimerResult(copy(activeTimer = null, timeEntries = timeEntries + entries), entries)
 }
 
-private fun splitMinutes(start: Instant, end: Instant, wholeMinutes: Int, targetId: String?, boundaryMinutes: Int, zone: ZoneId): List<TimeEntry> {
-    var cursor = start
-    var remainingMillis = wholeMinutes * 60_000L
-    val result = mutableListOf<TimeEntry>()
-    while (remainingMillis > 0 && cursor.isBefore(end)) {
-        val local = cursor.atZone(zone)
-        val planningDate = local.toLocalDate().let { if (local.toLocalTime().toSecondOfDay() / 60 < boundaryMinutes) it.minusDays(1) else it }
-        val nextBoundary = planningDate.plusDays(1).atStartOfDay(zone).plusMinutes(boundaryMinutes.toLong()).toInstant()
-        val untilBoundary = (nextBoundary.toEpochMilli() - cursor.toEpochMilli()).coerceAtLeast(1)
-        val chunkMillis = minOf(remainingMillis, untilBoundary, end.toEpochMilli() - cursor.toEpochMilli())
-        val chunkMinutes = (chunkMillis / 60_000L).toInt()
-        if (chunkMinutes > 0) result += TimeEntry(planningDate = planningDate.toString(), durationMinutes = chunkMinutes, targetId = targetId, source = TimeEntrySource.TIMER, occurredAtEpochMillis = cursor.toEpochMilli())
-        cursor = cursor.plusMillis(chunkMinutes * 60_000L)
-        remainingMillis -= chunkMinutes * 60_000L
-        if (chunkMinutes == 0) break
+private fun splitTimerSegments(segments: List<TimerSegment>, targetId: String?, boundaryMinutes: Int, zone: ZoneId): List<TimeEntry> {
+    val buckets = linkedMapOf<LocalDate, Long>()
+    segments.sortedBy { it.startedAtEpochMillis }.forEach { segment ->
+        var cursor = Instant.ofEpochMilli(segment.startedAtEpochMillis)
+        val end = Instant.ofEpochMilli(maxOf(segment.startedAtEpochMillis, segment.endedAtEpochMillis))
+        while (cursor.isBefore(end)) {
+            val local = cursor.atZone(zone)
+            val planningDate = local.toLocalDate().let {
+                if (local.toLocalTime().toSecondOfDay() / 60 < boundaryMinutes) it.minusDays(1) else it
+            }
+            val nextBoundary = planningDate.plusDays(1).atStartOfDay(zone).plusMinutes(boundaryMinutes.toLong()).toInstant()
+            val chunkEnd = minOf(end, nextBoundary)
+            val duration = chunkEnd.toEpochMilli() - cursor.toEpochMilli()
+            buckets[planningDate] = (buckets[planningDate] ?: 0L) + duration
+            cursor = chunkEnd
+        }
     }
-    return result
+    var carryMillis = 0L
+    return buckets.mapNotNull { (date, durationMillis) ->
+        val total = carryMillis + durationMillis
+        val minutes = (total / 60_000L).toInt()
+        carryMillis = total % 60_000L
+        if (minutes == 0) null else TimeEntry(
+            planningDate = date.toString(),
+            durationMinutes = minutes,
+            targetId = targetId,
+            source = TimeEntrySource.TIMER,
+            occurredAtEpochMillis = date.atStartOfDay(zone).toInstant().toEpochMilli(),
+        )
+    }
 }
 
 fun AttentionState.recalculateExperience(): AttentionState = copy(
@@ -409,19 +448,41 @@ fun AttentionState.continuousPlanningDays(targetId: String? = null): Int {
     return best
 }
 
+fun AttentionState.continuousPlanningDaysThrough(onDate: LocalDate, targetId: String? = null): Int {
+    val dates = timeEntries.asSequence()
+        .filter { it.targetId != null && LocalDate.parse(it.planningDate) <= onDate }
+        .filter { targetId == null || it.targetId in descendantIds(targetId) }
+        .map { LocalDate.parse(it.planningDate) }
+        .toSet()
+    var cursor = onDate
+    var count = 0
+    while (cursor in dates) {
+        count++
+        cursor = cursor.minusDays(1)
+    }
+    return count
+}
+
 fun AttentionState.eligibleMilestones(onDate: LocalDate): List<Milestone> {
     val existing = milestones.map { it.instanceKey }.toSet()
     val result = mutableListOf<Milestone>()
     goalStages.forEach { stage ->
         val progress = progress(stage, onDate)
         if (progress.completed) {
-            val kind = if (stage.cadence == GoalCadence.ONE_TIME) "one_time_goal" else "goal_period"
-            val key = "$kind:${stage.id}:${stage.startDate}"
-            if (key !in existing) result += Milestone(kind = kind, instanceKey = key, reward = if (stage.cadence == GoalCadence.ONE_TIME) 10_000 else 500, achievedAtEpochMillis = System.currentTimeMillis())
+            val effective = effectiveStage(stage, onDate)
+            val kind = if (effective.cadence == GoalCadence.ONE_TIME) "one_time_goal" else "goal_period"
+            val periodStart = if (effective.cadence == GoalCadence.ONE_TIME) effective.startDate else periodRange(onDate, effective.cadence).start.toString()
+            val key = "$kind:${stage.id}:$periodStart"
+            val reward = when (effective.cadence) {
+                GoalCadence.ONE_TIME -> 10_000L
+                GoalCadence.DAILY -> 500L
+                GoalCadence.WEEKLY, GoalCadence.MONTHLY -> 1_000L
+            }
+            if (key !in existing) result += Milestone(kind = kind, instanceKey = key, reward = reward, achievedAtEpochMillis = System.currentTimeMillis())
         }
     }
     targets.filter { !it.archived }.forEach { target ->
-        val days = continuousPlanningDays(target.id)
+        val days = continuousPlanningDaysThrough(onDate, target.id)
         listOf(7 to 500L, 30 to 1_000L, 100 to 10_000L).forEach { (threshold, reward) ->
             val key = "streak:${target.id}:$threshold"
             if (days >= threshold && key !in existing) result += Milestone(kind = "streak", instanceKey = key, reward = reward, achievedAtEpochMillis = System.currentTimeMillis())

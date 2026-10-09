@@ -112,6 +112,7 @@ data class Migration(
 data class FutureGoalRule(
     val id: String = newId(),
     val targetId: String,
+    val stageId: String = "",
     val cadence: GoalCadence,
     val targetMinutes: Int,
     val effectiveFrom: String,
@@ -147,7 +148,11 @@ data class ActiveTimer(
     val accumulatedMillis: Long = 0,
     val paused: Boolean = false,
     val lastPlanningDate: String,
+    val completedSegments: List<TimerSegment> = emptyList(),
 )
+
+@Serializable
+data class TimerSegment(val startedAtEpochMillis: Long, val endedAtEpochMillis: Long)
 
 @Serializable
 data class Milestone(

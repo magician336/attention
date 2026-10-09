@@ -50,6 +50,7 @@ import com.attention.domain.ScheduleFrequency
 import com.attention.domain.RecurrenceRule
 import com.attention.domain.StoredSettings
 import com.attention.domain.Target
+import com.attention.domain.TimeEntry
 import com.attention.domain.capacitySummary
 import com.attention.domain.directMinutes
 import com.attention.domain.descendantIds
@@ -171,6 +172,8 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
     var dailyCapacity by remember(state.settings.dailyCapacityMinutes) {
         mutableStateOf(state.settings.dailyCapacityMinutes?.toString() ?: "")
     }
+    var editingEntry by remember { mutableStateOf<TimeEntry?>(null) }
+    var editMinutes by remember { mutableStateOf("") }
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -239,6 +242,10 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
                         if (timer.paused) Button(onClick = viewModel::resumeTimer) { Text("继续") }
                         else Button(onClick = viewModel::pauseTimer) { Text("暂停") }
                         OutlinedButton(onClick = {
+                            viewModel.recoverTimer()
+                            ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
+                        }) { Text("从此刻继续") }
+                        OutlinedButton(onClick = {
                             viewModel.stopTimer()
                             context.stopService(AttentionTimerService.intent(context))
                         }) { Text("结束并保存") }
@@ -265,6 +272,25 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
             }
         }
         Text("今日安排", style = MaterialTheme.typography.titleMedium)
+        Text("实际投入记录", style = MaterialTheme.typography.titleMedium)
+        state.timeEntries.filter { it.planningDate == date }.forEach { entry ->
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("${entry.durationMinutes} 分钟 · ${state.targets.firstOrNull { it.id == entry.targetId }?.title ?: "未归属活动"} · ${entry.source.name}")
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        TextButton(onClick = { editingEntry = entry; editMinutes = entry.durationMinutes.toString() }) { Text("编辑") }
+                        TextButton(onClick = { viewModel.deleteTime(entry.id) }) { Text("删除") }
+                    }
+                    if (editingEntry?.id == entry.id) {
+                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            OutlinedTextField(editMinutes, { editMinutes = it.filter(Char::isDigit) }, label = { Text("分钟") }, modifier = Modifier.width(120.dp), singleLine = true)
+                            Spacer(Modifier.width(8.dp))
+                            Button(onClick = { editMinutes.toIntOrNull()?.takeIf { it > 0 }?.let { viewModel.editTime(entry.id, it, entry.targetId, entry.note); editingEntry = null } }) { Text("保存") }
+                        }
+                    }
+                }
+            }
+        }
         state.schedules.filter { it.planningDate == date }.forEach { entry ->
             ScheduleRow(entry, viewModel)
         }
@@ -309,6 +335,11 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                                 goalMinutes = ""
                             }
                         }) { Text("保存目标") }
+                    }
+                    val unownedIds = state.timeEntries.filter { it.targetId == null }.map { it.id }.toSet()
+                    if (unownedIds.isNotEmpty()) {
+                        Text("未归属活动 ${unownedIds.size} 条")
+                        OutlinedButton(onClick = { viewModel.assignUnowned(unownedIds, parentId!!); parentId = null }) { Text("全部归入当前计划") }
                     }
                 }
             }

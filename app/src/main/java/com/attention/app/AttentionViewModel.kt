@@ -13,6 +13,7 @@ import com.attention.domain.TimeEntrySource
 import com.attention.domain.addGoalStage
 import com.attention.domain.addFutureGoalRule
 import com.attention.domain.addMigration
+import com.attention.domain.addFutureTargetMove
 import com.attention.domain.addRecurrence
 import com.attention.domain.addSchedule
 import com.attention.domain.addTarget
@@ -25,6 +26,7 @@ import com.attention.domain.editTimeEntry
 import com.attention.domain.pauseTimer
 import com.attention.domain.renameTarget
 import com.attention.domain.recalculateExperience
+import com.attention.domain.recoverTimer
 import com.attention.domain.resumeTimer
 import com.attention.domain.startTimer
 import com.attention.domain.stopTimer
@@ -75,6 +77,7 @@ class AttentionViewModel(
     fun addTarget(title: String, parentId: String? = null) = runCommand { it.addTarget(title, parentId) }
     fun renameTarget(id: String, title: String) = runCommand { it.renameTarget(id, title) }
     fun moveTarget(id: String, parentId: String?) = runCommand { it.moveTarget(id, parentId) }
+    fun moveTargetFrom(id: String, parentId: String?, effectiveFrom: String) = runCommand { it.addFutureTargetMove(id, parentId, effectiveFrom) }
     fun reorderTarget(id: String, newIndex: Int) = runCommand { it.reorderTarget(id, newIndex) }
     fun toggleTarget(id: String, expanded: Boolean) = runCommand { it.setTargetExpanded(id, expanded) }
     fun archiveTarget(id: String) = runCommand { it.archiveTarget(id) }
@@ -122,6 +125,7 @@ class AttentionViewModel(
     }
     fun pauseTimer() = runCommand { it.pauseTimer(Instant.now()) }
     fun resumeTimer() = runCommand { it.resumeTimer(Instant.now()) }
+    fun recoverTimer() = runCommand { it.recoverTimer(Instant.now()) }
     fun stopTimer() = scope.launch {
         runCatching {
             repository.update { current -> current.stopTimer(Instant.now(), zone).state.recalculateExperience().awardEligibleMilestones(LocalDate.now(zone)) }
