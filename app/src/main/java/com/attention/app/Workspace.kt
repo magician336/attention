@@ -1,6 +1,10 @@
 package com.attention.app
 
 import android.content.Context
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -165,6 +169,13 @@ fun WorkspaceApp() {
 @Composable
 private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionViewModel) {
     val context = LocalContext.current
+    fun startTimer(targetId: String?) {
+        viewModel.startTimer(targetId)
+        if (Build.VERSION.SDK_INT >= 33 && androidx.core.content.ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            Toast.makeText(context, "通知权限未开启，计时仍会保存；锁屏控制需要开启通知权限。", Toast.LENGTH_LONG).show()
+        }
+        ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
+    }
     val date = state.planningDate(Instant.now()).toString()
     val capacity = state.capacitySummary(date)
     var minutes by remember { mutableStateOf("15") }
@@ -229,13 +240,11 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
                 if (timer == null) {
                     Text("计时结束时会按规划日界线自动切分时间记录。")
                     Button(onClick = {
-                        viewModel.startTimer(null)
-                        ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
+                        startTimer(null)
                     }) { Text("开始未归属计时") }
                     state.targets.filter { !it.archived }.take(4).forEach { target ->
                         OutlinedButton(onClick = {
-                            viewModel.startTimer(target.id)
-                            ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
+                            startTimer(target.id)
                         }) { Text("计时：${target.title}") }
                     }
                 } else {

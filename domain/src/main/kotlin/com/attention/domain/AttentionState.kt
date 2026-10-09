@@ -95,6 +95,7 @@ data class RecurrenceRule(
     val estimatedMinutes: Int? = null,
     val targetId: String? = null,
     val note: String = "",
+    val reminderMinuteOfDay: Int? = null,
 )
 
 @Serializable

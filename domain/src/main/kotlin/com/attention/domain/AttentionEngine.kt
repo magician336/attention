@@ -243,6 +243,7 @@ fun AttentionState.addRecurrence(rule: RecurrenceRule): AttentionState {
     require(rule.title.isNotBlank())
     LocalDate.parse(rule.startDate)
     rule.untilDate?.let(LocalDate::parse)
+    require(rule.reminderMinuteOfDay == null || rule.reminderMinuteOfDay in 0 until 1440)
     require(validTarget(rule.targetId))
     return copy(recurrenceRules = recurrenceRules + rule.copy(title = rule.title.trim()))
 }
@@ -264,7 +265,19 @@ fun AttentionState.occurrences(rule: RecurrenceRule, through: LocalDate): List<S
                 ScheduleFrequency.MONTHLY -> date.dayOfMonth == (rule.dayOfMonth ?: start.dayOfMonth)
             }
         }
-        .map { date -> ScheduleEntry(planningDate = date.toString(), title = rule.title, estimatedMinutes = rule.estimatedMinutes, targetId = rule.targetId, note = rule.note, recurrenceRuleId = rule.id) }
+        .map { date ->
+            ScheduleEntry(
+                planningDate = date.toString(),
+                title = rule.title,
+                estimatedMinutes = rule.estimatedMinutes,
+                targetId = rule.targetId,
+                note = rule.note,
+                recurrenceRuleId = rule.id,
+                reminderEpochMillis = rule.reminderMinuteOfDay?.let { minute ->
+                    date.atStartOfDay(ZoneId.systemDefault()).plusMinutes(minute.toLong()).toInstant().toEpochMilli()
+                },
+            )
+        }
         .toList()
 }
 

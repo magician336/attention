@@ -95,6 +95,18 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun recurring_reminder_is_calculated_for_each_occurrence() {
+        val rule = RecurrenceRule(
+            title = "提醒",
+            startDate = date.toString(),
+            frequency = ScheduleFrequency.DAILY,
+            reminderMinuteOfDay = 9 * 60,
+        )
+        val occurrence = AttentionState().occurrences(rule, date).single()
+        assertTrue(occurrence.reminderEpochMillis != null)
+    }
+
+    @Test
     fun experience_and_cumulative_rewards_follow_spec() {
         assertEquals(1, levelForExperience(0))
         assertEquals(2, levelForExperience(1000))
