@@ -6,6 +6,7 @@ import java.time.DayOfWeek
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
@@ -26,6 +27,7 @@ class DataStoreSettingsRepositoryTest {
         firstRepository.setWeekStartDay(DayOfWeek.SUNDAY)
         firstRepository.setDailyCapacity(420)
         firstScope.cancel()
+        firstScope.coroutineContext[Job]?.join()
 
         val afterRestart = DataStoreSettingsRepository(
             PreferenceDataStoreFactory.create { file },
