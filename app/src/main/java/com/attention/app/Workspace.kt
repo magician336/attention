@@ -70,8 +70,12 @@ import com.attention.domain.capacitySummary
 import com.attention.domain.directMinutes
 import com.attention.domain.descendantIds
 import com.attention.domain.effectiveStage
+import com.attention.domain.futureTargetMoveParents
 import com.attention.domain.goalRulesAt
+import com.attention.domain.isFutureTargetMoveDate
 import com.attention.domain.levelForExperience
+import com.attention.domain.parseTargetMoveDate
+import com.attention.domain.pendingTargetMoves
 import com.attention.domain.planningDate
 import com.attention.domain.periodStats
 import com.attention.domain.parentAt
@@ -79,7 +83,6 @@ import com.attention.domain.progress
 import com.attention.domain.progressRange
 import com.attention.domain.subtreeMinutes
 import com.attention.domain.targetChildren
-import com.attention.domain.descendantIdsAt
 import java.time.Instant
 import java.time.LocalDate
 
@@ -530,12 +533,9 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                     }
                     val target = state.targets.firstOrNull { it.id == parentId }
                     if (target != null) {
-                        val futureMove = state.targetMoves
-                            .filter { it.targetId == target.id }
-                            .filter { runCatching { LocalDate.parse(it.effectiveFrom) }.getOrNull()?.isAfter(planningDate) == true }
-                            .minByOrNull { it.effectiveFrom }
+                        val futureMove = state.pendingTargetMoves(target.id, planningDate).firstOrNull()
                         if (futureMove != null) {
-                            Text("待生效移动：${futureMove.effectiveFrom} → ${futureMove.parentId?.let { state.targetPath(it, LocalDate.parse(futureMove.effectiveFrom)) } ?: "根计划"}")
+                            Text("待生效移动：${futureMove.effectiveFrom} → ${futureMove.parentId?.let { state.targetPath(it, parseTargetMoveDate(futureMove.effectiveFrom)) } ?: "根计划"}")
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 OutlinedButton(onClick = {
                                     movingTarget = target
@@ -558,13 +558,10 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
             }
         }
         movingTarget?.let { target ->
-            val parsedEffectiveDate = runCatching { LocalDate.parse(moveEffectiveDate) }.getOrNull()
-            val excludedIds = state.descendantIds(target.id) +
-                (parsedEffectiveDate?.let { state.descendantIdsAt(target.id, it) } ?: emptySet())
-            val pendingMoves = state.targetMoves
-                .filter { it.targetId == target.id }
-                .filter { runCatching { LocalDate.parse(it.effectiveFrom) }.getOrNull()?.isAfter(planningDate) == true }
-                .sortedBy { it.effectiveFrom }
+            val parsedEffectiveDate = parseTargetMoveDate(moveEffectiveDate)
+            val validEffectiveDate = isFutureTargetMoveDate(moveEffectiveDate, planningDate)
+            val candidateParents = state.futureTargetMoveParents(target.id, moveEffectiveDate, planningDate)
+            val pendingMoves = state.pendingTargetMoves(target.id, planningDate)
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("移动 ${target.title}：选择新的父目标", style = MaterialTheme.typography.titleSmall)
@@ -575,13 +572,12 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                         modifier = Modifier.width(160.dp),
                         singleLine = true,
                     )
-                    if (parsedEffectiveDate == null || !parsedEffectiveDate.isAfter(planningDate)) {
+                    if (!validEffectiveDate) {
                         Text("生效日必须晚于当前规划日 $planningDate", color = MaterialTheme.colorScheme.error)
                     }
                     if (moveParentId == null) Button(onClick = {}) { Text("移到根计划") }
                     else OutlinedButton(onClick = { moveParentId = null }) { Text("移到根计划") }
-                    state.targets
-                        .filter { !it.archived && it.id !in excludedIds }
+                    candidateParents
                         .sortedBy { state.targetPath(it.id, parsedEffectiveDate ?: planningDate) }
                         .forEach { candidate ->
                             if (moveParentId == candidate.id) {
@@ -593,7 +589,7 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                             }
                         }
                     Button(
-                        enabled = parsedEffectiveDate?.isAfter(planningDate) == true,
+                        enabled = validEffectiveDate,
                         onClick = {
                             val effectiveFrom = parsedEffectiveDate?.toString() ?: return@Button
                             val existing = editingMove
@@ -611,7 +607,7 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                         pendingMoves.forEach { move ->
                             Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                                 Text(
-                                    "${move.effectiveFrom} → ${move.parentId?.let { state.targetPath(it, LocalDate.parse(move.effectiveFrom)) } ?: "根计划"}",
+                                    "${move.effectiveFrom} → ${move.parentId?.let { state.targetPath(it, parseTargetMoveDate(move.effectiveFrom)) } ?: "根计划"}",
                                     Modifier.weight(1f),
                                 )
                                 TextButton(onClick = {
@@ -685,10 +681,7 @@ private fun TargetTree(
     val planningDate = state.planningDate(Instant.now())
     state.targetChildren(parentId, planningDate).forEach { target ->
         val children = state.targetChildren(target.id, planningDate)
-        val pendingMove = state.targetMoves
-            .filter { it.targetId == target.id }
-            .filter { runCatching { LocalDate.parse(it.effectiveFrom) }.getOrNull()?.isAfter(planningDate) == true }
-            .minByOrNull { it.effectiveFrom }
+        val pendingMove = state.pendingTargetMoves(target.id, planningDate).firstOrNull()
         Column(Modifier.padding(start = (depth * 16).dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                 Text(if (children.isEmpty()) "•" else if (target.expanded) "▾" else "▸")
@@ -698,7 +691,7 @@ private fun TargetTree(
             }
             pendingMove?.let { move ->
                 Text(
-                    "待移动：${move.effectiveFrom} → ${move.parentId?.let { state.targetPath(it, LocalDate.parse(move.effectiveFrom)) } ?: "根计划"}",
+                    "待移动：${move.effectiveFrom} → ${move.parentId?.let { state.targetPath(it, parseTargetMoveDate(move.effectiveFrom)) } ?: "根计划"}",
                     modifier = Modifier.padding(start = 22.dp),
                 )
             }

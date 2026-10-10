@@ -436,9 +436,33 @@ fun AttentionState.addFutureTargetMove(
     return copy(targetMoves = targetMoves + move)
 }
 
+fun parseTargetMoveDate(effectiveFrom: String): LocalDate? = runCatching { LocalDate.parse(effectiveFrom) }.getOrNull()
+
+fun isFutureTargetMoveDate(effectiveFrom: String, notBefore: LocalDate): Boolean =
+    parseTargetMoveDate(effectiveFrom)?.isAfter(notBefore) == true
+
+fun AttentionState.pendingTargetMoves(targetId: String, onDate: LocalDate): List<TargetMove> = targetMoves
+    .asSequence()
+    .filter { it.targetId == targetId }
+    .filter { isFutureTargetMoveDate(it.effectiveFrom, onDate) }
+    .sortedBy { it.effectiveFrom }
+    .toList()
+
+fun AttentionState.futureTargetMoveParents(
+    targetId: String,
+    effectiveFrom: String,
+    notBefore: LocalDate,
+): List<Target> {
+    val effectiveDate = parseTargetMoveDate(effectiveFrom) ?: return emptyList()
+    if (!effectiveDate.isAfter(notBefore)) return emptyList()
+    val excludedIds = descendantIds(targetId) + descendantIdsAt(targetId, effectiveDate)
+    return targets.filter { !it.archived && it.id !in excludedIds }
+}
+
 fun AttentionState.updateFutureTargetMove(move: TargetMove, notBefore: LocalDate): AttentionState {
     val existing = targetMoves.firstOrNull { it.id == move.id } ?: error("未来目标移动不存在")
     require(existing.targetId == move.targetId) { "不能修改未来目标移动的目标" }
+    require(LocalDate.parse(existing.effectiveFrom).isAfter(notBefore)) { "只能修改尚未生效的目标移动" }
     validateFutureTargetMove(move, notBefore, replacingId = move.id)
     return copy(targetMoves = targetMoves.map { if (it.id == move.id) move else it })
 }

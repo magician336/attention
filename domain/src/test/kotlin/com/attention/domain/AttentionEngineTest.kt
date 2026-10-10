@@ -749,5 +749,8 @@ class AttentionEngineTest {
         assertThrows(IllegalArgumentException::class.java) {
             scheduled.updateFutureTargetMove(move.copy(parentId = null), date.plusDays(1))
         }
+        assertThrows(IllegalArgumentException::class.java) {
+            scheduled.updateFutureTargetMove(move.copy(effectiveFrom = date.plusDays(2).toString()), date.plusDays(1))
+        }
     }
 }

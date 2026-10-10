@@ -22,6 +22,7 @@ import com.attention.domain.TargetMove
 import com.attention.domain.TimeEntry
 import com.attention.domain.TimeEntrySource
 import com.attention.domain.TimerSegment
+import com.attention.domain.parentAt
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -31,6 +32,7 @@ import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.time.LocalDate
 
 @RunWith(AndroidJUnit4::class)
 class RoomBusinessDataRepositoryTest {
@@ -151,7 +153,10 @@ class RoomBusinessDataRepositoryTest {
 
         repository.replace(AttentionState(targets = listOf(oldParent, newParent, child), targetMoves = listOf(move)))
 
-        assertEquals(listOf(move), repository.read().targetMoves)
+        val loaded = repository.read()
+        assertEquals(listOf(move), loaded.targetMoves)
+        assertEquals(oldParent.id, loaded.parentAt(child.id, LocalDate.parse("2026-10-31")))
+        assertEquals(newParent.id, loaded.parentAt(child.id, LocalDate.parse("2026-11-01")))
     }
 
     @Test
