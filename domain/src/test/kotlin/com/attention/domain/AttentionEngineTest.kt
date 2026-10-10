@@ -14,6 +14,19 @@ class AttentionEngineTest {
     private val date = LocalDate.of(2026, 10, 8)
 
     @Test
+    fun agenda_entries_filter_by_planning_date_and_sort_all_dates_stably() {
+        val state = AttentionState()
+            .addSchedule(ScheduleEntry(id = "later", planningDate = "2026-10-09", title = "Later", startMinute = 5))
+            .addSchedule(ScheduleEntry(id = "same-b", planningDate = "2026-10-08", title = "Same B", startMinute = 30))
+            .addSchedule(ScheduleEntry(id = "same-a", planningDate = "2026-10-08", title = "Same A", startMinute = 30))
+            .addSchedule(ScheduleEntry(id = "earlier", planningDate = "2026-10-07", title = "Earlier"))
+
+        assertEquals(listOf("earlier", "same-a", "same-b", "later"), state.agendaEntries().map { it.id })
+        assertEquals(listOf("same-a", "same-b"), state.agendaEntries(LocalDate.of(2026, 10, 8)).map { it.id })
+        assertTrue(state.agendaEntries(LocalDate.of(2026, 10, 6)).isEmpty())
+    }
+
+    @Test
     fun target_tree_supports_arbitrary_depth_and_subtree_rollup() {
         val state = AttentionState()
             .addTarget("阅读")
