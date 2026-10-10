@@ -789,6 +789,49 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun one_time_stage_feedback_is_distinct_idempotent_and_preserved_after_append() {
+        val state = AttentionState().addTarget("阶段目标")
+        val target = state.targets.single()
+        val firstStage = state
+            .addGoalStage(target.id, GoalCadence.ONE_TIME, 30, date.toString())
+            .addTimeEntry(date.toString(), 30, target.id)
+            .awardEligibleMilestones(date)
+
+        val firstFeedback = firstStage.oneTimeStageMilestones(firstStage.goalStages.single().id)
+        assertEquals(1, firstFeedback.size)
+        assertEquals(10_000L, firstFeedback.single().reward)
+
+        val secondStage = firstStage
+            .appendOneTimeGoalStage(target.id, 45, date.plusDays(1).toString())
+            .addTimeEntry(date.plusDays(1).toString(), 45, target.id)
+        val awarded = secondStage.awardEligibleMilestones(date.plusDays(1))
+        val stageIds = awarded.goalStages.map { it.id }
+
+        assertEquals(2, awarded.milestones.count { it.kind == "one_time_goal" })
+        assertEquals(1, awarded.oneTimeStageMilestones(stageIds[0]).size)
+        assertEquals(1, awarded.oneTimeStageMilestones(stageIds[1]).size)
+        assertEquals(2, awarded.awardEligibleMilestones(date.plusDays(1)).milestones.count { it.kind == "one_time_goal" })
+    }
+
+    @Test
+    fun one_time_stage_feedback_follows_stage_identity_across_parent_and_child_goals() {
+        val withParent = AttentionState().addTarget("父目标")
+        val parent = withParent.targets.single()
+        val withChild = withParent.addTarget("子目标", parent.id)
+        val child = withChild.targets.single { it.title == "子目标" }
+        val state = withChild
+            .addGoalStage(parent.id, GoalCadence.ONE_TIME, 20, date.toString())
+            .addGoalStage(child.id, GoalCadence.ONE_TIME, 20, date.toString())
+            .addTimeEntry(date.toString(), 20, child.id)
+
+        val awarded = state.awardEligibleMilestones(date)
+
+        assertEquals(2, awarded.milestones.count { it.kind == "one_time_goal" })
+        assertEquals(1, awarded.oneTimeStageMilestones(awarded.goalStages.single { it.targetId == parent.id }.id).size)
+        assertEquals(1, awarded.oneTimeStageMilestones(awarded.goalStages.single { it.targetId == child.id }.id).size)
+    }
+
+    @Test
     fun csv_exports_keep_analysis_columns_and_escape_values() {
         val state = AttentionState().addTarget("学习,英语")
         val target = state.targets.single()

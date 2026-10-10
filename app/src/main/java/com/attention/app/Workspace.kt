@@ -81,6 +81,7 @@ import com.attention.domain.progress
 import com.attention.domain.progressRange
 import com.attention.domain.subtreeMinutes
 import com.attention.domain.targetChildren
+import com.attention.domain.oneTimeStageMilestones
 import java.time.Instant
 import java.time.LocalDate
 
@@ -507,6 +508,9 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                             val detail = oneTimeSummary.stageProgresses.firstOrNull { it.stage.id == stage.id }
                             val progress = state.progress(stage, planningDate)
                             Text(detail?.let { state.goalProgressLabel(it, planningDate) } ?: state.goalProgressLabel(stage, planningDate))
+                            state.stageFeedbackLabels(stage).forEach { label ->
+                                Text(label, modifier = Modifier.padding(start = 16.dp))
+                            }
                             if (progress.gapMinutes > 0) {
                                 OutlinedButton(onClick = {
                                     viewModel.addMigration(Migration(targetId = parentId!!, sourceStageId = stage.id, minutes = progress.gapMinutes, destinationStartDate = planningDate.plusDays(7).toString()))
@@ -619,6 +623,9 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                             "历史进度：${detail?.let { state.goalProgressLabel(it, planningDate) } ?: state.goalProgressLabel(stage, planningDate)}",
                             modifier = Modifier.padding(start = 16.dp),
                         )
+                        state.stageFeedbackLabels(stage).forEach { label ->
+                            Text(label, modifier = Modifier.padding(start = 32.dp))
+                        }
                     }
                 }
             }
@@ -668,6 +675,9 @@ private fun TargetTree(
                     detail?.let { state.goalProgressLabel(it, planningDate) } ?: state.goalProgressLabel(stage, planningDate),
                     modifier = Modifier.padding(start = 22.dp),
                 )
+                state.stageFeedbackLabels(stage).forEach { label ->
+                    Text(label, modifier = Modifier.padding(start = 38.dp))
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 TextButton(onClick = { viewModel.toggleTarget(target.id, !target.expanded) }) { Text(if (target.expanded) "折叠" else "展开") }
@@ -818,6 +828,9 @@ private fun StatisticsScreen(
             stages.forEach { stage ->
                 val detail = oneTimeSummary.stageProgresses.firstOrNull { it.stage.id == stage.id }
                 Text(detail?.let { state.goalProgressLabel(it, planningDate) } ?: state.goalProgressLabel(stage, planningDate))
+                state.stageFeedbackLabels(stage).forEach { label ->
+                    Text(label, modifier = Modifier.padding(start = 16.dp))
+                }
             }
         }
         if (state.targets.isEmpty()) Text("创建计划后，这里会显示目标投入和阶段达成情况。")
@@ -865,6 +878,15 @@ private fun AttentionState.goalProgressLabel(detail: GoalStageSummary, planningD
 
 private fun GoalSummary.summaryLabel(): String =
     "一次性阶段汇总：实际 ${actualMinutes}/${targetMinutes} 分钟 · 缺口 ${gapMinutes} 分钟 · 超额投入 ${excessMinutes} 分钟 · ${if (completed) "达成" else "未达成"}"
+
+private fun AttentionState.stageFeedbackLabels(stage: GoalStage): List<String> =
+    if (stage.cadence != GoalCadence.ONE_TIME) {
+        emptyList()
+    } else {
+        oneTimeStageMilestones(stage.id).map { milestone ->
+            "阶段达成反馈：${stage.startDate} · +${milestone.reward} 投入经验"
+        }
+    }
 
 private fun AttentionState.targetPath(targetId: String): String {
     val names = mutableListOf<String>()

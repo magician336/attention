@@ -605,36 +605,66 @@ fun AttentionState.continuousPlanningDaysThrough(onDate: LocalDate, targetId: St
     return count
 }
 
+private const val ONE_TIME_GOAL_MILESTONE_KIND = "one_time_goal"
+
+fun oneTimeGoalMilestoneKey(stageId: String, startDate: String): String =
+    "$ONE_TIME_GOAL_MILESTONE_KIND:$stageId:$startDate"
+
+fun Milestone.isOneTimeStageFeedbackFor(stageId: String): Boolean {
+    if (kind != ONE_TIME_GOAL_MILESTONE_KIND) return false
+    val payload = instanceKey.removePrefix("$ONE_TIME_GOAL_MILESTONE_KIND:")
+    return payload.substringBeforeLast(":", missingDelimiterValue = "") == stageId
+}
+
+fun AttentionState.oneTimeStageMilestones(stageId: String): List<Milestone> = milestones
+    .filter { it.isOneTimeStageFeedbackFor(stageId) }
+    .sortedWith(compareBy<Milestone> { it.achievedAtEpochMillis }.thenBy { it.id })
+
+private fun MutableList<Milestone>.addMilestoneIfMissing(
+    existingKeys: MutableSet<String>,
+    kind: String,
+    instanceKey: String,
+    reward: Long,
+) {
+    if (existingKeys.add(instanceKey)) {
+        add(Milestone(kind = kind, instanceKey = instanceKey, reward = reward, achievedAtEpochMillis = System.currentTimeMillis()))
+    }
+}
+
 fun AttentionState.eligibleMilestones(onDate: LocalDate): List<Milestone> {
-    val existing = milestones.map { it.instanceKey }.toSet()
+    val existing = milestones.map { it.instanceKey }.toMutableSet()
     val result = mutableListOf<Milestone>()
     goalStages.forEach { stage ->
         val progress = progress(stage, onDate)
         if (progress.completed) {
             val effective = effectiveStage(stage, onDate)
-            val kind = if (effective.cadence == GoalCadence.ONE_TIME) "one_time_goal" else "goal_period"
+            val kind = if (effective.cadence == GoalCadence.ONE_TIME) ONE_TIME_GOAL_MILESTONE_KIND else "goal_period"
             val periodStart = if (effective.cadence == GoalCadence.ONE_TIME) effective.startDate else periodRange(onDate, effective.cadence).start.toString()
-            val key = "$kind:${stage.id}:$periodStart"
+            val key = if (effective.cadence == GoalCadence.ONE_TIME) {
+                oneTimeGoalMilestoneKey(stage.id, periodStart)
+            } else {
+                "$kind:${stage.id}:$periodStart"
+            }
             val reward = when (effective.cadence) {
                 GoalCadence.ONE_TIME -> 10_000L
                 GoalCadence.DAILY -> 500L
                 GoalCadence.WEEKLY, GoalCadence.MONTHLY -> 1_000L
             }
-            if (key !in existing) result += Milestone(kind = kind, instanceKey = key, reward = reward, achievedAtEpochMillis = System.currentTimeMillis())
+            result.addMilestoneIfMissing(existing, kind, key, reward)
         }
     }
     targets.filter { !it.archived }.forEach { target ->
         val days = continuousPlanningDaysThrough(onDate, target.id)
         listOf(7 to 500L, 30 to 1_000L, 100 to 10_000L).forEach { (threshold, reward) ->
             val key = "streak:${target.id}:$threshold"
-            if (days >= threshold && key !in existing) result += Milestone(kind = "streak", instanceKey = key, reward = reward, achievedAtEpochMillis = System.currentTimeMillis())
+            if (days >= threshold) result.addMilestoneIfMissing(existing, "streak", key, reward)
         }
     }
     val totalHours = timeEntries.filter { it.targetId != null }.sumOf { it.durationMinutes }.toLong() / 60
     (100L..totalHours step 100L).forEach { hours ->
         val key = "cumulative:$hours"
         val reward = cumulativeMilestoneReward(hours)
-        if (reward != null && key !in existing) result += Milestone(kind = "cumulative", instanceKey = key, reward = reward, achievedAtEpochMillis = System.currentTimeMillis())
+        if (reward != null) result.addMilestoneIfMissing(existing, "cumulative", key, reward)
     }
     return result
 }
