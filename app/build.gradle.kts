@@ -21,6 +21,7 @@ android {
     }
 
     buildFeatures { compose = true }
+    sourceSets["androidTest"].assets.srcDirs("$projectDir/schemas")
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -62,6 +63,7 @@ dependencies {
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.espresso.core)
     androidTestImplementation(libs.compose.ui.test.junit4)
+    androidTestImplementation(libs.androidx.room.testing)
 }
 
 ksp {

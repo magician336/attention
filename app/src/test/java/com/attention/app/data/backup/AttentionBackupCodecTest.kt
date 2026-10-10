@@ -36,7 +36,7 @@ class AttentionBackupCodecTest {
             recurrenceRules = listOf(RecurrenceRule("rule", "阅读", "2026-10-01", ScheduleFrequency.DAILY, targetId = target.id)),
             migrations = listOf(Migration("migration", target.id, "stage", 20, "2026-10-08")),
             futureGoalRules = listOf(com.attention.domain.FutureGoalRule("future", target.id, "stage", GoalCadence.MONTHLY, 300, "2026-11-01")),
-            periodSnapshots = listOf(PeriodSnapshot("snapshot", target.id, GoalCadence.WEEKLY, "2026-10-01", "2026-10-07", 120, 90, 30, 0, false)),
+            periodSnapshots = listOf(PeriodSnapshot("snapshot", target.id, GoalCadence.WEEKLY, "2026-10-01", "2026-10-07", 120, 90, 30, 0, false, stageId = "stage")),
             targetMoves = listOf(TargetMove("move", target.id, null, "2026-11-01")),
             milestones = listOf(Milestone("milestone", "goal_period", "target:2026-10-01", 20, 789L)),
             experience = 1234L,
@@ -91,6 +91,22 @@ class AttentionBackupCodecTest {
         val expected = AttentionState(
             targets = listOf(target),
             goalStages = listOf(GoalStage("one-time", target.id, GoalCadence.ONE_TIME, 240, "2026-10-10", "2026-10-12")),
+        )
+
+        assertEquals(expected, AttentionBackupCodec.decode(AttentionBackupCodec.encode(expected)))
+    }
+
+    @Test
+    fun backup_round_trip_preserves_multiple_target_moves_and_their_ordering_fields() {
+        val oldParent = Target("old-parent", title = "旧父目标")
+        val newParent = Target("new-parent", title = "新父目标")
+        val child = Target("child", parentId = oldParent.id, title = "子计划")
+        val expected = AttentionState(
+            targets = listOf(oldParent, newParent, child),
+            targetMoves = listOf(
+                TargetMove("move-1", child.id, newParent.id, "2026-11-01"),
+                TargetMove("move-2", child.id, null, "2026-12-01"),
+            ),
         )
 
         assertEquals(expected, AttentionBackupCodec.decode(AttentionBackupCodec.encode(expected)))

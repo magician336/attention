@@ -189,7 +189,7 @@ class AttentionEngineTest {
         val history = withGoals
             .addTimeEntry(date.toString(), 20, child.id)
             .addTimeEntry(date.plusDays(2).toString(), 15, child.id)
-            .addFutureTargetMove(child.id, newParent.id, date.plusDays(1).toString())
+            .addFutureTargetMove(child.id, newParent.id, date.plusDays(1).toString(), date)
         val oldStage = history.goalStages.single { it.targetId == oldParent.id }
         val newStage = history.goalStages.single { it.targetId == newParent.id }
 
@@ -506,7 +506,7 @@ class AttentionEngineTest {
         val moved = withStages
             .addTimeEntry("2026-10-01", 20, child.id)
             .addTimeEntry("2026-10-03", 15, child.id)
-            .addFutureTargetMove(child.id, newParent.id, "2026-10-02")
+            .addFutureTargetMove(child.id, newParent.id, "2026-10-02", LocalDate.parse("2026-10-01"))
 
         assertEquals(20, moved.goalSummary(oldParent.id, LocalDate.of(2026, 10, 3)).actualMinutes)
         assertEquals(15, moved.goalSummary(newParent.id, LocalDate.of(2026, 10, 3)).actualMinutes)
@@ -731,12 +731,174 @@ class AttentionEngineTest {
         val stage = state.addGoalStage(target.id, GoalCadence.WEEKLY, 120, date.toString()).goalStages.single()
         val snapshot = state.addTimeEntry(date.toString(), 90, target.id)
             .snapshot(stage, date.minusDays(3), date.plusDays(3))
-        val future = state.addFutureGoalRule(FutureGoalRule(targetId = target.id, cadence = GoalCadence.WEEKLY, targetMinutes = 180, effectiveFrom = date.plusDays(7).toString()))
+        val future = state.addFutureGoalRule(FutureGoalRule(targetId = target.id, cadence = GoalCadence.WEEKLY, targetMinutes = 180, effectiveFrom = date.plusDays(7).toString()), date)
             .addPeriodSnapshot(snapshot)
 
         assertEquals(180, future.goalRulesAt(target.id, date.plusDays(8)).single().targetMinutes)
         assertEquals(1, future.periodSnapshots.size)
         assertEquals(30, future.periodSnapshots.single().gapMinutes)
+        val futureRule = future.futureGoalRules.single()
+        assertTrue(futureRule.isPending(date))
+        assertFalse(futureRule.isPending(date.plusDays(7)))
+    }
+
+    @Test
+    fun settling_finished_periods_supports_all_cadences_and_is_idempotent() {
+        val start = LocalDate.of(2026, 10, 1)
+        val base = AttentionState()
+            .addTarget("每日")
+            .addTarget("每周")
+            .addTarget("每月")
+            .addTarget("一次性")
+        val daily = base.targets[0]
+        val weekly = base.targets[1]
+        val monthly = base.targets[2]
+        val oneTime = base.targets[3]
+        val state = base
+            .addGoalStage(daily.id, GoalCadence.DAILY, 60, start.toString())
+            .addGoalStage(weekly.id, GoalCadence.WEEKLY, 120, start.toString())
+            .addGoalStage(monthly.id, GoalCadence.MONTHLY, 300, start.toString())
+            .addGoalStage(oneTime.id, GoalCadence.ONE_TIME, 90, start.toString(), start.plusDays(2).toString())
+            .addTimeEntry(start.toString(), 75, daily.id, TimeEntrySource.TIMER, 123L, "计时")
+            .addTimeEntry(start.plusDays(1).toString(), 90, oneTime.id)
+        val asOf = LocalDate.of(2026, 11, 2)
+
+        val settled = state.settlePeriodSnapshots(asOf)
+        val dailySnapshot = settled.periodSnapshots.first { it.stageId == settled.goalStages.first { stage -> stage.targetId == daily.id }.id && it.periodStart == start.toString() }
+        assertEquals(60, dailySnapshot.targetMinutes)
+        assertEquals(75, dailySnapshot.actualMinutes)
+        assertEquals(15, dailySnapshot.excessMinutes)
+        assertTrue(dailySnapshot.completed)
+        assertTrue(settled.periodSnapshots.any { it.targetId == weekly.id && it.cadence == GoalCadence.WEEKLY })
+        assertTrue(settled.periodSnapshots.any { it.targetId == monthly.id && it.cadence == GoalCadence.MONTHLY })
+        assertTrue(settled.periodSnapshots.any { it.targetId == oneTime.id && it.cadence == GoalCadence.ONE_TIME })
+        assertEquals(settled.periodSnapshots.size, settled.settlePeriodSnapshots(asOf).periodSnapshots.size)
+        assertEquals(state.timeEntries, settled.timeEntries)
+        assertEquals(state.experience, settled.experience)
+        assertEquals(state.milestones, settled.milestones)
+
+        val changedFutureRule = settled.addFutureGoalRule(
+            FutureGoalRule(targetId = daily.id, cadence = GoalCadence.MONTHLY, targetMinutes = 600, effectiveFrom = "2026-12-01"),
+            asOf,
+        )
+        assertEquals(settled.periodSnapshots, changedFutureRule.periodSnapshots)
+    }
+
+    @Test
+    fun snapshots_are_idempotent_per_stage_and_period() {
+        val target = AttentionState().addTarget("阶段目标").targets.single()
+        val withStages = AttentionState(targets = listOf(target))
+            .addGoalStage(target.id, GoalCadence.WEEKLY, 60, date.minusDays(7).toString())
+            .addGoalStage(target.id, GoalCadence.WEEKLY, 120, date.minusDays(7).toString())
+
+        val settled = withStages.settlePeriodSnapshots(date)
+        assertEquals(2, settled.periodSnapshots.size)
+        assertEquals(2, settled.settlePeriodSnapshots(date).periodSnapshots.size)
+        assertEquals(2, settled.periodSnapshots.map { it.stageId }.toSet().size)
+    }
+
+    @Test
+    fun a_future_rule_does_not_rewrite_a_cycle_that_started_before_it() {
+        val start = LocalDate.of(2026, 10, 1)
+        val target = AttentionState().addTarget("跨周期规则").targets.single()
+        val state = AttentionState(targets = listOf(target))
+            .addGoalStage(target.id, GoalCadence.WEEKLY, 120, start.toString())
+            .addTimeEntry(start.plusDays(1).toString(), 60, target.id)
+            .addTimeEntry(start.plusDays(5).toString(), 30, target.id)
+            .addFutureGoalRule(
+                FutureGoalRule(
+                    targetId = target.id,
+                    cadence = GoalCadence.DAILY,
+                    targetMinutes = 30,
+                    effectiveFrom = start.plusDays(4).toString(),
+                ),
+                start,
+            )
+
+        val settled = state.settlePeriodSnapshots(start.plusDays(7))
+        val snapshot = settled.periodSnapshots.first { it.cadence == GoalCadence.WEEKLY }
+        assertEquals(GoalCadence.WEEKLY, snapshot.cadence)
+        assertEquals(start.toString(), snapshot.periodStart)
+        assertEquals(start.plusDays(3).toString(), snapshot.periodEnd)
+        assertEquals(120, snapshot.targetMinutes)
+        assertEquals(60, snapshot.actualMinutes)
+        assertEquals(60, snapshot.gapMinutes)
+    }
+
+    @Test
+    fun future_goal_rules_require_a_valid_future_commitment_and_are_selected_by_scope() {
+        val state = AttentionState().addTarget("项目")
+        val target = state.targets.single()
+        val withStage = state.addGoalStage(target.id, GoalCadence.WEEKLY, 120, date.toString())
+        val stage = withStage.goalStages.single()
+        val effectiveFrom = date.plusDays(7)
+        val targetRule = FutureGoalRule(
+            targetId = target.id,
+            cadence = GoalCadence.MONTHLY,
+            targetMinutes = 180,
+            effectiveFrom = effectiveFrom.toString(),
+        )
+        val stageRule = targetRule.copy(
+            id = "stage-rule",
+            stageId = stage.id,
+            targetMinutes = 240,
+        )
+
+        val scheduled = withStage
+            .addFutureGoalRule(targetRule, date)
+            .addFutureGoalRule(stageRule, date)
+
+        assertEquals(stageRule, scheduled.goalRuleAt(target.id, stage.id, effectiveFrom))
+        assertEquals(240, scheduled.progress(stage, effectiveFrom).targetMinutes)
+        assertThrows(IllegalArgumentException::class.java) {
+            withStage.addFutureGoalRule(targetRule.copy(effectiveFrom = date.toString()), date)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            withStage.addFutureGoalRule(targetRule.copy(dueDate = date.plusDays(6).toString()), date)
+        }
+    }
+
+    @Test
+    fun future_goal_rule_updates_and_cancellation_preserve_pending_only_boundary() {
+        val state = AttentionState().addTarget("项目")
+        val target = state.targets.single()
+        val rule = FutureGoalRule(
+            targetId = target.id,
+            cadence = GoalCadence.DAILY,
+            targetMinutes = 30,
+            effectiveFrom = date.plusDays(3).toString(),
+        )
+        val scheduled = state.addFutureGoalRule(rule, date)
+        val updated = scheduled.updateFutureGoalRule(rule.copy(targetMinutes = 45), date)
+
+        assertEquals(rule.id, updated.futureGoalRules.single().id)
+        assertEquals(45, updated.futureGoalRules.single().targetMinutes)
+        assertEquals(0, updated.cancelFutureGoalRule(rule.id, date).futureGoalRules.size)
+        assertThrows(IllegalArgumentException::class.java) {
+            updated.updateFutureGoalRule(rule.copy(targetMinutes = 60), date.plusDays(3))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            updated.cancelFutureGoalRule(rule.id, date.plusDays(3))
+        }
+    }
+
+    @Test
+    fun future_goal_rules_reject_archived_targets_and_same_scope_dates() {
+        val state = AttentionState().addTarget("项目")
+        val target = state.targets.single()
+        val rule = FutureGoalRule(
+            targetId = target.id,
+            cadence = GoalCadence.DAILY,
+            targetMinutes = 30,
+            effectiveFrom = date.plusDays(1).toString(),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            state.archiveTarget(target.id).addFutureGoalRule(rule, date)
+        }
+        val scheduled = state.addFutureGoalRule(rule, date)
+        assertThrows(IllegalArgumentException::class.java) {
+            scheduled.addFutureGoalRule(rule.copy(id = "another"), date)
+        }
     }
 
     @Test
@@ -907,16 +1069,26 @@ class AttentionEngineTest {
         val newParent = state.targets.last()
         val moved = state.addTarget("子计划", oldParent.id)
         val child = moved.targets.single { it.title == "子计划" }
-        val withHistory = moved
+        val stageState = moved
+            .addGoalStage(child.id, GoalCadence.WEEKLY, 60, date.toString())
             .addTimeEntry(date.toString(), 20, child.id)
-            .addTimeEntry(date.plusDays(2).toString(), 15, child.id)
-            .addFutureTargetMove(child.id, newParent.id, date.plusDays(1).toString())
-        assertEquals(20, withHistory.subtreeMinutes(oldParent.id))
-        assertEquals(15, withHistory.subtreeMinutes(newParent.id))
-        assertEquals(20, withHistory.subtreeMinutes(oldParent.id, date.toString()))
-        assertEquals(0, withHistory.subtreeMinutes(oldParent.id, date.plusDays(2).toString()))
-        assertEquals(0, withHistory.subtreeMinutes(newParent.id, date.toString()))
-        assertEquals(15, withHistory.subtreeMinutes(newParent.id, date.plusDays(2).toString()))
+            .addTimeEntry(date.plusDays(2).toString(), 15, child.id, TimeEntrySource.TIMER, 123L, "计时")
+        val snapshot = stageState.snapshot(stageState.goalStages.single(), date, date.plusDays(6))
+        val withHistory = stageState.addPeriodSnapshot(snapshot)
+        val historicalStages = withHistory.goalStages
+        val historicalEntries = withHistory.timeEntries
+        val historicalSnapshots = withHistory.periodSnapshots
+        val scheduled = withHistory.addFutureTargetMove(child.id, newParent.id, date.plusDays(1).toString(), date)
+
+        assertEquals(historicalStages, scheduled.goalStages)
+        assertEquals(historicalEntries, scheduled.timeEntries)
+        assertEquals(historicalSnapshots, scheduled.periodSnapshots)
+        assertEquals(20, scheduled.subtreeMinutes(oldParent.id))
+        assertEquals(15, scheduled.subtreeMinutes(newParent.id))
+        assertEquals(20, scheduled.subtreeMinutes(oldParent.id, date.toString()))
+        assertEquals(0, scheduled.subtreeMinutes(oldParent.id, date.plusDays(2).toString()))
+        assertEquals(0, scheduled.subtreeMinutes(newParent.id, date.toString()))
+        assertEquals(15, scheduled.subtreeMinutes(newParent.id, date.plusDays(2).toString()))
     }
 
     @Test
@@ -942,5 +1114,91 @@ class AttentionEngineTest {
         assertEquals(child.id, moved.targetChildren(newParent.id).last().id)
         assertEquals(child.id, moved.targets.single { it.id == child.id }.id)
         assertEquals(listOf("已有子计划", "子计划"), moved.targetChildren(newParent.id).map { it.title })
+    }
+
+    @Test
+    fun future_target_moves_select_the_latest_effective_parent_by_planning_date() {
+        val state = AttentionState().addTarget("旧父目标").addTarget("新父目标").addTarget("最终父目标")
+        val oldParent = state.targets[0]
+        val newParent = state.targets[1]
+        val finalParent = state.targets[2]
+        val withChild = state.addTarget("子计划", oldParent.id)
+        val child = withChild.targets.single { it.title == "子计划" }
+        val moved = withChild
+            .addFutureTargetMove(child.id, newParent.id, date.plusDays(1).toString(), date)
+            .addFutureTargetMove(child.id, finalParent.id, date.plusDays(3).toString(), date)
+
+        assertEquals(oldParent.id, moved.parentAt(child.id, date))
+        assertEquals(newParent.id, moved.parentAt(child.id, date.plusDays(1)))
+        assertEquals(finalParent.id, moved.parentAt(child.id, date.plusDays(4)))
+        assertEquals(listOf(child.id), moved.targetChildren(newParent.id, date.plusDays(1)).map { it.id })
+        assertEquals(listOf(child.id), moved.targetChildren(finalParent.id, date.plusDays(4)).map { it.id })
+    }
+
+    @Test
+    fun future_target_move_rejects_invalid_parent_dates_and_cycles() {
+        val state = AttentionState().addTarget("父目标").addTarget("另一个父目标")
+        val parent = state.targets[0]
+        val otherParent = state.targets[1]
+        val withChild = state.addTarget("子计划", parent.id)
+        val child = withChild.targets.single { it.title == "子计划" }
+
+        assertThrows(IllegalArgumentException::class.java) {
+            withChild.addFutureTargetMove(child.id, child.id, date.plusDays(1).toString(), date)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            withChild.addFutureTargetMove(parent.id, child.id, date.plusDays(1).toString(), date)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            withChild.addFutureTargetMove(child.id, "missing", date.plusDays(1).toString(), date)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            withChild.addFutureTargetMove(child.id, otherParent.id, date.toString(), date)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            withChild.addFutureTargetMove(child.id, otherParent.id, "not-a-date", date)
+        }
+
+        val scheduled = withChild.addFutureTargetMove(parent.id, otherParent.id, date.plusDays(1).toString(), date)
+        assertThrows(IllegalArgumentException::class.java) {
+            scheduled.addFutureTargetMove(otherParent.id, parent.id, date.plusDays(2).toString(), date)
+        }
+
+        val laterMove = withChild.addFutureTargetMove(parent.id, otherParent.id, date.plusDays(5).toString(), date)
+        assertThrows(IllegalArgumentException::class.java) {
+            laterMove.addFutureTargetMove(otherParent.id, parent.id, date.plusDays(1).toString(), date)
+        }
+    }
+
+    @Test
+    fun pending_target_moves_can_be_updated_or_cancelled_without_touching_stable_id() {
+        val state = AttentionState().addTarget("旧父目标").addTarget("新父目标")
+        val oldParent = state.targets[0]
+        val newParent = state.targets[1]
+        val withChild = state.addTarget("子计划", oldParent.id)
+        val child = withChild.targets.single { it.title == "子计划" }
+        val scheduled = withChild.addFutureTargetMove(child.id, newParent.id, date.plusDays(1).toString(), date)
+        val move = scheduled.targetMoves.single()
+
+        val updated = scheduled.updateFutureTargetMove(
+            move.copy(parentId = null, effectiveFrom = date.plusDays(2).toString()),
+            date,
+        )
+        assertEquals(move.id, updated.targetMoves.single().id)
+        assertEquals(null, updated.parentAt(child.id, date.plusDays(2)))
+
+        val cancelled = updated.cancelFutureTargetMove(move.id, date)
+        assertTrue(cancelled.targetMoves.isEmpty())
+        assertEquals(oldParent.id, cancelled.parentAt(child.id, date.plusDays(3)))
+
+        assertThrows(IllegalArgumentException::class.java) {
+            scheduled.cancelFutureTargetMove(move.id, date.plusDays(1))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            scheduled.updateFutureTargetMove(move.copy(parentId = null), date.plusDays(1))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            scheduled.updateFutureTargetMove(move.copy(effectiveFrom = date.plusDays(2).toString()), date.plusDays(1))
+        }
     }
 }
