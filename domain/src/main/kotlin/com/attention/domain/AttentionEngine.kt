@@ -429,30 +429,30 @@ fun AttentionState.addFutureTargetMove(
     targetId: String,
     parentId: String?,
     effectiveFrom: String,
-    notBefore: LocalDate? = null,
+    notBefore: LocalDate,
 ): AttentionState {
     val move = TargetMove(targetId = targetId, parentId = parentId, effectiveFrom = effectiveFrom)
     validateFutureTargetMove(move, notBefore)
     return copy(targetMoves = targetMoves + move)
 }
 
-fun AttentionState.updateFutureTargetMove(move: TargetMove, notBefore: LocalDate? = null): AttentionState {
+fun AttentionState.updateFutureTargetMove(move: TargetMove, notBefore: LocalDate): AttentionState {
     val existing = targetMoves.firstOrNull { it.id == move.id } ?: error("未来目标移动不存在")
     require(existing.targetId == move.targetId) { "不能修改未来目标移动的目标" }
     validateFutureTargetMove(move, notBefore, replacingId = move.id)
     return copy(targetMoves = targetMoves.map { if (it.id == move.id) move else it })
 }
 
-fun AttentionState.cancelFutureTargetMove(moveId: String, notBefore: LocalDate? = null): AttentionState {
+fun AttentionState.cancelFutureTargetMove(moveId: String, notBefore: LocalDate): AttentionState {
     val existing = targetMoves.firstOrNull { it.id == moveId } ?: error("未来目标移动不存在")
     val effectiveFrom = LocalDate.parse(existing.effectiveFrom)
-    require(notBefore == null || effectiveFrom.isAfter(notBefore)) { "只能取消尚未生效的目标移动" }
+    require(effectiveFrom.isAfter(notBefore)) { "只能取消尚未生效的目标移动" }
     return copy(targetMoves = targetMoves.filterNot { it.id == moveId })
 }
 
 private fun AttentionState.validateFutureTargetMove(
     move: TargetMove,
-    notBefore: LocalDate?,
+    notBefore: LocalDate,
     replacingId: String? = null,
 ) {
     require(targets.any { it.id == move.targetId }) { "目标不存在" }
@@ -464,7 +464,7 @@ private fun AttentionState.validateFutureTargetMove(
     }
     val effectiveFrom = runCatching { LocalDate.parse(move.effectiveFrom) }
         .getOrElse { throw IllegalArgumentException("生效日无效", it) }
-    require(notBefore == null || effectiveFrom.isAfter(notBefore)) { "生效日必须晚于当前规划日" }
+    require(effectiveFrom.isAfter(notBefore)) { "生效日必须晚于当前规划日" }
     require(targetMoves.none {
         it.id != replacingId && it.targetId == move.targetId && it.effectiveFrom == move.effectiveFrom
     }) { "同一目标在同一生效日只能有一条移动记录" }

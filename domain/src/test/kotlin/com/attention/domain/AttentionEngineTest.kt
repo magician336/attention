@@ -133,7 +133,7 @@ class AttentionEngineTest {
         val history = withGoals
             .addTimeEntry(date.toString(), 20, child.id)
             .addTimeEntry(date.plusDays(2).toString(), 15, child.id)
-            .addFutureTargetMove(child.id, newParent.id, date.plusDays(1).toString())
+            .addFutureTargetMove(child.id, newParent.id, date.plusDays(1).toString(), date)
         val oldStage = history.goalStages.single { it.targetId == oldParent.id }
         val newStage = history.goalStages.single { it.targetId == newParent.id }
 
@@ -634,7 +634,7 @@ class AttentionEngineTest {
         val withHistory = moved
             .addTimeEntry(date.toString(), 20, child.id)
             .addTimeEntry(date.plusDays(2).toString(), 15, child.id)
-            .addFutureTargetMove(child.id, newParent.id, date.plusDays(1).toString())
+            .addFutureTargetMove(child.id, newParent.id, date.plusDays(1).toString(), date)
         assertEquals(20, withHistory.subtreeMinutes(oldParent.id))
         assertEquals(15, withHistory.subtreeMinutes(newParent.id))
         assertEquals(20, withHistory.subtreeMinutes(oldParent.id, date.toString()))
