@@ -10,9 +10,15 @@ import com.attention.app.data.room.RoomBusinessDataRepository
 import com.attention.app.data.settings.SettingsSnapshot
 import com.attention.app.data.settings.SettingsStore
 import com.attention.domain.AttentionState
+import com.attention.domain.GoalCadence
+import com.attention.domain.GoalStage
 import com.attention.domain.LaunchDestination
+import com.attention.domain.Migration
 import com.attention.domain.StoredSettings
 import com.attention.domain.Target
+import com.attention.domain.addMigration
+import com.attention.domain.cancelMigration
+import com.attention.domain.updateMigration
 import java.io.File
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -100,6 +106,82 @@ class RoomBackupIntegrationTest {
         } finally {
             context.deleteFile(fileName)
         }
+    }
+
+    @Test
+    fun migration_lifecycle_is_persisted_by_room() = runBlocking {
+        val target = Target("migration-target", title = "项目")
+        val stage = GoalStage("migration-stage", target.id, GoalCadence.WEEKLY, 240, "2026-10-01")
+        val migration = Migration(
+            id = "migration-id",
+            targetId = target.id,
+            sourceStageId = stage.id,
+            minutes = 60,
+            destinationStartDate = "2026-10-08",
+        )
+        val repository = RoomAttentionStateRepository(
+            RoomBusinessDataRepository(database),
+            settingsStore(),
+        )
+
+        repository.updateBusiness { it.copy(targets = listOf(target), goalStages = listOf(stage)) }
+        repository.updateBusiness { it.addMigration(migration) }
+        repository.updateBusiness {
+            it.updateMigration(migration.copy(minutes = 90, destinationEndDate = "2026-10-09"))
+        }
+        repository.updateBusiness { it.cancelMigration(migration.id) }
+
+        assertEquals(
+            migration.copy(minutes = 90, destinationEndDate = "2026-10-09", cancelled = true),
+            repository.state.first().migrations.single(),
+        )
+    }
+
+    @Test
+    fun migration_backup_merge_and_clear_preserve_stable_ids_and_cancelled_state() = runBlocking {
+        val target = Target("migration-target", title = "项目")
+        val stage = GoalStage("migration-stage", target.id, GoalCadence.WEEKLY, 240, "2026-10-01")
+        val cancelled = Migration(
+            id = "cancelled-migration",
+            targetId = target.id,
+            sourceStageId = stage.id,
+            minutes = 60,
+            destinationStartDate = "2026-10-08",
+            cancelled = true,
+        )
+        val incomingOnly = Migration(
+            id = "incoming-migration",
+            targetId = target.id,
+            sourceStageId = stage.id,
+            minutes = 30,
+            destinationStartDate = "2026-10-10",
+        )
+        val repository = RoomAttentionStateRepository(
+            RoomBusinessDataRepository(database),
+            settingsStore(),
+        )
+        repository.replace(
+            AttentionState(
+                targets = listOf(target),
+                goalStages = listOf(stage),
+                migrations = listOf(cancelled),
+            ),
+        )
+        val incoming = AttentionBackupCodec.encode(
+            AttentionState(
+                targets = listOf(target),
+                goalStages = listOf(stage),
+                migrations = listOf(cancelled.copy(cancelled = false), incomingOnly),
+            ),
+        )
+
+        repository.importJson(incoming, clearExisting = false)
+        val merged = repository.state.first()
+        assertEquals(listOf("cancelled-migration", "incoming-migration"), merged.migrations.map { it.id })
+        assertTrue(merged.migrations.first().cancelled)
+
+        repository.importJson(incoming, clearExisting = true)
+        assertEquals(listOf(cancelled.copy(cancelled = false), incomingOnly), repository.state.first().migrations)
     }
 
     private fun settingsStore(): com.attention.app.data.settings.DataStoreSettingsStore =

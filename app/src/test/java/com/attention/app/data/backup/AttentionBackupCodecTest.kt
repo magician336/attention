@@ -108,4 +108,55 @@ class AttentionBackupCodecTest {
         assertEquals(listOf(first, second), restored.goalStages)
         assertEquals(listOf("first-stage", "second-stage"), restored.goalStages.map { it.id })
     }
+
+    @Test
+    fun backup_round_trip_preserves_multiple_migrations_and_cancelled_state() {
+        val target = Target("target", title = "项目")
+        val stage = GoalStage("stage", target.id, GoalCadence.WEEKLY, 240, "2026-10-01")
+        val active = Migration(
+            id = "active-migration",
+            targetId = target.id,
+            sourceStageId = stage.id,
+            minutes = 90,
+            destinationStartDate = "2026-10-08",
+            destinationEndDate = "2026-10-09",
+        )
+        val cancelled = Migration(
+            id = "cancelled-migration",
+            targetId = target.id,
+            sourceStageId = stage.id,
+            minutes = 45,
+            destinationStartDate = "2026-10-10",
+            cancelled = true,
+        )
+        val expected = AttentionState(
+            targets = listOf(target),
+            goalStages = listOf(stage),
+            migrations = listOf(active, cancelled),
+        )
+
+        val restored = AttentionBackupCodec.decode(AttentionBackupCodec.encode(expected))
+
+        assertEquals(expected.migrations, restored.migrations)
+        assertEquals(listOf("active-migration", "cancelled-migration"), restored.migrations.map { it.id })
+        assertTrue(restored.migrations.last().cancelled)
+    }
+
+    @Test
+    fun merge_deduplicates_migrations_by_stable_id_without_losing_cancelled_record() {
+        val existing = AttentionState(
+            migrations = listOf(Migration("same", "target", "stage", 60, "2026-10-08", cancelled = true)),
+        )
+        val incoming = AttentionState(
+            migrations = listOf(
+                Migration("same", "target", "stage", 60, "2026-10-08"),
+                Migration("new", "target", "stage", 30, "2026-10-09"),
+            ),
+        )
+
+        val merged = AttentionBackupCodec.merge(existing, incoming)
+
+        assertEquals(listOf("same", "new"), merged.migrations.map { it.id })
+        assertTrue(merged.migrations.first().cancelled)
+    }
 }
