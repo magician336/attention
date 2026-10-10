@@ -600,7 +600,7 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                         TextButton(onClick = { pendingDelete = target }) { Text("安全删除") }
                     }
                     val planningDate = state.planningDate(Instant.now())
-                    state.goalStages.filter { it.targetId == target.id }.forEach { stage ->
+                    state.goalStagesForTarget(target.id).forEach { stage ->
                         Text("历史进度：${state.goalProgressLabel(stage, planningDate)}", modifier = Modifier.padding(start = 16.dp))
                     }
                 }
@@ -640,7 +640,7 @@ private fun TargetTree(
                 Text(target.title, modifier = Modifier.weight(1f))
                 Text("直接 ${state.directMinutes(target.id)} / 汇总 ${state.subtreeMinutes(target.id)} 分钟")
             }
-            state.goalStages.filter { it.targetId == target.id }.forEach { stage ->
+            state.goalStagesForTarget(target.id).forEach { stage ->
                 Text(state.goalProgressLabel(stage, planningDate), modifier = Modifier.padding(start = 22.dp))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -783,9 +783,8 @@ private fun StatisticsScreen(
         state.targets.filter { !it.archived }.forEach { target ->
             val total = state.subtreeMinutes(target.id)
             Text("${target.title}：$total 分钟")
-            state.goalStages.filter { it.targetId == target.id }.forEach { stage ->
-                val progress = state.progress(stage, LocalDate.parse(date))
-                Text("  ${stage.cadence.label()} ${progress.actualMinutes}/${progress.targetMinutes} 分钟${if (progress.completed) " · 达成" else " · 缺口 ${progress.gapMinutes}"}")
+            state.goalStagesForTarget(target.id).forEach { stage ->
+                Text(state.goalProgressLabel(stage, LocalDate.parse(date)))
             }
         }
         if (state.targets.isEmpty()) Text("创建计划后，这里会显示目标投入和阶段达成情况。")
@@ -806,13 +805,17 @@ private fun AttentionState.goalProgressLabel(stage: GoalStage, planningDate: Loc
     val stageStart = LocalDate.parse(effectiveStage.startDate)
     val rangeLabel = when (effectiveStage.cadence) {
         GoalCadence.ONE_TIME -> {
-            val openLabel = if (effectiveStage.dueDate == null) " · 开放" else " · 截止 ${effectiveStage.dueDate}"
-            "范围 ${progressRange.start} 至 ${progressRange.endInclusive}$openLabel"
+            val boundaryLabel = when {
+                effectiveStage.dueDate != null -> " · 截止 ${effectiveStage.dueDate}"
+                progressRange.endInclusive.isBefore(planningDate) -> " · 阶段封闭于 ${progressRange.endInclusive}"
+                else -> " · 开放"
+            }
+            "范围 ${progressRange.start} 至 ${progressRange.endInclusive}$boundaryLabel"
         }
         else -> "周期 ${progressRange.start} 至 ${progressRange.endInclusive}"
     }
     return if (planningDate.isBefore(stageStart)) {
-        "${effectiveStage.cadence.label()}目标 ${effectiveStage.targetMinutes} 分钟 · 尚未开始 · 生效日 $stageStart · $rangeLabel"
+        "${effectiveStage.cadence.label()}目标 0/${effectiveStage.targetMinutes} 分钟 · 尚未开始 · 生效日 $stageStart · $rangeLabel"
     } else {
         val status = when {
             progress.excessMinutes > 0 -> "达成 · 超额 ${progress.excessMinutes} 分钟"

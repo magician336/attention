@@ -76,7 +76,14 @@ fun AttentionState.progressRange(stage: GoalStage, onDate: LocalDate): ClosedRan
     if (onDate.isBefore(start)) return start..start
     if (effective.cadence != GoalCadence.ONE_TIME) return periodRange(onDate, effective.cadence)
     val due = effective.dueDate?.let(LocalDate::parse)
-    val end = due?.let { minOf(onDate, it) } ?: onDate
+    val nextStageStart = goalStagesForTarget(stage.targetId)
+        .asSequence()
+        .filter { it.cadence == GoalCadence.ONE_TIME && it.id != stage.id }
+        .map { LocalDate.parse(it.startDate) }
+        .filter { it.isAfter(start) }
+        .minOrNull()
+    val naturalEnd = listOfNotNull(due, nextStageStart?.minusDays(1)).minOrNull()
+    val end = minOf(onDate, naturalEnd ?: onDate).let { maxOf(start, it) }
     return start..end
 }
 
