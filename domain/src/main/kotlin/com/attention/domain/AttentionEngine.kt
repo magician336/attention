@@ -76,20 +76,81 @@ fun AttentionState.progressRange(stage: GoalStage, onDate: LocalDate): ClosedRan
     if (onDate.isBefore(start)) return start..start
     if (effective.cadence != GoalCadence.ONE_TIME) return periodRange(onDate, effective.cadence)
     val due = effective.dueDate?.let(LocalDate::parse)
-    val end = due?.let { minOf(onDate, it) } ?: onDate
+    val nextStageStart = goalStagesForTarget(stage.targetId)
+        .asSequence()
+        .filter { it.cadence == GoalCadence.ONE_TIME && it.id != stage.id }
+        .map { LocalDate.parse(it.startDate) }
+        .filter { it.isAfter(start) }
+        .minOrNull()
+    val naturalEnd = listOfNotNull(due, nextStageStart?.minusDays(1)).minOrNull()
+    val end = minOf(onDate, naturalEnd ?: onDate).let { maxOf(start, it) }
     return start..end
 }
 
 fun AttentionState.progress(stage: GoalStage, onDate: LocalDate): GoalProgress {
     val effective = effectiveStage(stage, onDate)
     if (onDate.isBefore(LocalDate.parse(effective.startDate))) return GoalProgress(0, 0, 0, 0, false)
-    val range = progressRange(stage, onDate)
-    val actual = timeEntries.filter { it.targetId != null }
-        .filter { LocalDate.parse(it.planningDate) in range }
-        .filter { isDescendantAt(it.targetId!!, effective.targetId, LocalDate.parse(it.planningDate)) }
-        .sumOf { it.durationMinutes }
+    val actual = entriesForProgress(stage, onDate).sumOf { it.durationMinutes }
     val gap = (effective.targetMinutes - actual).coerceAtLeast(0)
     return GoalProgress(effective.targetMinutes, actual, gap, (actual - effective.targetMinutes).coerceAtLeast(0), actual >= effective.targetMinutes)
+}
+
+private fun AttentionState.entriesForProgress(
+    stage: GoalStage,
+    onDate: LocalDate,
+    excludedEntryIds: Set<String> = emptySet(),
+): List<TimeEntry> {
+    val effective = effectiveStage(stage, onDate)
+    if (onDate.isBefore(LocalDate.parse(effective.startDate))) return emptyList()
+    val range = progressRange(stage, onDate)
+    return timeEntries.filter { it.id !in excludedEntryIds && it.targetId != null }
+        .filter { LocalDate.parse(it.planningDate) in range }
+        .filter { isDescendantAt(it.targetId!!, effective.targetId, LocalDate.parse(it.planningDate)) }
+}
+
+private fun AttentionState.progressForSummary(
+    stage: GoalStage,
+    onDate: LocalDate,
+    claimedEntryIds: MutableSet<String>,
+): GoalProgress {
+    val effective = effectiveStage(stage, onDate)
+    val targetMinutes = effective.targetMinutes
+    val start = LocalDate.parse(effective.startDate)
+    if (onDate.isBefore(start)) return GoalProgress(targetMinutes, 0, targetMinutes, 0, false)
+
+    val matchingEntries = entriesForProgress(stage, onDate, claimedEntryIds)
+    claimedEntryIds += matchingEntries.map { it.id }
+    val actual = matchingEntries.sumOf { it.durationMinutes }
+    val gap = (targetMinutes - actual).coerceAtLeast(0)
+    return GoalProgress(targetMinutes, actual, gap, (actual - targetMinutes).coerceAtLeast(0), actual >= targetMinutes)
+}
+
+/**
+ * Returns the target-level roll-up for all one-time stages owned by a target.
+ * Each matching time entry is claimed by at most one stage in this summary,
+ * while hierarchy membership remains date-aware so historical target moves are
+ * evaluated against the tree that existed on the entry's planning date.
+ */
+fun AttentionState.goalSummary(targetId: String, onDate: LocalDate): GoalSummary {
+    val claimedEntryIds = mutableSetOf<String>()
+    val stageProgresses = goalStagesForTarget(targetId)
+        .filter { it.cadence == GoalCadence.ONE_TIME }
+        .map { stage ->
+            GoalStageSummary(stage, progressForSummary(stage, onDate, claimedEntryIds))
+        }
+    val targetMinutes = stageProgresses.sumOf { it.progress.targetMinutes }
+    val actualMinutes = stageProgresses.sumOf { it.progress.actualMinutes }
+    val gapMinutes = stageProgresses.sumOf { it.progress.gapMinutes }
+    val excessMinutes = stageProgresses.sumOf { it.progress.excessMinutes }
+    return GoalSummary(
+        targetId = targetId,
+        stageProgresses = stageProgresses,
+        targetMinutes = targetMinutes,
+        actualMinutes = actualMinutes,
+        gapMinutes = gapMinutes,
+        excessMinutes = excessMinutes,
+        completed = stageProgresses.isNotEmpty() && stageProgresses.all { it.progress.completed },
+    )
 }
 
 fun AttentionState.effectiveStage(stage: GoalStage, onDate: LocalDate): GoalStage {
@@ -207,10 +268,57 @@ fun AttentionState.addGoalStage(
 ): AttentionState {
     require(targets.any { it.id == targetId && !it.archived }) { "目标必须未归档" }
     require(targetMinutes > 0)
+    require(cadence != GoalCadence.ONE_TIME || goalStages.none { it.targetId == targetId && it.cadence == GoalCadence.ONE_TIME }) {
+        "已有一次性阶段，请使用追加阶段"
+    }
     val parsedStart = LocalDate.parse(startDate)
     val parsedDue = dueDate?.let(LocalDate::parse)
     require(parsedDue == null || !parsedDue.isBefore(parsedStart)) { "截止日期不能早于开始日期" }
     return copy(goalStages = goalStages + GoalStage(targetId = targetId, cadence = cadence, targetMinutes = targetMinutes, startDate = startDate, dueDate = dueDate))
+}
+
+/**
+ * Returns a target's stages in the order in which their planning dates begin.
+ * The stable stage ID breaks ties so the result remains deterministic after a
+ * backup restore or a Room query.
+ */
+fun AttentionState.goalStagesForTarget(targetId: String): List<GoalStage> = goalStages
+    .filter { it.targetId == targetId }
+    .sortedWith(compareBy<GoalStage> { LocalDate.parse(it.startDate) }.thenBy { it.id })
+
+/**
+ * Appends a new one-time stage after the target's latest stage is achieved.
+ * Validation happens before creating the new stage, so a rejected command
+ * leaves every existing collection unchanged.
+ */
+fun AttentionState.appendOneTimeGoalStage(
+    targetId: String,
+    targetMinutes: Int,
+    startDate: String,
+    dueDate: String? = null,
+): AttentionState {
+    require(targets.any { it.id == targetId && !it.archived }) { "目标必须未归档" }
+    require(targetMinutes > 0) { "目标分钟必须为正整数" }
+
+    val parsedStart = LocalDate.parse(startDate)
+    val parsedDue = dueDate?.let(LocalDate::parse)
+    require(parsedDue == null || !parsedDue.isBefore(parsedStart)) { "截止日期不能早于开始日期" }
+
+    val previous = goalStagesForTarget(targetId).lastOrNull()
+    require(previous != null) { "目标没有可追加的一次性阶段" }
+    require(previous.cadence == GoalCadence.ONE_TIME) { "只能在一次性阶段后追加" }
+    require(parsedStart.isAfter(LocalDate.parse(previous.startDate))) { "新阶段开始日期必须晚于上一阶段" }
+    require(progress(previous, parsedStart).completed) { "上一阶段尚未达成" }
+
+    return copy(
+        goalStages = goalStages + GoalStage(
+            targetId = targetId,
+            cadence = GoalCadence.ONE_TIME,
+            targetMinutes = targetMinutes,
+            startDate = startDate,
+            dueDate = dueDate,
+        ),
+    )
 }
 
 fun AttentionState.addTimeEntry(
@@ -497,36 +605,66 @@ fun AttentionState.continuousPlanningDaysThrough(onDate: LocalDate, targetId: St
     return count
 }
 
+private const val ONE_TIME_GOAL_MILESTONE_KIND = "one_time_goal"
+
+fun oneTimeGoalMilestoneKey(stageId: String, startDate: String): String =
+    "$ONE_TIME_GOAL_MILESTONE_KIND:$stageId:$startDate"
+
+fun Milestone.isOneTimeStageFeedbackFor(stageId: String): Boolean {
+    if (kind != ONE_TIME_GOAL_MILESTONE_KIND) return false
+    val payload = instanceKey.removePrefix("$ONE_TIME_GOAL_MILESTONE_KIND:")
+    return payload.substringBeforeLast(":", missingDelimiterValue = "") == stageId
+}
+
+fun AttentionState.oneTimeStageMilestones(stageId: String): List<Milestone> = milestones
+    .filter { it.isOneTimeStageFeedbackFor(stageId) }
+    .sortedWith(compareBy<Milestone> { it.achievedAtEpochMillis }.thenBy { it.id })
+
+private fun MutableList<Milestone>.addMilestoneIfMissing(
+    existingKeys: MutableSet<String>,
+    kind: String,
+    instanceKey: String,
+    reward: Long,
+) {
+    if (existingKeys.add(instanceKey)) {
+        add(Milestone(kind = kind, instanceKey = instanceKey, reward = reward, achievedAtEpochMillis = System.currentTimeMillis()))
+    }
+}
+
 fun AttentionState.eligibleMilestones(onDate: LocalDate): List<Milestone> {
-    val existing = milestones.map { it.instanceKey }.toSet()
+    val existing = milestones.map { it.instanceKey }.toMutableSet()
     val result = mutableListOf<Milestone>()
     goalStages.forEach { stage ->
         val progress = progress(stage, onDate)
         if (progress.completed) {
             val effective = effectiveStage(stage, onDate)
-            val kind = if (effective.cadence == GoalCadence.ONE_TIME) "one_time_goal" else "goal_period"
+            val kind = if (effective.cadence == GoalCadence.ONE_TIME) ONE_TIME_GOAL_MILESTONE_KIND else "goal_period"
             val periodStart = if (effective.cadence == GoalCadence.ONE_TIME) effective.startDate else periodRange(onDate, effective.cadence).start.toString()
-            val key = "$kind:${stage.id}:$periodStart"
+            val key = if (effective.cadence == GoalCadence.ONE_TIME) {
+                oneTimeGoalMilestoneKey(stage.id, periodStart)
+            } else {
+                "$kind:${stage.id}:$periodStart"
+            }
             val reward = when (effective.cadence) {
                 GoalCadence.ONE_TIME -> 10_000L
                 GoalCadence.DAILY -> 500L
                 GoalCadence.WEEKLY, GoalCadence.MONTHLY -> 1_000L
             }
-            if (key !in existing) result += Milestone(kind = kind, instanceKey = key, reward = reward, achievedAtEpochMillis = System.currentTimeMillis())
+            result.addMilestoneIfMissing(existing, kind, key, reward)
         }
     }
     targets.filter { !it.archived }.forEach { target ->
         val days = continuousPlanningDaysThrough(onDate, target.id)
         listOf(7 to 500L, 30 to 1_000L, 100 to 10_000L).forEach { (threshold, reward) ->
             val key = "streak:${target.id}:$threshold"
-            if (days >= threshold && key !in existing) result += Milestone(kind = "streak", instanceKey = key, reward = reward, achievedAtEpochMillis = System.currentTimeMillis())
+            if (days >= threshold) result.addMilestoneIfMissing(existing, "streak", key, reward)
         }
     }
     val totalHours = timeEntries.filter { it.targetId != null }.sumOf { it.durationMinutes }.toLong() / 60
     (100L..totalHours step 100L).forEach { hours ->
         val key = "cumulative:$hours"
         val reward = cumulativeMilestoneReward(hours)
-        if (reward != null && key !in existing) result += Milestone(kind = "cumulative", instanceKey = key, reward = reward, achievedAtEpochMillis = System.currentTimeMillis())
+        if (reward != null) result.addMilestoneIfMissing(existing, "cumulative", key, reward)
     }
     return result
 }

@@ -40,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -57,6 +58,8 @@ import com.attention.domain.AttentionState
 import com.attention.domain.GoalCadence
 import com.attention.domain.FutureGoalRule
 import com.attention.domain.GoalStage
+import com.attention.domain.GoalStageSummary
+import com.attention.domain.GoalSummary
 import com.attention.domain.LaunchDestination
 import com.attention.domain.Migration
 import com.attention.domain.ScheduleEntry
@@ -69,6 +72,8 @@ import com.attention.domain.capacitySummary
 import com.attention.domain.directMinutes
 import com.attention.domain.descendantIds
 import com.attention.domain.effectiveStage
+import com.attention.domain.goalStagesForTarget
+import com.attention.domain.goalSummary
 import com.attention.domain.levelForExperience
 import com.attention.domain.planningDate
 import com.attention.domain.periodStats
@@ -76,6 +81,7 @@ import com.attention.domain.progress
 import com.attention.domain.progressRange
 import com.attention.domain.subtreeMinutes
 import com.attention.domain.targetChildren
+import com.attention.domain.oneTimeStageMilestones
 import java.time.Instant
 import java.time.LocalDate
 
@@ -336,8 +342,8 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
                             editMinutes = entry.durationMinutes.toString()
                             editNote = entry.note
                             editTargetId = entry.targetId
-                        }) { Text("编辑") }
-                        TextButton(onClick = { viewModel.deleteTime(entry.id) }) { Text("删除") }
+                        }, modifier = Modifier.testTag("edit-time-${entry.id}")) { Text("编辑") }
+                        TextButton(onClick = { viewModel.deleteTime(entry.id) }, modifier = Modifier.testTag("delete-time-${entry.id}")) { Text("删除") }
                     }
                     if (editingEntry?.id == entry.id) {
                         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -347,11 +353,11 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
                             }
                         }
                         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                            OutlinedTextField(editMinutes, { editMinutes = it.filter(Char::isDigit) }, label = { Text("分钟") }, modifier = Modifier.width(120.dp), singleLine = true)
+                            OutlinedTextField(editMinutes, { editMinutes = it.filter(Char::isDigit) }, label = { Text("分钟") }, modifier = Modifier.testTag("edit-time-minutes-${entry.id}").width(120.dp), singleLine = true)
                             Spacer(Modifier.width(8.dp))
                             OutlinedTextField(editNote, { editNote = it }, label = { Text("备注") }, modifier = Modifier.width(180.dp), singleLine = true)
                             Spacer(Modifier.width(8.dp))
-                            Button(onClick = { editMinutes.toIntOrNull()?.takeIf { it > 0 }?.let { viewModel.editTime(entry.id, it, editTargetId, editNote); editingEntry = null } }) { Text("保存") }
+                            Button(modifier = Modifier.testTag("save-time-${entry.id}"), onClick = { editMinutes.toIntOrNull()?.takeIf { it > 0 }?.let { viewModel.editTime(entry.id, it, editTargetId, editNote); editingEntry = null } }) { Text("保存") }
                         }
                     }
                 }
@@ -371,9 +377,12 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
     var goalCadence by remember { mutableStateOf(GoalCadence.DAILY) }
     var goalStartDate by remember { mutableStateOf(state.planningDate(Instant.now()).toString()) }
     var goalDueDate by remember { mutableStateOf("") }
+    var selectedPlanningDate by remember { mutableStateOf(state.planningDate(Instant.now()).toString()) }
     var futureDate by remember { mutableStateOf(LocalDate.now().plusDays(7).toString()) }
     var futureMinutes by remember { mutableStateOf("") }
     var futureCadence by remember { mutableStateOf(GoalCadence.WEEKLY) }
+    var appendGoalMinutes by remember { mutableStateOf("") }
+    var appendGoalDueDate by remember { mutableStateOf("") }
     var pendingDelete by remember { mutableStateOf<Target?>(null) }
     var renameTarget by remember { mutableStateOf<Target?>(null) }
     var renameText by remember { mutableStateOf("") }
@@ -388,6 +397,9 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
             Button(onClick = { if (title.isNotBlank()) { viewModel.addTarget(title, parentId); title = "" } }) { Text("添加") }
         }
         if (parentId != null) {
+            androidx.compose.runtime.LaunchedEffect(parentId) {
+                selectedPlanningDate = state.planningDate(Instant.now()).toString()
+            }
             Text("当前父目标：${state.targets.firstOrNull { it.id == parentId }?.title ?: ""}")
             TextButton(onClick = { parentId = null }) { Text("改为根计划") }
             Card(Modifier.fillMaxWidth()) {
@@ -472,21 +484,83 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                             TextButton(onClick = { viewModel.cancelFutureGoal(rule.id) }) { Text("取消") }
                         }
                     }
-                    val planningDate = state.planningDate(Instant.now())
-                    val stages = state.goalStages.filter { it.targetId == parentId }
+                    val parsedPlanningDate = runCatching { LocalDate.parse(selectedPlanningDate) }.getOrNull()
+                    val planningDate = parsedPlanningDate ?: state.planningDate(Instant.now())
+                    val target = state.targets.firstOrNull { it.id == parentId }
+                    val stages = state.goalStagesForTarget(parentId!!)
+                    val oneTimeSummary = state.goalSummary(parentId!!, planningDate)
                     if (stages.isNotEmpty()) {
                         Text("当前目标进度", style = MaterialTheme.typography.titleSmall)
+                        OutlinedTextField(
+                            selectedPlanningDate,
+                            { selectedPlanningDate = it },
+                            label = { Text("当前规划日 YYYY-MM-DD") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                        )
+                        if (parsedPlanningDate == null) {
+                            Text("规划日格式无效，请使用 YYYY-MM-DD", color = MaterialTheme.colorScheme.error)
+                        }
+                        if (oneTimeSummary.stageProgresses.isNotEmpty()) {
+                            Text(oneTimeSummary.summaryLabel())
+                        }
                         stages.forEach { stage ->
+                            val detail = oneTimeSummary.stageProgresses.firstOrNull { it.stage.id == stage.id }
                             val progress = state.progress(stage, planningDate)
-                            Text(state.goalProgressLabel(stage, planningDate))
+                            Text(detail?.let { state.goalProgressLabel(it, planningDate) } ?: state.goalProgressLabel(stage, planningDate))
+                            state.stageFeedbackLabels(stage).forEach { label ->
+                                Text(label, modifier = Modifier.padding(start = 16.dp))
+                            }
                             if (progress.gapMinutes > 0) {
                                 OutlinedButton(onClick = {
                                     viewModel.addMigration(Migration(targetId = parentId!!, sourceStageId = stage.id, minutes = progress.gapMinutes, destinationStartDate = planningDate.plusDays(7).toString()))
                                 }) { Text("将当前缺口 ${progress.gapMinutes} 分钟迁移到下周") }
                             }
                         }
+                        val latest = stages.last()
+                        val latestProgress = state.progress(latest, planningDate)
+                        if (parsedPlanningDate != null && target?.archived == false && latest.cadence == GoalCadence.ONE_TIME && latestProgress.completed) {
+                            Card(Modifier.fillMaxWidth()) {
+                                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text("追加一次性阶段", style = MaterialTheme.typography.titleSmall)
+                                    Text("起始规划日：$planningDate")
+                                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                        OutlinedTextField(
+                                            appendGoalMinutes,
+                                            { appendGoalMinutes = it.filter(Char::isDigit) },
+                                            label = { Text("目标分钟") },
+                                            modifier = Modifier.testTag("append-goal-minutes").width(140.dp),
+                                            singleLine = true,
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        OutlinedTextField(
+                                            appendGoalDueDate,
+                                            { appendGoalDueDate = it },
+                                            label = { Text("截止规划日（可选）") },
+                                            modifier = Modifier.width(155.dp),
+                                            singleLine = true,
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        Button(
+                                            modifier = Modifier.testTag("append-goal-submit"),
+                                            onClick = {
+                                            viewModel.appendOneTimeGoal(
+                                                targetId = parentId!!,
+                                                minutes = appendGoalMinutes.toIntOrNull() ?: 0,
+                                                startDate = planningDate.toString(),
+                                                dueDate = appendGoalDueDate.trim().takeIf(String::isNotEmpty),
+                                                onSuccess = {
+                                                    appendGoalMinutes = ""
+                                                    appendGoalDueDate = ""
+                                                },
+                                            )
+                                            },
+                                        ) { Text("追加阶段") }
+                                    }
+                                }
+                            }
+                        }
                     }
-                    val target = state.targets.firstOrNull { it.id == parentId }
                     if (target?.parentId != null) {
                         OutlinedButton(onClick = { viewModel.moveTargetFrom(target.id, null, state.planningDate(Instant.now()).plusDays(1).toString()) }) { Text("从明日起移到根计划") }
                     }
@@ -538,8 +612,20 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                         TextButton(onClick = { pendingDelete = target }) { Text("安全删除") }
                     }
                     val planningDate = state.planningDate(Instant.now())
-                    state.goalStages.filter { it.targetId == target.id }.forEach { stage ->
-                        Text("历史进度：${state.goalProgressLabel(stage, planningDate)}", modifier = Modifier.padding(start = 16.dp))
+                    val stages = state.goalStagesForTarget(target.id)
+                    val oneTimeSummary = state.goalSummary(target.id, planningDate)
+                    if (oneTimeSummary.stageProgresses.isNotEmpty()) {
+                        Text("历史进度：${oneTimeSummary.summaryLabel()}", modifier = Modifier.padding(start = 16.dp))
+                    }
+                    stages.forEach { stage ->
+                        val detail = oneTimeSummary.stageProgresses.firstOrNull { it.stage.id == stage.id }
+                        Text(
+                            "历史进度：${detail?.let { state.goalProgressLabel(it, planningDate) } ?: state.goalProgressLabel(stage, planningDate)}",
+                            modifier = Modifier.padding(start = 16.dp),
+                        )
+                        state.stageFeedbackLabels(stage).forEach { label ->
+                            Text(label, modifier = Modifier.padding(start = 32.dp))
+                        }
                     }
                 }
             }
@@ -578,8 +664,20 @@ private fun TargetTree(
                 Text(target.title, modifier = Modifier.weight(1f))
                 Text("直接 ${state.directMinutes(target.id)} / 汇总 ${state.subtreeMinutes(target.id)} 分钟")
             }
-            state.goalStages.filter { it.targetId == target.id }.forEach { stage ->
-                Text(state.goalProgressLabel(stage, planningDate), modifier = Modifier.padding(start = 22.dp))
+            val stages = state.goalStagesForTarget(target.id)
+            val oneTimeSummary = state.goalSummary(target.id, planningDate)
+            if (oneTimeSummary.stageProgresses.isNotEmpty()) {
+                Text(oneTimeSummary.summaryLabel(), modifier = Modifier.padding(start = 22.dp))
+            }
+            stages.forEach { stage ->
+                val detail = oneTimeSummary.stageProgresses.firstOrNull { it.stage.id == stage.id }
+                Text(
+                    detail?.let { state.goalProgressLabel(it, planningDate) } ?: state.goalProgressLabel(stage, planningDate),
+                    modifier = Modifier.padding(start = 22.dp),
+                )
+                state.stageFeedbackLabels(stage).forEach { label ->
+                    Text(label, modifier = Modifier.padding(start = 38.dp))
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 TextButton(onClick = { viewModel.toggleTarget(target.id, !target.expanded) }) { Text(if (target.expanded) "折叠" else "展开") }
@@ -721,9 +819,18 @@ private fun StatisticsScreen(
         state.targets.filter { !it.archived }.forEach { target ->
             val total = state.subtreeMinutes(target.id)
             Text("${target.title}：$total 分钟")
-            state.goalStages.filter { it.targetId == target.id }.forEach { stage ->
-                val progress = state.progress(stage, LocalDate.parse(date))
-                Text("  ${stage.cadence.label()} ${progress.actualMinutes}/${progress.targetMinutes} 分钟${if (progress.completed) " · 达成" else " · 缺口 ${progress.gapMinutes}"}")
+            val planningDate = LocalDate.parse(date)
+            val stages = state.goalStagesForTarget(target.id)
+            val oneTimeSummary = state.goalSummary(target.id, planningDate)
+            if (oneTimeSummary.stageProgresses.isNotEmpty()) {
+                Text(oneTimeSummary.summaryLabel())
+            }
+            stages.forEach { stage ->
+                val detail = oneTimeSummary.stageProgresses.firstOrNull { it.stage.id == stage.id }
+                Text(detail?.let { state.goalProgressLabel(it, planningDate) } ?: state.goalProgressLabel(stage, planningDate))
+                state.stageFeedbackLabels(stage).forEach { label ->
+                    Text(label, modifier = Modifier.padding(start = 16.dp))
+                }
             }
         }
         if (state.targets.isEmpty()) Text("创建计划后，这里会显示目标投入和阶段达成情况。")
@@ -737,20 +844,28 @@ private fun resolveLaunchDestination(requested: LaunchDestination, lastOpened: L
 
 private fun AttentionState.unownedMinutesForUi(): Int = timeEntries.filter { it.targetId == null }.sumOf { it.durationMinutes }
 
-private fun AttentionState.goalProgressLabel(stage: GoalStage, planningDate: LocalDate): String {
+private fun AttentionState.goalProgressLabel(stage: GoalStage, planningDate: LocalDate): String =
+    goalProgressLabel(GoalStageSummary(stage, progress(stage, planningDate)), planningDate)
+
+private fun AttentionState.goalProgressLabel(detail: GoalStageSummary, planningDate: LocalDate): String {
+    val stage = detail.stage
     val effectiveStage = effectiveStage(stage, planningDate)
-    val progress = progress(stage, planningDate)
+    val progress = detail.progress
     val progressRange = progressRange(stage, planningDate)
     val stageStart = LocalDate.parse(effectiveStage.startDate)
     val rangeLabel = when (effectiveStage.cadence) {
         GoalCadence.ONE_TIME -> {
-            val openLabel = if (effectiveStage.dueDate == null) " · 开放" else " · 截止 ${effectiveStage.dueDate}"
-            "范围 ${progressRange.start} 至 ${progressRange.endInclusive}$openLabel"
+            val boundaryLabel = when {
+                effectiveStage.dueDate != null -> " · 截止 ${effectiveStage.dueDate}"
+                progressRange.endInclusive.isBefore(planningDate) -> " · 阶段封闭于 ${progressRange.endInclusive}"
+                else -> " · 开放"
+            }
+            "范围 ${progressRange.start} 至 ${progressRange.endInclusive}$boundaryLabel"
         }
         else -> "周期 ${progressRange.start} 至 ${progressRange.endInclusive}"
     }
     return if (planningDate.isBefore(stageStart)) {
-        "${effectiveStage.cadence.label()}目标 ${effectiveStage.targetMinutes} 分钟 · 尚未开始 · 生效日 $stageStart · $rangeLabel"
+        "${effectiveStage.cadence.label()}目标 0/${effectiveStage.targetMinutes} 分钟 · 尚未开始 · 生效日 $stageStart · $rangeLabel"
     } else {
         val status = when {
             progress.excessMinutes > 0 -> "达成 · 超额 ${progress.excessMinutes} 分钟"
@@ -760,6 +875,18 @@ private fun AttentionState.goalProgressLabel(stage: GoalStage, planningDate: Loc
         "${effectiveStage.cadence.label()}目标 ${progress.actualMinutes}/${progress.targetMinutes} 分钟 · $rangeLabel · $status"
     }
 }
+
+private fun GoalSummary.summaryLabel(): String =
+    "一次性阶段汇总：实际 ${actualMinutes}/${targetMinutes} 分钟 · 缺口 ${gapMinutes} 分钟 · 超额投入 ${excessMinutes} 分钟 · ${if (completed) "达成" else "未达成"}"
+
+private fun AttentionState.stageFeedbackLabels(stage: GoalStage): List<String> =
+    if (stage.cadence != GoalCadence.ONE_TIME) {
+        emptyList()
+    } else {
+        oneTimeStageMilestones(stage.id).map { milestone ->
+            "阶段达成反馈：${stage.startDate} · +${milestone.reward} 投入经验"
+        }
+    }
 
 private fun AttentionState.targetPath(targetId: String): String {
     val names = mutableListOf<String>()
