@@ -28,12 +28,15 @@ import com.attention.domain.addTarget
 import com.attention.domain.addTimeEntry
 import com.attention.domain.parentAt
 import com.attention.domain.settlePeriodSnapshots
+import com.attention.domain.appendOneTimeGoalStage
+import com.attention.domain.awardEligibleMilestones
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
@@ -88,6 +91,57 @@ class RoomBusinessDataRepositoryTest {
         repository.replace(AttentionState(targets = listOf(target), goalStages = listOf(stage)))
 
         assertEquals(stage, repository.read().goalStages.single())
+    }
+
+    @Test
+    fun multiple_one_time_stages_survive_room_round_trip_in_history_order() = runBlocking {
+        val target = Target("one-time-target", title = "项目")
+        val first = GoalStage("first-stage", target.id, GoalCadence.ONE_TIME, 60, "2026-10-10", completed = true)
+        val second = GoalStage("second-stage", target.id, GoalCadence.ONE_TIME, 90, "2026-10-13")
+        val repository = RoomBusinessDataRepository(database)
+
+        repository.replace(AttentionState(targets = listOf(target), goalStages = listOf(second, first)))
+
+        assertEquals(listOf(first, second), repository.read().goalStages)
+        assertEquals(listOf("first-stage", "second-stage"), repository.read().goalStages.map { it.id })
+    }
+
+    @Test
+    fun appended_one_time_stage_survives_room_restart_with_its_history() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val name = "room-appended-stage-restart-test.db"
+        context.deleteDatabase(name)
+        val target = Target("one-time-target", title = "项目")
+        val first = GoalStage("first-stage", target.id, GoalCadence.ONE_TIME, 60, "2026-10-10")
+        val firstDatabase = Room.databaseBuilder(context, AttentionDatabase::class.java, name).build()
+        try {
+            val repository = RoomBusinessDataRepository(firstDatabase)
+            repository.replace(
+                AttentionState(
+                    targets = listOf(target),
+                    goalStages = listOf(first),
+                    timeEntries = listOf(TimeEntry("entry", "2026-10-10", 60, target.id)),
+                ),
+            )
+            repository.update { it.appendOneTimeGoalStage(target.id, 90, "2026-10-11", "2026-10-15") }
+        } finally {
+            firstDatabase.close()
+        }
+
+        val secondDatabase = Room.databaseBuilder(context, AttentionDatabase::class.java, name).build()
+        try {
+            val loaded = RoomBusinessDataRepository(secondDatabase).read()
+            assertEquals(2, loaded.goalStages.size)
+            assertEquals("first-stage", loaded.goalStages.first().id)
+            assertTrue(loaded.goalStages.last().id != first.id)
+            assertEquals(first, loaded.goalStages.first())
+            assertEquals(90, loaded.goalStages.last().targetMinutes)
+            assertEquals("2026-10-11", loaded.goalStages.last().startDate)
+            assertEquals("2026-10-15", loaded.goalStages.last().dueDate)
+        } finally {
+            secondDatabase.close()
+            context.deleteDatabase(name)
+        }
     }
 
     @Test
@@ -222,6 +276,54 @@ class RoomBusinessDataRepositoryTest {
         }
 
         assertNull(database.targetDao().findById("target"))
+    }
+
+    @Test
+    fun failed_milestone_transaction_rolls_back_time_entry_and_feedback() = runBlocking {
+        val target = Target("milestone-target", title = "阶段目标")
+        val stage = GoalStage("milestone-stage", target.id, GoalCadence.ONE_TIME, 30, "2026-10-08")
+        val repository = RoomBusinessDataRepository(database)
+        val awarded = AttentionState(targets = listOf(target), goalStages = listOf(stage))
+            .addTimeEntry("2026-10-08", 30, target.id)
+            .awardEligibleMilestones(java.time.LocalDate.parse("2026-10-08"))
+
+        try {
+            repository.replace(
+                awarded.copy(
+                    activeTimer = ActiveTimer(
+                        targetId = "missing-target",
+                        startedAtEpochMillis = 1L,
+                        lastPlanningDate = "2026-10-08",
+                    ),
+                ),
+            )
+            fail("Expected the business transaction to fail")
+        } catch (_: SQLiteConstraintException) {
+            // The invalid timer is written after milestones, so this verifies rollback of feedback too.
+        }
+
+        val loaded = repository.read()
+        assertTrue(loaded.timeEntries.isEmpty())
+        assertTrue(loaded.milestones.isEmpty())
+        assertEquals(0L, loaded.experience)
+    }
+
+    @Test
+    fun appended_stage_keeps_previous_one_time_feedback_in_room() = runBlocking {
+        val target = Target("feedback-target", title = "阶段目标")
+        val first = GoalStage("feedback-first", target.id, GoalCadence.ONE_TIME, 30, "2026-10-08")
+        val repository = RoomBusinessDataRepository(database)
+        val firstAwarded = AttentionState(targets = listOf(target), goalStages = listOf(first))
+            .addTimeEntry("2026-10-08", 30, target.id)
+            .awardEligibleMilestones(java.time.LocalDate.parse("2026-10-08"))
+        repository.replace(firstAwarded)
+
+        repository.update { it.appendOneTimeGoalStage(target.id, 45, "2026-10-09") }
+
+        val loaded = repository.read()
+        assertEquals(2, loaded.goalStages.size)
+        assertEquals(1, loaded.milestones.size)
+        assertTrue(loaded.milestones.single().instanceKey.contains(first.id))
     }
 
     @Test

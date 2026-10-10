@@ -316,6 +316,259 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun one_time_stages_use_inclusive_disjoint_ranges_and_ignore_the_gap() {
+        val state = AttentionState().addTarget("项目")
+        val target = state.targets.single()
+        val first = state
+            .addGoalStage(target.id, GoalCadence.ONE_TIME, 60, "2026-10-10", dueDate = "2026-10-12")
+            .addTimeEntry("2026-10-10", 20, target.id, TimeEntrySource.MANUAL)
+            .addTimeEntry("2026-10-12", 40, target.id, TimeEntrySource.TIMER)
+        val second = first
+            .appendOneTimeGoalStage(target.id, 90, "2026-10-15")
+            .addTimeEntry("2026-10-13", 100, target.id, TimeEntrySource.IMPORT)
+            .addTimeEntry("2026-10-14", 100, target.id, TimeEntrySource.MANUAL)
+            .addTimeEntry("2026-10-15", 40, target.id, TimeEntrySource.TIMER)
+            .addTimeEntry("2026-10-16", 50, target.id, TimeEntrySource.IMPORT)
+        val stages = second.goalStagesForTarget(target.id)
+
+        assertEquals(LocalDate.of(2026, 10, 10), second.progressRange(stages[0], LocalDate.of(2026, 10, 20)).start)
+        assertEquals(LocalDate.of(2026, 10, 12), second.progressRange(stages[0], LocalDate.of(2026, 10, 20)).endInclusive)
+        assertEquals(LocalDate.of(2026, 10, 15), second.progressRange(stages[1], LocalDate.of(2026, 10, 16)).start)
+        assertEquals(LocalDate.of(2026, 10, 16), second.progressRange(stages[1], LocalDate.of(2026, 10, 16)).endInclusive)
+
+        val firstProgress = second.progress(stages[0], LocalDate.of(2026, 10, 20))
+        assertEquals(60, firstProgress.actualMinutes)
+        assertEquals(0, firstProgress.gapMinutes)
+        assertEquals(0, firstProgress.excessMinutes)
+        assertTrue(firstProgress.completed)
+
+        val secondProgress = second.progress(stages[1], LocalDate.of(2026, 10, 16))
+        assertEquals(90, secondProgress.actualMinutes)
+        assertEquals(0, secondProgress.gapMinutes)
+        assertEquals(0, secondProgress.excessMinutes)
+        assertTrue(secondProgress.completed)
+    }
+
+    @Test
+    fun open_one_time_stage_closes_on_the_day_before_the_next_stage() {
+        val state = AttentionState().addTarget("项目")
+        val target = state.targets.single()
+        val first = state
+            .addGoalStage(target.id, GoalCadence.ONE_TIME, 30, "2026-10-10")
+            .addTimeEntry("2026-10-10", 30, target.id)
+        val second = first
+            .appendOneTimeGoalStage(target.id, 45, "2026-10-15")
+            .addTimeEntry("2026-10-14", 15, target.id)
+            .addTimeEntry("2026-10-15", 20, target.id)
+        val stages = second.goalStagesForTarget(target.id)
+
+        assertEquals(LocalDate.of(2026, 10, 14), second.progressRange(stages[0], LocalDate.of(2026, 10, 20)).endInclusive)
+        val firstProgress = second.progress(stages[0], LocalDate.of(2026, 10, 20))
+        assertEquals(45, firstProgress.actualMinutes)
+        assertEquals(15, firstProgress.excessMinutes)
+        assertTrue(firstProgress.completed)
+        assertEquals(20, second.progress(stages[1], LocalDate.of(2026, 10, 15)).actualMinutes)
+    }
+
+    @Test
+    fun one_time_stage_before_start_has_zero_progress_and_is_not_completed() {
+        val state = AttentionState().addTarget("项目")
+        val target = state.targets.single()
+        val stage = state.addGoalStage(target.id, GoalCadence.ONE_TIME, 60, "2026-10-15").goalStages.single()
+
+        val progress = state.progress(stage, LocalDate.of(2026, 10, 14))
+
+        assertEquals(0, progress.actualMinutes)
+        assertEquals(0, progress.gapMinutes)
+        assertEquals(0, progress.excessMinutes)
+        assertFalse(progress.completed)
+    }
+
+    @Test
+    fun one_time_goal_summary_rolls_up_all_stages_and_deduplicates_hierarchy_entries() {
+        val rootState = AttentionState().addTarget("root")
+        val root = rootState.targets.single()
+        val withChild = rootState.addTarget("child", root.id)
+        val child = withChild.targets.single { it.parentId == root.id }
+        val withGrandchild = withChild.addTarget("grandchild", child.id)
+        val grandchild = withGrandchild.targets.single { it.parentId == child.id }
+        val first = withGrandchild
+            .addGoalStage(root.id, GoalCadence.ONE_TIME, 60, "2026-10-01", dueDate = "2026-10-04")
+            .addTimeEntry("2026-10-01", 20, root.id)
+            .addTimeEntry("2026-10-02", 15, child.id)
+            .addTimeEntry("2026-10-04", 25, grandchild.id)
+        val withSecond = first.appendOneTimeGoalStage(root.id, 90, "2026-10-06")
+            .addTimeEntry("2026-10-06", 40, grandchild.id)
+            .addTimeEntry("2026-10-07", 50, child.id)
+        val state = withSecond.addGoalStage(child.id, GoalCadence.ONE_TIME, 30, "2026-10-01")
+
+        val rootSummary = state.goalSummary(root.id, LocalDate.of(2026, 10, 10))
+        assertEquals(150, rootSummary.targetMinutes)
+        assertEquals(150, rootSummary.actualMinutes)
+        assertEquals(0, rootSummary.gapMinutes)
+        assertEquals(0, rootSummary.excessMinutes)
+        assertTrue(rootSummary.completed)
+        assertEquals(listOf(60, 90), rootSummary.stageProgresses.map { it.progress.actualMinutes })
+        assertEquals(listOf(60, 90), rootSummary.stageProgresses.map { it.progress.targetMinutes })
+
+        val childSummary = state.goalSummary(child.id, LocalDate.of(2026, 10, 10))
+        assertEquals(30, childSummary.targetMinutes)
+        assertEquals(130, childSummary.actualMinutes)
+        assertEquals(100, childSummary.excessMinutes)
+        assertTrue(childSummary.completed)
+    }
+
+    @Test
+    fun one_time_goal_summary_updates_after_edit_delete_and_assignment() {
+        val initial = AttentionState().addTarget("target")
+        val target = initial.targets.single()
+        val withStage = initial.addGoalStage(target.id, GoalCadence.ONE_TIME, 60, "2026-10-01")
+        val unowned = withStage.addTimeEntry("2026-10-01", 20)
+        assertEquals(0, unowned.goalSummary(target.id, LocalDate.of(2026, 10, 2)).actualMinutes)
+
+        val entryId = unowned.timeEntries.single().id
+        val assigned = unowned.assignUnowned(setOf(entryId), target.id)
+        assertEquals(20, assigned.goalSummary(target.id, LocalDate.of(2026, 10, 2)).actualMinutes)
+
+        val edited = assigned.editTimeEntry(entryId, 45, target.id, "corrected")
+        assertEquals(45, edited.goalSummary(target.id, LocalDate.of(2026, 10, 2)).actualMinutes)
+
+        val deleted = edited.deleteTimeEntry(entryId)
+        assertEquals(0, deleted.goalSummary(target.id, LocalDate.of(2026, 10, 2)).actualMinutes)
+    }
+
+    @Test
+    fun one_time_goal_summary_uses_the_target_tree_at_each_entry_date_after_a_move() {
+        val state = AttentionState().addTarget("old parent").addTarget("new parent")
+        val oldParent = state.targets.first()
+        val newParent = state.targets.last()
+        val withChild = state.addTarget("child", oldParent.id)
+        val child = withChild.targets.single { it.parentId == oldParent.id }
+        val withStages = withChild
+            .addGoalStage(oldParent.id, GoalCadence.ONE_TIME, 20, "2026-10-01")
+            .addGoalStage(newParent.id, GoalCadence.ONE_TIME, 15, "2026-10-01")
+        val moved = withStages
+            .addTimeEntry("2026-10-01", 20, child.id)
+            .addTimeEntry("2026-10-03", 15, child.id)
+            .addFutureTargetMove(child.id, newParent.id, "2026-10-02", LocalDate.parse("2026-10-01"))
+
+        assertEquals(20, moved.goalSummary(oldParent.id, LocalDate.of(2026, 10, 3)).actualMinutes)
+        assertEquals(15, moved.goalSummary(newParent.id, LocalDate.of(2026, 10, 3)).actualMinutes)
+    }
+
+    @Test
+    fun one_time_goal_summary_preserves_stage_gaps_and_excess_when_the_stages_differ() {
+        val initial = AttentionState().addTarget("target")
+        val target = initial.targets.single()
+        val first = initial
+            .addGoalStage(target.id, GoalCadence.ONE_TIME, 60, "2026-10-01")
+            .addTimeEntry("2026-10-01", 150, target.id)
+        val state = first.appendOneTimeGoalStage(target.id, 90, "2026-10-02")
+
+        val summary = state.goalSummary(target.id, LocalDate.of(2026, 10, 2))
+        assertEquals(150, summary.targetMinutes)
+        assertEquals(150, summary.actualMinutes)
+        assertEquals(90, summary.stageProgresses[1].progress.gapMinutes)
+        assertEquals(90, summary.stageProgresses[0].progress.excessMinutes)
+        assertEquals(90, summary.gapMinutes)
+        assertEquals(90, summary.excessMinutes)
+        assertFalse(summary.completed)
+    }
+
+    @Test
+    fun appending_one_time_stage_preserves_history_and_assigns_a_new_stable_id() {
+        val initial = AttentionState().addTarget("项目")
+        val target = initial.targets.single()
+        val first = initial
+            .addGoalStage(target.id, GoalCadence.ONE_TIME, 60, "2026-10-10", "2026-10-12")
+            .addTimeEntry("2026-10-11", 60, target.id)
+        val previous = first.goalStages.single()
+
+        val appended = first.appendOneTimeGoalStage(
+            targetId = target.id,
+            targetMinutes = 90,
+            startDate = "2026-10-13",
+        )
+
+        assertEquals(listOf(previous), appended.goalStagesForTarget(target.id).take(1))
+        assertEquals(previous, appended.goalStagesForTarget(target.id).first())
+        assertEquals(2, appended.goalStagesForTarget(target.id).size)
+        assertTrue(appended.goalStagesForTarget(target.id).last().id != previous.id)
+        assertEquals(90, appended.goalStagesForTarget(target.id).last().targetMinutes)
+        assertEquals("2026-10-13", appended.goalStagesForTarget(target.id).last().startDate)
+        assertEquals(null, appended.goalStagesForTarget(target.id).last().dueDate)
+        assertEquals(first.timeEntries, appended.timeEntries)
+    }
+
+    @Test
+    fun appending_one_time_stage_rejects_invalid_state_without_mutation() {
+        val initial = AttentionState().addTarget("项目")
+        val target = initial.targets.single()
+        val initialBefore = initial
+        assertThrows(IllegalArgumentException::class.java) {
+            initial.appendOneTimeGoalStage(target.id, 30, "2026-10-11")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            initial.appendOneTimeGoalStage("missing", 30, "2026-10-11")
+        }
+        assertEquals(initialBefore, initial)
+
+        val oneTime = initial.addGoalStage(target.id, GoalCadence.ONE_TIME, 60, "2026-10-10")
+        val incomplete = oneTime
+        val before = incomplete
+
+        assertThrows(IllegalArgumentException::class.java) {
+            incomplete.appendOneTimeGoalStage(target.id, 30, "2026-10-11")
+        }
+        assertEquals(before, incomplete)
+
+        val completed = oneTime.addTimeEntry("2026-10-10", 60, target.id)
+        val completedBefore = completed
+        assertThrows(IllegalArgumentException::class.java) {
+            completed.appendOneTimeGoalStage(target.id, 0, "2026-10-11")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            completed.appendOneTimeGoalStage(target.id, 30, "2026-10-11", dueDate = "2026-10-10")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            completed.appendOneTimeGoalStage(target.id, 30, "2026-10-10")
+        }
+        assertEquals(completedBefore, completed)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            completed.addGoalStage(target.id, GoalCadence.ONE_TIME, 30, "2026-10-11")
+        }
+        assertEquals(completedBefore, completed)
+
+        val weekly = initial.addGoalStage(target.id, GoalCadence.WEEKLY, 30, "2026-10-01")
+        val nonOneTimeAndOneTime = weekly.copy(
+            goalStages = weekly.goalStages + GoalStage(
+                targetId = target.id,
+                cadence = GoalCadence.ONE_TIME,
+                targetMinutes = 30,
+                startDate = "2026-10-10",
+            ),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            nonOneTimeAndOneTime.appendOneTimeGoalStage(target.id, 30, "2026-10-11")
+        }
+
+        val archived = completed.archiveTarget(target.id)
+        val archivedBefore = archived
+        assertThrows(IllegalArgumentException::class.java) {
+            archived.appendOneTimeGoalStage(target.id, 30, "2026-10-11")
+        }
+        assertEquals(archivedBefore, archived)
+
+        val periodic = initial.addGoalStage(target.id, GoalCadence.WEEKLY, 60, "2026-10-10")
+        val periodicBefore = periodic
+        assertThrows(IllegalArgumentException::class.java) {
+            periodic.appendOneTimeGoalStage(target.id, 30, "2026-10-11")
+        }
+        assertEquals(periodicBefore, periodic)
+    }
+
+    @Test
     fun one_time_goal_rejects_a_due_date_before_start_without_changing_state() {
         val state = AttentionState().addTarget("论文")
         val target = state.targets.single()
@@ -695,6 +948,49 @@ class AttentionEngineTest {
         assertTrue(awarded.milestones.any { it.instanceKey == "streak:${target.id}:7" })
         assertEquals(500L, awarded.milestones.single().reward)
         assertEquals(1, awarded.awardEligibleMilestones(date.plusDays(6)).milestones.size)
+    }
+
+    @Test
+    fun one_time_stage_feedback_is_distinct_idempotent_and_preserved_after_append() {
+        val state = AttentionState().addTarget("阶段目标")
+        val target = state.targets.single()
+        val firstStage = state
+            .addGoalStage(target.id, GoalCadence.ONE_TIME, 30, date.toString())
+            .addTimeEntry(date.toString(), 30, target.id)
+            .awardEligibleMilestones(date)
+
+        val firstFeedback = firstStage.oneTimeStageMilestones(firstStage.goalStages.single().id)
+        assertEquals(1, firstFeedback.size)
+        assertEquals(10_000L, firstFeedback.single().reward)
+
+        val secondStage = firstStage
+            .appendOneTimeGoalStage(target.id, 45, date.plusDays(1).toString())
+            .addTimeEntry(date.plusDays(1).toString(), 45, target.id)
+        val awarded = secondStage.awardEligibleMilestones(date.plusDays(1))
+        val stageIds = awarded.goalStages.map { it.id }
+
+        assertEquals(2, awarded.milestones.count { it.kind == "one_time_goal" })
+        assertEquals(1, awarded.oneTimeStageMilestones(stageIds[0]).size)
+        assertEquals(1, awarded.oneTimeStageMilestones(stageIds[1]).size)
+        assertEquals(2, awarded.awardEligibleMilestones(date.plusDays(1)).milestones.count { it.kind == "one_time_goal" })
+    }
+
+    @Test
+    fun one_time_stage_feedback_follows_stage_identity_across_parent_and_child_goals() {
+        val withParent = AttentionState().addTarget("父目标")
+        val parent = withParent.targets.single()
+        val withChild = withParent.addTarget("子目标", parent.id)
+        val child = withChild.targets.single { it.title == "子目标" }
+        val state = withChild
+            .addGoalStage(parent.id, GoalCadence.ONE_TIME, 20, date.toString())
+            .addGoalStage(child.id, GoalCadence.ONE_TIME, 20, date.toString())
+            .addTimeEntry(date.toString(), 20, child.id)
+
+        val awarded = state.awardEligibleMilestones(date)
+
+        assertEquals(2, awarded.milestones.count { it.kind == "one_time_goal" })
+        assertEquals(1, awarded.oneTimeStageMilestones(awarded.goalStages.single { it.targetId == parent.id }.id).size)
+        assertEquals(1, awarded.oneTimeStageMilestones(awarded.goalStages.single { it.targetId == child.id }.id).size)
     }
 
     @Test

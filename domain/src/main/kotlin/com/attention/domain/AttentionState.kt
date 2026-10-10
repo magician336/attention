@@ -196,6 +196,21 @@ data class GoalProgress(
     val completed: Boolean,
 )
 
+data class GoalStageSummary(
+    val stage: GoalStage,
+    val progress: GoalProgress,
+)
+
+data class GoalSummary(
+    val targetId: String,
+    val stageProgresses: List<GoalStageSummary>,
+    val targetMinutes: Int,
+    val actualMinutes: Int,
+    val gapMinutes: Int,
+    val excessMinutes: Int,
+    val completed: Boolean,
+)
+
 data class CapacitySummary(val capacityMinutes: Int?, val usedMinutes: Int, val overloaded: Boolean)
 
 data class PeriodStats(

@@ -12,6 +12,7 @@ import com.attention.domain.StoredSettings
 import com.attention.domain.TargetMove
 import com.attention.domain.TimeEntrySource
 import com.attention.domain.addGoalStage
+import com.attention.domain.appendOneTimeGoalStage
 import com.attention.domain.addFutureGoalRule
 import com.attention.domain.addMigration
 import com.attention.domain.addFutureTargetMove
@@ -101,7 +102,10 @@ class AttentionViewModel(
         runCommand { it.addTimeEntry(date, minutes, targetId, TimeEntrySource.MANUAL, note = note).recalculateExperience().awardEligibleMilestones(LocalDate.parse(date)) }
 
     fun editTime(id: String, minutes: Int, targetId: String?, note: String = "") =
-        runCommand { it.editTimeEntry(id, minutes, targetId, note).recalculateExperience() }
+        runCommand {
+            val edited = it.editTimeEntry(id, minutes, targetId, note).recalculateExperience()
+            edited.awardEligibleMilestones(LocalDate.now(zone))
+        }
 
     fun deleteTime(id: String) = runCommand { it.deleteTimeEntry(id).recalculateExperience() }
 
@@ -113,10 +117,23 @@ class AttentionViewModel(
         runCommand { it.updateFutureGoalRule(rule, notBefore) }
     fun cancelFutureGoal(ruleId: String, notBefore: LocalDate) =
         runCommand { it.cancelFutureGoalRule(ruleId, notBefore) }
+    fun appendOneTimeGoal(
+        targetId: String,
+        minutes: Int,
+        startDate: String,
+        dueDate: String? = null,
+        onSuccess: () -> Unit = {},
+    ) = runCommand(onSuccess = onSuccess) {
+         it.appendOneTimeGoalStage(targetId, minutes, startDate, dueDate)
+     }
     fun addMigration(migration: Migration) = runCommand { it.addMigration(migration) }
     fun updateMigration(migration: Migration) = runCommand { it.updateMigration(migration) }
     fun cancelMigration(migrationId: String) = runCommand { it.cancelMigration(migrationId) }
-    fun assignUnowned(entryIds: Set<String>, targetId: String) = runCommand { it.assignUnowned(entryIds, targetId) }
+    fun assignUnowned(entryIds: Set<String>, targetId: String) = runCommand {
+        it.assignUnowned(entryIds, targetId)
+            .recalculateExperience()
+            .awardEligibleMilestones(LocalDate.now(zone))
+    }
 
     fun addSchedule(entry: ScheduleEntry) = runCommand { it.addSchedule(entry) }
     fun updateSchedule(entry: ScheduleEntry) = runCommand { it.updateSchedule(entry) }
@@ -175,8 +192,12 @@ class AttentionViewModel(
             .onFailure { _error.value = it.message ?: "导入失败，现有数据未改变" }
     }
 
-    private fun runCommand(transform: (AttentionState) -> AttentionState) = scope.launch {
+    private fun runCommand(
+        onSuccess: () -> Unit = {},
+        transform: (AttentionState) -> AttentionState,
+    ) = scope.launch {
         runCatching { repository.updateBusiness(transform) }
+            .onSuccess { onSuccess() }
             .onFailure { _error.value = it.message ?: "操作未保存" }
     }
 

@@ -111,4 +111,17 @@ class AttentionBackupCodecTest {
 
         assertEquals(expected, AttentionBackupCodec.decode(AttentionBackupCodec.encode(expected)))
     }
+
+    @Test
+    fun backup_round_trip_preserves_multiple_one_time_stages_and_their_ids() {
+        val target = Target("target", title = "项目")
+        val first = GoalStage("first-stage", target.id, GoalCadence.ONE_TIME, 60, "2026-10-10", "2026-10-12", completed = true)
+        val second = GoalStage("second-stage", target.id, GoalCadence.ONE_TIME, 90, "2026-10-13")
+        val expected = AttentionState(targets = listOf(target), goalStages = listOf(first, second))
+
+        val restored = AttentionBackupCodec.decode(AttentionBackupCodec.encode(expected))
+
+        assertEquals(listOf(first, second), restored.goalStages)
+        assertEquals(listOf("first-stage", "second-stage"), restored.goalStages.map { it.id })
+    }
 }
