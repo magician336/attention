@@ -8,9 +8,12 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.attention.app.data.room.AttentionDatabase
+import com.attention.app.data.room.RoomBusinessDataRepository
 import com.attention.domain.AttentionState
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.Target
+import kotlinx.coroutines.runBlocking
 import org.junit.BeforeClass
 import org.junit.Rule
 import org.junit.Test
