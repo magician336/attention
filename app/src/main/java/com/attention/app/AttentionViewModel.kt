@@ -124,10 +124,10 @@ class AttentionViewModel(
         dueDate: String? = null,
         onSuccess: () -> Unit = {},
     ) = runCommand(onSuccess = onSuccess) {
-         it.appendOneTimeGoalStage(targetId, minutes, startDate, dueDate)
-     }
-    fun addMigration(migration: Migration) = runCommand { it.addMigration(migration) }
-    fun updateMigration(migration: Migration) = runCommand { it.updateMigration(migration) }
+        it.appendOneTimeGoalStage(targetId, minutes, startDate, dueDate)
+    }
+    fun addMigration(migration: Migration, onDate: LocalDate) = runCommand { it.addMigration(migration, onDate) }
+    fun updateMigration(migration: Migration, onDate: LocalDate) = runCommand { it.updateMigration(migration, onDate) }
     fun cancelMigration(migrationId: String) = runCommand { it.cancelMigration(migrationId) }
     fun assignUnowned(entryIds: Set<String>, targetId: String) = runCommand {
         it.assignUnowned(entryIds, targetId)
