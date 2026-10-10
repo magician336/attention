@@ -110,8 +110,8 @@ class AttentionViewModel(
     fun addFutureGoal(rule: FutureGoalRule) = runCommand { it.addFutureGoalRule(rule) }
     fun updateFutureGoal(rule: FutureGoalRule) = runCommand { it.updateFutureGoalRule(rule) }
     fun cancelFutureGoal(ruleId: String) = runCommand { it.cancelFutureGoalRule(ruleId) }
-    fun addMigration(migration: Migration) = runCommand { it.addMigration(migration) }
-    fun updateMigration(migration: Migration) = runCommand { it.updateMigration(migration) }
+    fun addMigration(migration: Migration, onDate: LocalDate? = null) = runCommand { it.addMigration(migration, onDate) }
+    fun updateMigration(migration: Migration, onDate: LocalDate? = null) = runCommand { it.updateMigration(migration, onDate) }
     fun cancelMigration(migrationId: String) = runCommand { it.cancelMigration(migrationId) }
     fun assignUnowned(entryIds: Set<String>, targetId: String) = runCommand {
         it.assignUnowned(entryIds, targetId)

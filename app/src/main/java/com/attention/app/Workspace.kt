@@ -55,6 +55,7 @@ import com.attention.app.data.settings.createSettingsStore
 import com.attention.app.timer.AttentionTimerService
 import com.attention.app.reminder.ReminderScheduler
 import com.attention.domain.AttentionState
+import com.attention.domain.availableMigrationMinutes
 import com.attention.domain.GoalCadence
 import com.attention.domain.FutureGoalRule
 import com.attention.domain.GoalStage
@@ -383,6 +384,10 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
     var futureCadence by remember { mutableStateOf(GoalCadence.WEEKLY) }
     var appendGoalMinutes by remember { mutableStateOf("") }
     var appendGoalDueDate by remember { mutableStateOf("") }
+    var migrationMinutes by remember { mutableStateOf("") }
+    var migrationStartDate by remember { mutableStateOf("") }
+    var migrationEndDate by remember { mutableStateOf("") }
+    var editingMigration by remember { mutableStateOf<Migration?>(null) }
     var pendingDelete by remember { mutableStateOf<Target?>(null) }
     var renameTarget by remember { mutableStateOf<Target?>(null) }
     var renameText by remember { mutableStateOf("") }
@@ -511,10 +516,90 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                             state.stageFeedbackLabels(stage).forEach { label ->
                                 Text(label, modifier = Modifier.padding(start = 16.dp))
                             }
-                            if (progress.gapMinutes > 0) {
-                                OutlinedButton(onClick = {
-                                    viewModel.addMigration(Migration(targetId = parentId!!, sourceStageId = stage.id, minutes = progress.gapMinutes, destinationStartDate = planningDate.plusDays(7).toString()))
-                                }) { Text("将当前缺口 ${progress.gapMinutes} 分钟迁移到下周") }
+                            val availableMigration = runCatching {
+                                state.availableMigrationMinutes(stage, planningDate)
+                            }.getOrDefault(0)
+                            if (progress.gapMinutes > 0 || state.migrations.any { it.sourceStageId == stage.id }) {
+                                Card(Modifier.fillMaxWidth()) {
+                                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Text("目标迁移：缺口 ${progress.gapMinutes} 分钟 · 仍可迁移 $availableMigration 分钟")
+                                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                            OutlinedTextField(
+                                                migrationMinutes,
+                                                { migrationMinutes = it.filter(Char::isDigit) },
+                                                label = { Text("迁移分钟") },
+                                                modifier = Modifier.width(110.dp).testTag("migration-minutes-${stage.id}"),
+                                                singleLine = true,
+                                            )
+                                            Spacer(Modifier.width(6.dp))
+                                            OutlinedTextField(
+                                                migrationStartDate.ifBlank { state.progressRange(stage, planningDate).endInclusive.plusDays(1).toString() },
+                                                { migrationStartDate = it },
+                                                label = { Text("目的开始日") },
+                                                modifier = Modifier.width(145.dp),
+                                                singleLine = true,
+                                            )
+                                            Spacer(Modifier.width(6.dp))
+                                            OutlinedTextField(
+                                                migrationEndDate,
+                                                { migrationEndDate = it },
+                                                label = { Text("目的结束日（可选）") },
+                                                modifier = Modifier.width(155.dp),
+                                                singleLine = true,
+                                            )
+                                        }
+                                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            Button(
+                                                enabled = migrationMinutes.toIntOrNull()?.let { it > 0 } == true,
+                                                modifier = Modifier.testTag("migration-submit-${stage.id}"),
+                                                onClick = {
+                                                    val minutes = migrationMinutes.toIntOrNull() ?: return@Button
+                                                    val start = migrationStartDate.ifBlank { state.progressRange(stage, planningDate).endInclusive.plusDays(1).toString() }
+                                                    val end = migrationEndDate.trim().takeIf(String::isNotEmpty)
+                                                    val current = editingMigration
+                                                    val migration = Migration(
+                                                        id = current?.id ?: com.attention.domain.newId(),
+                                                        targetId = parentId!!,
+                                                        sourceStageId = stage.id,
+                                                        minutes = minutes,
+                                                        destinationStartDate = start,
+                                                        destinationEndDate = end,
+                                                        cancelled = false,
+                                                    )
+                                                    if (current == null) viewModel.addMigration(migration, planningDate)
+                                                    else viewModel.updateMigration(migration, planningDate)
+                                                    migrationMinutes = ""
+                                                    migrationStartDate = ""
+                                                    migrationEndDate = ""
+                                                    editingMigration = null
+                                                },
+                                            ) { Text(if (editingMigration == null) "添加迁移" else "保存迁移") }
+                                            if (editingMigration != null) {
+                                                TextButton(onClick = {
+                                                    editingMigration = null
+                                                    migrationMinutes = ""
+                                                    migrationStartDate = ""
+                                                    migrationEndDate = ""
+                                                }) { Text("取消编辑") }
+                                            }
+                                        }
+                                        state.migrations.filter { it.sourceStageId == stage.id }.forEach { migration ->
+                                            Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                                val range = migration.destinationEndDate?.let { "${migration.destinationStartDate} 至 $it" } ?: migration.destinationStartDate
+                                                Text("${migration.minutes} 分钟 · $range${if (migration.cancelled) " · 已取消" else ""}", Modifier.weight(1f))
+                                                if (!migration.cancelled) {
+                                                    TextButton(onClick = {
+                                                        editingMigration = migration
+                                                        migrationMinutes = migration.minutes.toString()
+                                                        migrationStartDate = migration.destinationStartDate
+                                                        migrationEndDate = migration.destinationEndDate.orEmpty()
+                                                    }) { Text("编辑") }
+                                                    TextButton(onClick = { viewModel.cancelMigration(migration.id) }) { Text("取消迁移") }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                         val latest = stages.last()
