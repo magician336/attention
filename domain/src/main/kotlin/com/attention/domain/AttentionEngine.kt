@@ -90,13 +90,67 @@ fun AttentionState.progressRange(stage: GoalStage, onDate: LocalDate): ClosedRan
 fun AttentionState.progress(stage: GoalStage, onDate: LocalDate): GoalProgress {
     val effective = effectiveStage(stage, onDate)
     if (onDate.isBefore(LocalDate.parse(effective.startDate))) return GoalProgress(0, 0, 0, 0, false)
-    val range = progressRange(stage, onDate)
-    val actual = timeEntries.filter { it.targetId != null }
-        .filter { LocalDate.parse(it.planningDate) in range }
-        .filter { isDescendantAt(it.targetId!!, effective.targetId, LocalDate.parse(it.planningDate)) }
-        .sumOf { it.durationMinutes }
+    val actual = entriesForProgress(stage, onDate).sumOf { it.durationMinutes }
     val gap = (effective.targetMinutes - actual).coerceAtLeast(0)
     return GoalProgress(effective.targetMinutes, actual, gap, (actual - effective.targetMinutes).coerceAtLeast(0), actual >= effective.targetMinutes)
+}
+
+private fun AttentionState.entriesForProgress(
+    stage: GoalStage,
+    onDate: LocalDate,
+    excludedEntryIds: Set<String> = emptySet(),
+): List<TimeEntry> {
+    val effective = effectiveStage(stage, onDate)
+    if (onDate.isBefore(LocalDate.parse(effective.startDate))) return emptyList()
+    val range = progressRange(stage, onDate)
+    return timeEntries.filter { it.id !in excludedEntryIds && it.targetId != null }
+        .filter { LocalDate.parse(it.planningDate) in range }
+        .filter { isDescendantAt(it.targetId!!, effective.targetId, LocalDate.parse(it.planningDate)) }
+}
+
+private fun AttentionState.progressForSummary(
+    stage: GoalStage,
+    onDate: LocalDate,
+    claimedEntryIds: MutableSet<String>,
+): GoalProgress {
+    val effective = effectiveStage(stage, onDate)
+    val targetMinutes = effective.targetMinutes
+    val start = LocalDate.parse(effective.startDate)
+    if (onDate.isBefore(start)) return GoalProgress(targetMinutes, 0, targetMinutes, 0, false)
+
+    val matchingEntries = entriesForProgress(stage, onDate, claimedEntryIds)
+    claimedEntryIds += matchingEntries.map { it.id }
+    val actual = matchingEntries.sumOf { it.durationMinutes }
+    val gap = (targetMinutes - actual).coerceAtLeast(0)
+    return GoalProgress(targetMinutes, actual, gap, (actual - targetMinutes).coerceAtLeast(0), actual >= targetMinutes)
+}
+
+/**
+ * Returns the target-level roll-up for all one-time stages owned by a target.
+ * Each matching time entry is claimed by at most one stage in this summary,
+ * while hierarchy membership remains date-aware so historical target moves are
+ * evaluated against the tree that existed on the entry's planning date.
+ */
+fun AttentionState.goalSummary(targetId: String, onDate: LocalDate): GoalSummary {
+    val claimedEntryIds = mutableSetOf<String>()
+    val stageProgresses = goalStagesForTarget(targetId)
+        .filter { it.cadence == GoalCadence.ONE_TIME }
+        .map { stage ->
+            GoalStageSummary(stage, progressForSummary(stage, onDate, claimedEntryIds))
+        }
+    val targetMinutes = stageProgresses.sumOf { it.progress.targetMinutes }
+    val actualMinutes = stageProgresses.sumOf { it.progress.actualMinutes }
+    val gapMinutes = stageProgresses.sumOf { it.progress.gapMinutes }
+    val excessMinutes = stageProgresses.sumOf { it.progress.excessMinutes }
+    return GoalSummary(
+        targetId = targetId,
+        stageProgresses = stageProgresses,
+        targetMinutes = targetMinutes,
+        actualMinutes = actualMinutes,
+        gapMinutes = gapMinutes,
+        excessMinutes = excessMinutes,
+        completed = stageProgresses.isNotEmpty() && stageProgresses.all { it.progress.completed },
+    )
 }
 
 fun AttentionState.effectiveStage(stage: GoalStage, onDate: LocalDate): GoalStage {

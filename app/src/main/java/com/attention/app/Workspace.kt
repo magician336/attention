@@ -58,6 +58,8 @@ import com.attention.domain.AttentionState
 import com.attention.domain.GoalCadence
 import com.attention.domain.FutureGoalRule
 import com.attention.domain.GoalStage
+import com.attention.domain.GoalStageSummary
+import com.attention.domain.GoalSummary
 import com.attention.domain.LaunchDestination
 import com.attention.domain.Migration
 import com.attention.domain.ScheduleEntry
@@ -71,6 +73,7 @@ import com.attention.domain.directMinutes
 import com.attention.domain.descendantIds
 import com.attention.domain.effectiveStage
 import com.attention.domain.goalStagesForTarget
+import com.attention.domain.goalSummary
 import com.attention.domain.levelForExperience
 import com.attention.domain.planningDate
 import com.attention.domain.periodStats
@@ -338,8 +341,8 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
                             editMinutes = entry.durationMinutes.toString()
                             editNote = entry.note
                             editTargetId = entry.targetId
-                        }) { Text("编辑") }
-                        TextButton(onClick = { viewModel.deleteTime(entry.id) }) { Text("删除") }
+                        }, modifier = Modifier.testTag("edit-time-${entry.id}")) { Text("编辑") }
+                        TextButton(onClick = { viewModel.deleteTime(entry.id) }, modifier = Modifier.testTag("delete-time-${entry.id}")) { Text("删除") }
                     }
                     if (editingEntry?.id == entry.id) {
                         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -349,11 +352,11 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
                             }
                         }
                         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                            OutlinedTextField(editMinutes, { editMinutes = it.filter(Char::isDigit) }, label = { Text("分钟") }, modifier = Modifier.width(120.dp), singleLine = true)
+                            OutlinedTextField(editMinutes, { editMinutes = it.filter(Char::isDigit) }, label = { Text("分钟") }, modifier = Modifier.testTag("edit-time-minutes-${entry.id}").width(120.dp), singleLine = true)
                             Spacer(Modifier.width(8.dp))
                             OutlinedTextField(editNote, { editNote = it }, label = { Text("备注") }, modifier = Modifier.width(180.dp), singleLine = true)
                             Spacer(Modifier.width(8.dp))
-                            Button(onClick = { editMinutes.toIntOrNull()?.takeIf { it > 0 }?.let { viewModel.editTime(entry.id, it, editTargetId, editNote); editingEntry = null } }) { Text("保存") }
+                            Button(modifier = Modifier.testTag("save-time-${entry.id}"), onClick = { editMinutes.toIntOrNull()?.takeIf { it > 0 }?.let { viewModel.editTime(entry.id, it, editTargetId, editNote); editingEntry = null } }) { Text("保存") }
                         }
                     }
                 }
@@ -484,6 +487,7 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                     val planningDate = parsedPlanningDate ?: state.planningDate(Instant.now())
                     val target = state.targets.firstOrNull { it.id == parentId }
                     val stages = state.goalStagesForTarget(parentId!!)
+                    val oneTimeSummary = state.goalSummary(parentId!!, planningDate)
                     if (stages.isNotEmpty()) {
                         Text("当前目标进度", style = MaterialTheme.typography.titleSmall)
                         OutlinedTextField(
@@ -496,9 +500,13 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                         if (parsedPlanningDate == null) {
                             Text("规划日格式无效，请使用 YYYY-MM-DD", color = MaterialTheme.colorScheme.error)
                         }
+                        if (oneTimeSummary.stageProgresses.isNotEmpty()) {
+                            Text(oneTimeSummary.summaryLabel())
+                        }
                         stages.forEach { stage ->
+                            val detail = oneTimeSummary.stageProgresses.firstOrNull { it.stage.id == stage.id }
                             val progress = state.progress(stage, planningDate)
-                            Text(state.goalProgressLabel(stage, planningDate))
+                            Text(detail?.let { state.goalProgressLabel(it, planningDate) } ?: state.goalProgressLabel(stage, planningDate))
                             if (progress.gapMinutes > 0) {
                                 OutlinedButton(onClick = {
                                     viewModel.addMigration(Migration(targetId = parentId!!, sourceStageId = stage.id, minutes = progress.gapMinutes, destinationStartDate = planningDate.plusDays(7).toString()))
@@ -600,8 +608,17 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                         TextButton(onClick = { pendingDelete = target }) { Text("安全删除") }
                     }
                     val planningDate = state.planningDate(Instant.now())
-                    state.goalStagesForTarget(target.id).forEach { stage ->
-                        Text("历史进度：${state.goalProgressLabel(stage, planningDate)}", modifier = Modifier.padding(start = 16.dp))
+                    val stages = state.goalStagesForTarget(target.id)
+                    val oneTimeSummary = state.goalSummary(target.id, planningDate)
+                    if (oneTimeSummary.stageProgresses.isNotEmpty()) {
+                        Text("历史进度：${oneTimeSummary.summaryLabel()}", modifier = Modifier.padding(start = 16.dp))
+                    }
+                    stages.forEach { stage ->
+                        val detail = oneTimeSummary.stageProgresses.firstOrNull { it.stage.id == stage.id }
+                        Text(
+                            "历史进度：${detail?.let { state.goalProgressLabel(it, planningDate) } ?: state.goalProgressLabel(stage, planningDate)}",
+                            modifier = Modifier.padding(start = 16.dp),
+                        )
                     }
                 }
             }
@@ -640,8 +657,17 @@ private fun TargetTree(
                 Text(target.title, modifier = Modifier.weight(1f))
                 Text("直接 ${state.directMinutes(target.id)} / 汇总 ${state.subtreeMinutes(target.id)} 分钟")
             }
-            state.goalStagesForTarget(target.id).forEach { stage ->
-                Text(state.goalProgressLabel(stage, planningDate), modifier = Modifier.padding(start = 22.dp))
+            val stages = state.goalStagesForTarget(target.id)
+            val oneTimeSummary = state.goalSummary(target.id, planningDate)
+            if (oneTimeSummary.stageProgresses.isNotEmpty()) {
+                Text(oneTimeSummary.summaryLabel(), modifier = Modifier.padding(start = 22.dp))
+            }
+            stages.forEach { stage ->
+                val detail = oneTimeSummary.stageProgresses.firstOrNull { it.stage.id == stage.id }
+                Text(
+                    detail?.let { state.goalProgressLabel(it, planningDate) } ?: state.goalProgressLabel(stage, planningDate),
+                    modifier = Modifier.padding(start = 22.dp),
+                )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 TextButton(onClick = { viewModel.toggleTarget(target.id, !target.expanded) }) { Text(if (target.expanded) "折叠" else "展开") }
@@ -783,8 +809,15 @@ private fun StatisticsScreen(
         state.targets.filter { !it.archived }.forEach { target ->
             val total = state.subtreeMinutes(target.id)
             Text("${target.title}：$total 分钟")
-            state.goalStagesForTarget(target.id).forEach { stage ->
-                Text(state.goalProgressLabel(stage, LocalDate.parse(date)))
+            val planningDate = LocalDate.parse(date)
+            val stages = state.goalStagesForTarget(target.id)
+            val oneTimeSummary = state.goalSummary(target.id, planningDate)
+            if (oneTimeSummary.stageProgresses.isNotEmpty()) {
+                Text(oneTimeSummary.summaryLabel())
+            }
+            stages.forEach { stage ->
+                val detail = oneTimeSummary.stageProgresses.firstOrNull { it.stage.id == stage.id }
+                Text(detail?.let { state.goalProgressLabel(it, planningDate) } ?: state.goalProgressLabel(stage, planningDate))
             }
         }
         if (state.targets.isEmpty()) Text("创建计划后，这里会显示目标投入和阶段达成情况。")
@@ -798,9 +831,13 @@ private fun resolveLaunchDestination(requested: LaunchDestination, lastOpened: L
 
 private fun AttentionState.unownedMinutesForUi(): Int = timeEntries.filter { it.targetId == null }.sumOf { it.durationMinutes }
 
-private fun AttentionState.goalProgressLabel(stage: GoalStage, planningDate: LocalDate): String {
+private fun AttentionState.goalProgressLabel(stage: GoalStage, planningDate: LocalDate): String =
+    goalProgressLabel(GoalStageSummary(stage, progress(stage, planningDate)), planningDate)
+
+private fun AttentionState.goalProgressLabel(detail: GoalStageSummary, planningDate: LocalDate): String {
+    val stage = detail.stage
     val effectiveStage = effectiveStage(stage, planningDate)
-    val progress = progress(stage, planningDate)
+    val progress = detail.progress
     val progressRange = progressRange(stage, planningDate)
     val stageStart = LocalDate.parse(effectiveStage.startDate)
     val rangeLabel = when (effectiveStage.cadence) {
@@ -825,6 +862,9 @@ private fun AttentionState.goalProgressLabel(stage: GoalStage, planningDate: Loc
         "${effectiveStage.cadence.label()}目标 ${progress.actualMinutes}/${progress.targetMinutes} 分钟 · $rangeLabel · $status"
     }
 }
+
+private fun GoalSummary.summaryLabel(): String =
+    "一次性阶段汇总：实际 ${actualMinutes}/${targetMinutes} 分钟 · 缺口 ${gapMinutes} 分钟 · 超额投入 ${excessMinutes} 分钟 · ${if (completed) "达成" else "未达成"}"
 
 private fun AttentionState.targetPath(targetId: String): String {
     val names = mutableListOf<String>()
