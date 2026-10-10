@@ -7,7 +7,7 @@ Configure the setup command in Codex with the platform-specific command below:
 ## Windows
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File "$CODEX_WORKTREE_PATH\scripts\codex\setup.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$CODEX_WORKTREE_PATH\scripts\codex\worktree-setup.ps1"
 ```
 
 ## macOS/Linux/WSL
