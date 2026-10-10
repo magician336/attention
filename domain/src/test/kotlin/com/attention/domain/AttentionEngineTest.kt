@@ -4,6 +4,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -141,6 +142,86 @@ class AttentionEngineTest {
         val assigned = withEntries.assignUnowned(withEntries.timeEntries.map { it.id }.toSet(), target.id)
         assertEquals(25L, assigned.experience)
         assertEquals(25, assigned.subtreeMinutes(target.id))
+    }
+
+    @Test
+    fun editing_time_entry_preserves_planning_date_and_source() {
+        val state = AttentionState().addTarget("学习")
+        val target = state.targets.single()
+        val withEntry = state.addTimeEntry(
+            date.toString(),
+            25,
+            target.id,
+            TimeEntrySource.IMPORT,
+            occurredAtEpochMillis = 1234L,
+            note = "原备注",
+        )
+        val entry = withEntry.timeEntries.single()
+
+        val edited = withEntry.editTimeEntry(entry.id, 40, null, "新备注")
+        val result = edited.timeEntries.single()
+        assertEquals(date.toString(), result.planningDate)
+        assertEquals(TimeEntrySource.IMPORT, result.source)
+        assertEquals(1234L, result.occurredAtEpochMillis)
+        assertEquals(40, result.durationMinutes)
+        assertEquals(null, result.targetId)
+        assertEquals("新备注", result.note)
+    }
+
+    @Test
+    fun archived_targets_reject_new_or_reassigned_time_entries() {
+        val state = AttentionState().addTarget("旧计划")
+        val target = state.targets.single()
+        val archived = state.archiveTarget(target.id)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            archived.addTimeEntry(date.toString(), 10, target.id)
+        }
+        val unowned = archived.addTimeEntry(date.toString(), 10).timeEntries.single()
+        assertThrows(IllegalArgumentException::class.java) {
+            archived.assignUnowned(setOf(unowned.id), target.id)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            archived.startTimer(target.id, Instant.parse("2026-10-08T00:00:00Z"), utc)
+        }
+    }
+
+    @Test
+    fun batch_assignment_is_atomic_for_stale_or_already_owned_ids() {
+        val state = AttentionState().addTarget("学习")
+        val target = state.targets.single()
+        val withEntries = state.addTimeEntry(date.toString(), 10).addTimeEntry(date.toString(), 15, target.id)
+        val before = withEntries
+
+        assertThrows(IllegalArgumentException::class.java) {
+            withEntries.assignUnowned(setOf(withEntries.timeEntries[0].id, "missing"), target.id)
+        }
+        assertEquals(before, withEntries)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            withEntries.assignUnowned(withEntries.timeEntries.map { it.id }.toSet(), target.id)
+        }
+        assertEquals(before, withEntries)
+    }
+
+    @Test
+    fun deleting_time_entry_updates_goal_progress_and_period_stats() {
+        val state = AttentionState().addTarget("学习")
+        val target = state.targets.single()
+        val withGoal = state.addGoalStage(target.id, GoalCadence.DAILY, 30, date.toString())
+        val withEntries = withGoal
+            .addTimeEntry(date.toString(), 20, target.id)
+            .addTimeEntry(date.toString(), 15, target.id)
+        val firstEntry = withEntries.timeEntries.first()
+
+        val deleted = withEntries.deleteTimeEntry(firstEntry.id)
+        val progress = deleted.progress(deleted.goalStages.single(), date)
+        val stats = deleted.periodStats(date, GoalCadence.DAILY)
+
+        assertEquals(15, progress.actualMinutes)
+        assertEquals(15, progress.gapMinutes)
+        assertEquals(15, stats.actualMinutes)
+        assertEquals(15, deleted.subtreeMinutes(target.id))
     }
 
     @Test
