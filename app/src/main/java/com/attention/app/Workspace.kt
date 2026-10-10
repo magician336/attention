@@ -64,6 +64,7 @@ import com.attention.domain.ScheduleFrequency
 import com.attention.domain.RecurrenceRule
 import com.attention.domain.StoredSettings
 import com.attention.domain.Target
+import com.attention.domain.TargetMove
 import com.attention.domain.TimeEntry
 import com.attention.domain.capacitySummary
 import com.attention.domain.directMinutes
@@ -73,10 +74,12 @@ import com.attention.domain.goalRulesAt
 import com.attention.domain.levelForExperience
 import com.attention.domain.planningDate
 import com.attention.domain.periodStats
+import com.attention.domain.parentAt
 import com.attention.domain.progress
 import com.attention.domain.progressRange
 import com.attention.domain.subtreeMinutes
 import com.attention.domain.targetChildren
+import com.attention.domain.descendantIdsAt
 import java.time.Instant
 import java.time.LocalDate
 
@@ -382,6 +385,9 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
     var renameTarget by remember { mutableStateOf<Target?>(null) }
     var renameText by remember { mutableStateOf("") }
     var movingTarget by remember { mutableStateOf<Target?>(null) }
+    var editingMove by remember { mutableStateOf<TargetMove?>(null) }
+    var moveParentId by remember { mutableStateOf<String?>(null) }
+    var moveEffectiveDate by remember { mutableStateOf("") }
     var selectedUnownedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("目标树", style = MaterialTheme.typography.headlineMedium)
@@ -523,8 +529,23 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                         }
                     }
                     val target = state.targets.firstOrNull { it.id == parentId }
-                    if (target?.parentId != null) {
-                        OutlinedButton(onClick = { viewModel.moveTargetFrom(target.id, null, state.planningDate(Instant.now()).plusDays(1).toString()) }) { Text("从明日起移到根计划") }
+                    if (target != null) {
+                        val futureMove = state.targetMoves
+                            .filter { it.targetId == target.id }
+                            .filter { runCatching { LocalDate.parse(it.effectiveFrom) }.getOrNull()?.isAfter(planningDate) == true }
+                            .minByOrNull { it.effectiveFrom }
+                        if (futureMove != null) {
+                            Text("待生效移动：${futureMove.effectiveFrom} → ${futureMove.parentId?.let { state.targetPath(it, LocalDate.parse(futureMove.effectiveFrom)) } ?: "根计划"}")
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                OutlinedButton(onClick = {
+                                    movingTarget = target
+                                    editingMove = futureMove
+                                    moveParentId = futureMove.parentId
+                                    moveEffectiveDate = futureMove.effectiveFrom
+                                }) { Text("编辑移动") }
+                                TextButton(onClick = { viewModel.cancelFutureTargetMove(futureMove.id) }) { Text("取消移动") }
+                            }
+                        }
                     }
                 }
             }
@@ -537,19 +558,71 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
             }
         }
         movingTarget?.let { target ->
-            val excludedIds = state.descendantIds(target.id)
+            val parsedEffectiveDate = runCatching { LocalDate.parse(moveEffectiveDate) }.getOrNull()
+            val excludedIds = state.descendantIds(target.id) +
+                (parsedEffectiveDate?.let { state.descendantIdsAt(target.id, it) } ?: emptySet())
+            val pendingMoves = state.targetMoves
+                .filter { it.targetId == target.id }
+                .filter { runCatching { LocalDate.parse(it.effectiveFrom) }.getOrNull()?.isAfter(planningDate) == true }
+                .sortedBy { it.effectiveFrom }
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("移动 ${target.title}：选择新的父目标", style = MaterialTheme.typography.titleSmall)
-                    OutlinedButton(onClick = { viewModel.moveTarget(target.id, null); movingTarget = null }) { Text("移到根计划") }
+                    OutlinedTextField(
+                        moveEffectiveDate,
+                        { moveEffectiveDate = it },
+                        label = { Text("生效规划日") },
+                        modifier = Modifier.width(160.dp),
+                        singleLine = true,
+                    )
+                    if (parsedEffectiveDate == null || !parsedEffectiveDate.isAfter(planningDate)) {
+                        Text("生效日必须晚于当前规划日 $planningDate", color = MaterialTheme.colorScheme.error)
+                    }
+                    if (moveParentId == null) Button(onClick = {}) { Text("移到根计划") }
+                    else OutlinedButton(onClick = { moveParentId = null }) { Text("移到根计划") }
                     state.targets
                         .filter { !it.archived && it.id !in excludedIds }
-                        .sortedBy { state.targetPath(it.id) }
+                        .sortedBy { state.targetPath(it.id, parsedEffectiveDate ?: planningDate) }
                         .forEach { candidate ->
-                            OutlinedButton(onClick = { viewModel.moveTarget(target.id, candidate.id); movingTarget = null }) {
-                                Text("移到：${state.targetPath(candidate.id)}")
+                            if (moveParentId == candidate.id) {
+                                Button(onClick = {}) { Text("移到：${state.targetPath(candidate.id, parsedEffectiveDate ?: planningDate)}") }
+                            } else {
+                                OutlinedButton(onClick = { moveParentId = candidate.id }) {
+                                    Text("移到：${state.targetPath(candidate.id, parsedEffectiveDate ?: planningDate)}")
+                                }
                             }
                         }
+                    Button(
+                        enabled = parsedEffectiveDate?.isAfter(planningDate) == true,
+                        onClick = {
+                            val effectiveFrom = parsedEffectiveDate?.toString() ?: return@Button
+                            val existing = editingMove
+                            if (existing == null) {
+                                viewModel.moveTargetFrom(target.id, moveParentId, effectiveFrom)
+                            } else {
+                                viewModel.updateFutureTargetMove(existing.copy(parentId = moveParentId, effectiveFrom = effectiveFrom))
+                            }
+                            movingTarget = null
+                            editingMove = null
+                        },
+                    ) { Text(if (editingMove == null) "保存未来移动" else "保存移动修改") }
+                    if (pendingMoves.isNotEmpty()) {
+                        Text("待生效移动", style = MaterialTheme.typography.titleSmall)
+                        pendingMoves.forEach { move ->
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                Text(
+                                    "${move.effectiveFrom} → ${move.parentId?.let { state.targetPath(it, LocalDate.parse(move.effectiveFrom)) } ?: "根计划"}",
+                                    Modifier.weight(1f),
+                                )
+                                TextButton(onClick = {
+                                    editingMove = move
+                                    moveParentId = move.parentId
+                                    moveEffectiveDate = move.effectiveFrom
+                                }) { Text("编辑") }
+                                TextButton(onClick = { viewModel.cancelFutureTargetMove(move.id) }) { Text("取消") }
+                            }
+                        }
+                    }
                     TextButton(onClick = { movingTarget = null }) { Text("取消移动") }
                 }
             }
@@ -561,7 +634,12 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
             0,
             chooseParent = { parentId = it },
             rename = { target -> renameTarget = target; renameText = target.title },
-            move = { movingTarget = it },
+            move = {
+                movingTarget = it
+                editingMove = null
+                moveParentId = state.parentAt(it.id, planningDate)
+                moveEffectiveDate = planningDate.plusDays(1).toString()
+            },
         )
         if (state.targets.none { !it.archived }) Text("还没有计划。")
         if (state.targets.any { it.archived }) {
@@ -604,15 +682,25 @@ private fun TargetTree(
     rename: (Target) -> Unit,
     move: (Target) -> Unit,
 ) {
-    state.targetChildren(parentId).forEach { target ->
-        val children = state.targetChildren(target.id)
-        val planningDate = state.planningDate(Instant.now())
+    val planningDate = state.planningDate(Instant.now())
+    state.targetChildren(parentId, planningDate).forEach { target ->
+        val children = state.targetChildren(target.id, planningDate)
+        val pendingMove = state.targetMoves
+            .filter { it.targetId == target.id }
+            .filter { runCatching { LocalDate.parse(it.effectiveFrom) }.getOrNull()?.isAfter(planningDate) == true }
+            .minByOrNull { it.effectiveFrom }
         Column(Modifier.padding(start = (depth * 16).dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                 Text(if (children.isEmpty()) "•" else if (target.expanded) "▾" else "▸")
                 Spacer(Modifier.width(6.dp))
                 Text(target.title, modifier = Modifier.weight(1f))
                 Text("直接 ${state.directMinutes(target.id)} / 汇总 ${state.subtreeMinutes(target.id)} 分钟")
+            }
+            pendingMove?.let { move ->
+                Text(
+                    "待移动：${move.effectiveFrom} → ${move.parentId?.let { state.targetPath(it, LocalDate.parse(move.effectiveFrom)) } ?: "根计划"}",
+                    modifier = Modifier.padding(start = 22.dp),
+                )
             }
             state.goalStages.filter { it.targetId == target.id }.forEach { stage ->
                 Text(state.goalProgressLabel(stage, planningDate), modifier = Modifier.padding(start = 22.dp))
@@ -622,7 +710,7 @@ private fun TargetTree(
                 TextButton(onClick = { chooseParent(target.id) }) { Text("添加子计划") }
                 TextButton(onClick = { rename(target) }) { Text("重命名") }
                 TextButton(onClick = { move(target) }) { Text("移动") }
-                val siblings = state.targetChildren(parentId)
+                val siblings = state.targetChildren(parentId, planningDate)
                 val index = siblings.indexOf(target)
                 if (index > 0) TextButton(onClick = { viewModel.reorderTarget(target.id, index - 1) }) { Text("上移") }
                 if (index < siblings.lastIndex) TextButton(onClick = { viewModel.reorderTarget(target.id, index + 1) }) { Text("下移") }
@@ -797,13 +885,14 @@ private fun AttentionState.goalProgressLabel(stage: GoalStage, planningDate: Loc
     }
 }
 
-private fun AttentionState.targetPath(targetId: String): String {
+private fun AttentionState.targetPath(targetId: String, onDate: LocalDate? = null): String {
     val names = mutableListOf<String>()
     val seen = mutableSetOf<String>()
     var current = targets.firstOrNull { it.id == targetId }
     while (current != null && seen.add(current.id)) {
         names += current.title
-        current = current.parentId?.let { parentId -> targets.firstOrNull { it.id == parentId } }
+        val parentId = onDate?.let { parentAt(current.id, it) } ?: current.parentId
+        current = parentId?.let { id -> targets.firstOrNull { it.id == id } }
     }
     return names.asReversed().joinToString(" / ")
 }

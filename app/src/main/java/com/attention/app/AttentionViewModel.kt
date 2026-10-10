@@ -9,11 +9,13 @@ import com.attention.domain.LaunchDestination
 import com.attention.domain.RecurrenceRule
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.StoredSettings
+import com.attention.domain.TargetMove
 import com.attention.domain.TimeEntrySource
 import com.attention.domain.addGoalStage
 import com.attention.domain.addFutureGoalRule
 import com.attention.domain.addMigration
 import com.attention.domain.addFutureTargetMove
+import com.attention.domain.cancelFutureTargetMove
 import com.attention.domain.addRecurrence
 import com.attention.domain.addSchedule
 import com.attention.domain.addTarget
@@ -45,6 +47,8 @@ import com.attention.domain.setTargetExpanded
 import com.attention.domain.moveTarget
 import com.attention.domain.reorderTarget
 import com.attention.domain.materializeOccurrences
+import com.attention.domain.planningDate
+import com.attention.domain.updateFutureTargetMove
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -77,7 +81,15 @@ class AttentionViewModel(
     fun addTarget(title: String, parentId: String? = null) = runCommand { it.addTarget(title, parentId) }
     fun renameTarget(id: String, title: String) = runCommand { it.renameTarget(id, title) }
     fun moveTarget(id: String, parentId: String?) = runCommand { it.moveTarget(id, parentId) }
-    fun moveTargetFrom(id: String, parentId: String?, effectiveFrom: String) = runCommand { it.addFutureTargetMove(id, parentId, effectiveFrom) }
+    fun moveTargetFrom(id: String, parentId: String?, effectiveFrom: String) = runCommand {
+        it.addFutureTargetMove(id, parentId, effectiveFrom, it.planningDate(Instant.now(), zone))
+    }
+    fun updateFutureTargetMove(move: TargetMove) = runCommand {
+        it.updateFutureTargetMove(move, it.planningDate(Instant.now(), zone))
+    }
+    fun cancelFutureTargetMove(moveId: String) = runCommand {
+        it.cancelFutureTargetMove(moveId, it.planningDate(Instant.now(), zone))
+    }
     fun reorderTarget(id: String, newIndex: Int) = runCommand { it.reorderTarget(id, newIndex) }
     fun toggleTarget(id: String, expanded: Boolean) = runCommand { it.setTargetExpanded(id, expanded) }
     fun archiveTarget(id: String) = runCommand { it.archiveTarget(id) }

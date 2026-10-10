@@ -667,4 +667,87 @@ class AttentionEngineTest {
         assertEquals(child.id, moved.targets.single { it.id == child.id }.id)
         assertEquals(listOf("已有子计划", "子计划"), moved.targetChildren(newParent.id).map { it.title })
     }
+
+    @Test
+    fun future_target_moves_select_the_latest_effective_parent_by_planning_date() {
+        val state = AttentionState().addTarget("旧父目标").addTarget("新父目标").addTarget("最终父目标")
+        val oldParent = state.targets[0]
+        val newParent = state.targets[1]
+        val finalParent = state.targets[2]
+        val withChild = state.addTarget("子计划", oldParent.id)
+        val child = withChild.targets.single { it.title == "子计划" }
+        val moved = withChild
+            .addFutureTargetMove(child.id, newParent.id, date.plusDays(1).toString(), date)
+            .addFutureTargetMove(child.id, finalParent.id, date.plusDays(3).toString(), date)
+
+        assertEquals(oldParent.id, moved.parentAt(child.id, date))
+        assertEquals(newParent.id, moved.parentAt(child.id, date.plusDays(1)))
+        assertEquals(finalParent.id, moved.parentAt(child.id, date.plusDays(4)))
+        assertEquals(listOf(child.id), moved.targetChildren(newParent.id, date.plusDays(1)).map { it.id })
+        assertEquals(listOf(child.id), moved.targetChildren(finalParent.id, date.plusDays(4)).map { it.id })
+    }
+
+    @Test
+    fun future_target_move_rejects_invalid_parent_dates_and_cycles() {
+        val state = AttentionState().addTarget("父目标").addTarget("另一个父目标")
+        val parent = state.targets[0]
+        val otherParent = state.targets[1]
+        val withChild = state.addTarget("子计划", parent.id)
+        val child = withChild.targets.single { it.title == "子计划" }
+
+        assertThrows(IllegalArgumentException::class.java) {
+            withChild.addFutureTargetMove(child.id, child.id, date.plusDays(1).toString(), date)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            withChild.addFutureTargetMove(parent.id, child.id, date.plusDays(1).toString(), date)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            withChild.addFutureTargetMove(child.id, "missing", date.plusDays(1).toString(), date)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            withChild.addFutureTargetMove(child.id, otherParent.id, date.toString(), date)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            withChild.addFutureTargetMove(child.id, otherParent.id, "not-a-date", date)
+        }
+
+        val scheduled = withChild.addFutureTargetMove(parent.id, otherParent.id, date.plusDays(1).toString(), date)
+        assertThrows(IllegalArgumentException::class.java) {
+            scheduled.addFutureTargetMove(otherParent.id, parent.id, date.plusDays(2).toString(), date)
+        }
+
+        val laterMove = withChild.addFutureTargetMove(parent.id, otherParent.id, date.plusDays(5).toString(), date)
+        assertThrows(IllegalArgumentException::class.java) {
+            laterMove.addFutureTargetMove(otherParent.id, parent.id, date.plusDays(1).toString(), date)
+        }
+    }
+
+    @Test
+    fun pending_target_moves_can_be_updated_or_cancelled_without_touching_stable_id() {
+        val state = AttentionState().addTarget("旧父目标").addTarget("新父目标")
+        val oldParent = state.targets[0]
+        val newParent = state.targets[1]
+        val withChild = state.addTarget("子计划", oldParent.id)
+        val child = withChild.targets.single { it.title == "子计划" }
+        val scheduled = withChild.addFutureTargetMove(child.id, newParent.id, date.plusDays(1).toString(), date)
+        val move = scheduled.targetMoves.single()
+
+        val updated = scheduled.updateFutureTargetMove(
+            move.copy(parentId = null, effectiveFrom = date.plusDays(2).toString()),
+            date,
+        )
+        assertEquals(move.id, updated.targetMoves.single().id)
+        assertEquals(null, updated.parentAt(child.id, date.plusDays(2)))
+
+        val cancelled = updated.cancelFutureTargetMove(move.id, date)
+        assertTrue(cancelled.targetMoves.isEmpty())
+        assertEquals(oldParent.id, cancelled.parentAt(child.id, date.plusDays(3)))
+
+        assertThrows(IllegalArgumentException::class.java) {
+            scheduled.cancelFutureTargetMove(move.id, date.plusDays(1))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            scheduled.updateFutureTargetMove(move.copy(parentId = null), date.plusDays(1))
+        }
+    }
 }

@@ -95,4 +95,20 @@ class AttentionBackupCodecTest {
 
         assertEquals(expected, AttentionBackupCodec.decode(AttentionBackupCodec.encode(expected)))
     }
+
+    @Test
+    fun backup_round_trip_preserves_multiple_target_moves_and_their_ordering_fields() {
+        val oldParent = Target("old-parent", title = "旧父目标")
+        val newParent = Target("new-parent", title = "新父目标")
+        val child = Target("child", parentId = oldParent.id, title = "子计划")
+        val expected = AttentionState(
+            targets = listOf(oldParent, newParent, child),
+            targetMoves = listOf(
+                TargetMove("move-1", child.id, newParent.id, "2026-11-01"),
+                TargetMove("move-2", child.id, null, "2026-12-01"),
+            ),
+        )
+
+        assertEquals(expected, AttentionBackupCodec.decode(AttentionBackupCodec.encode(expected)))
+    }
 }

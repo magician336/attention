@@ -15,8 +15,10 @@ fun AttentionState.planningDate(
     }
 }
 
-fun AttentionState.targetChildren(parentId: String?): List<Target> = targets
-    .filter { it.parentId == parentId && !it.archived }
+fun AttentionState.targetChildren(parentId: String?, onDate: LocalDate? = null): List<Target> = targets
+    .filter { target ->
+        !target.archived && (onDate?.let { parentAt(target.id, it) == parentId } ?: (target.parentId == parentId))
+    }
     .sortedBy { it.sortOrder }
 
 fun AttentionState.descendantIds(targetId: String): Set<String> {
@@ -28,6 +30,10 @@ fun AttentionState.descendantIds(targetId: String): Set<String> {
     }
     return result
 }
+
+fun AttentionState.descendantIdsAt(targetId: String, onDate: LocalDate): Set<String> = targets
+    .filter { isDescendantAt(it.id, targetId, onDate) }
+    .mapTo(mutableSetOf()) { it.id }
 
 private fun AttentionState.isDescendantAt(candidateId: String, ancestorId: String, date: LocalDate): Boolean {
     var current: String? = candidateId
@@ -192,7 +198,9 @@ fun AttentionState.deleteTargetRelations(targetIds: Set<String>): AttentionState
         schedules = schedules.map { if (it.targetId in ids) it.copy(targetId = null) else it },
         migrations = migrations.filterNot { it.targetId in ids },
         futureGoalRules = futureGoalRules.filterNot { it.targetId in ids },
-        targetMoves = targetMoves.filterNot { it.targetId in ids },
+        targetMoves = targetMoves
+            .filterNot { it.targetId in ids }
+            .map { move -> if (move.parentId != null && move.parentId in ids) move.copy(parentId = null) else move },
     )
 }
 
@@ -417,19 +425,75 @@ fun AttentionState.snapshot(stage: GoalStage, periodStart: LocalDate, periodEnd:
     )
 }
 
-fun AttentionState.addFutureTargetMove(targetId: String, parentId: String?, effectiveFrom: String): AttentionState {
-    require(targets.any { it.id == targetId })
-    require(parentId == null || targets.any { it.id == parentId })
-    require(parentId == null || parentId !in descendantIds(targetId))
-    LocalDate.parse(effectiveFrom)
-    return copy(targetMoves = targetMoves + TargetMove(targetId = targetId, parentId = parentId, effectiveFrom = effectiveFrom))
+fun AttentionState.addFutureTargetMove(
+    targetId: String,
+    parentId: String?,
+    effectiveFrom: String,
+    notBefore: LocalDate? = null,
+): AttentionState {
+    val move = TargetMove(targetId = targetId, parentId = parentId, effectiveFrom = effectiveFrom)
+    validateFutureTargetMove(move, notBefore)
+    return copy(targetMoves = targetMoves + move)
 }
 
-fun AttentionState.parentAt(targetId: String, date: LocalDate): String? = targetMoves
-    .filter { it.targetId == targetId && !LocalDate.parse(it.effectiveFrom).isAfter(date) }
-    .maxByOrNull { it.effectiveFrom }
-    ?.parentId
-    ?: targets.firstOrNull { it.id == targetId }?.parentId
+fun AttentionState.updateFutureTargetMove(move: TargetMove, notBefore: LocalDate? = null): AttentionState {
+    val existing = targetMoves.firstOrNull { it.id == move.id } ?: error("未来目标移动不存在")
+    require(existing.targetId == move.targetId) { "不能修改未来目标移动的目标" }
+    validateFutureTargetMove(move, notBefore, replacingId = move.id)
+    return copy(targetMoves = targetMoves.map { if (it.id == move.id) move else it })
+}
+
+fun AttentionState.cancelFutureTargetMove(moveId: String, notBefore: LocalDate? = null): AttentionState {
+    val existing = targetMoves.firstOrNull { it.id == moveId } ?: error("未来目标移动不存在")
+    val effectiveFrom = LocalDate.parse(existing.effectiveFrom)
+    require(notBefore == null || effectiveFrom.isAfter(notBefore)) { "只能取消尚未生效的目标移动" }
+    return copy(targetMoves = targetMoves.filterNot { it.id == moveId })
+}
+
+private fun AttentionState.validateFutureTargetMove(
+    move: TargetMove,
+    notBefore: LocalDate?,
+    replacingId: String? = null,
+) {
+    require(targets.any { it.id == move.targetId }) { "目标不存在" }
+    require(move.parentId == null || targets.any { it.id == move.parentId && !it.archived }) {
+        "新的父目标不存在或已归档"
+    }
+    require(move.parentId == null || move.parentId !in descendantIds(move.targetId)) {
+        "不能移动到自身或后代目标"
+    }
+    val effectiveFrom = runCatching { LocalDate.parse(move.effectiveFrom) }
+        .getOrElse { throw IllegalArgumentException("生效日无效", it) }
+    require(notBefore == null || effectiveFrom.isAfter(notBefore)) { "生效日必须晚于当前规划日" }
+    require(targetMoves.none {
+        it.id != replacingId && it.targetId == move.targetId && it.effectiveFrom == move.effectiveFrom
+    }) { "同一目标在同一生效日只能有一条移动记录" }
+
+    val movesWithCandidate = targetMoves.filterNot { it.id == replacingId } + move
+    val validationDates = movesWithCandidate
+        .map { LocalDate.parse(it.effectiveFrom) }
+        .filterNot { it.isBefore(effectiveFrom) }
+        .distinct()
+    validationDates.forEach { validationDate ->
+        var current = move.parentId
+        val seen = mutableSetOf<String>()
+        while (current != null) {
+            require(current != move.targetId) { "目标移动会形成循环" }
+            require(seen.add(current)) { "目标移动会形成循环" }
+            current = parentAt(current, validationDate, movesWithCandidate)
+        }
+    }
+}
+
+private fun AttentionState.parentAt(targetId: String, date: LocalDate, moves: List<TargetMove>): String? {
+    val applicable = moves
+        .asSequence()
+        .filter { it.targetId == targetId && !LocalDate.parse(it.effectiveFrom).isAfter(date) }
+        .maxWithOrNull(compareBy<TargetMove> { LocalDate.parse(it.effectiveFrom) }.thenBy { it.id })
+    return if (applicable != null) applicable.parentId else targets.firstOrNull { it.id == targetId }?.parentId
+}
+
+fun AttentionState.parentAt(targetId: String, date: LocalDate): String? = parentAt(targetId, date, targetMoves)
 
 fun AttentionState.materializeOccurrences(rule: RecurrenceRule, through: LocalDate): AttentionState {
     val generated = occurrences(rule, through)

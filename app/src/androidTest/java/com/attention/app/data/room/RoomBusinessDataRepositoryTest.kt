@@ -142,6 +142,19 @@ class RoomBusinessDataRepositoryTest {
     }
 
     @Test
+    fun target_move_round_trip_preserves_stable_id_parent_and_effective_date() = runBlocking {
+        val oldParent = Target("old-parent", title = "旧父目标")
+        val newParent = Target("new-parent", title = "新父目标")
+        val child = Target("child", parentId = oldParent.id, title = "子计划")
+        val move = TargetMove("move-child", child.id, newParent.id, "2026-11-01")
+        val repository = RoomBusinessDataRepository(database)
+
+        repository.replace(AttentionState(targets = listOf(oldParent, newParent, child), targetMoves = listOf(move)))
+
+        assertEquals(listOf(move), repository.read().targetMoves)
+    }
+
+    @Test
     fun deleting_target_relations_removes_descendants_leaf_first() = runBlocking {
         val parent = Target("parent", title = "父目标")
         val child = Target("child", parentId = parent.id, title = "子目标")
