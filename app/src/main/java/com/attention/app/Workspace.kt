@@ -9,6 +9,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -24,6 +25,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -69,6 +72,7 @@ import com.attention.domain.StoredSettings
 import com.attention.domain.Target
 import com.attention.domain.TimeEntry
 import com.attention.domain.capacitySummary
+import com.attention.domain.agendaEntries
 import com.attention.domain.directMinutes
 import com.attention.domain.descendantIds
 import com.attention.domain.effectiveStage
@@ -110,6 +114,7 @@ fun WorkspaceApp() {
     var destination by remember {
         mutableStateOf(resolveLaunchDestination(state.launchDestination, state.lastOpenedDestination))
     }
+    var selectedAgendaDate by remember { mutableStateOf<String?>(null) }
     var jsonPreview by remember { mutableStateOf<String?>(null) }
     var csvPreview by remember { mutableStateOf<String?>(null) }
     var pendingImport by remember { mutableStateOf<String?>(null) }
@@ -149,7 +154,12 @@ fun WorkspaceApp() {
             when (destination) {
                 LaunchDestination.TODAY, LaunchDestination.LAST_OPENED -> WorkspaceTodayScreen(state, viewModel)
                 LaunchDestination.TARGETS -> TargetsScreen(state, viewModel)
-                LaunchDestination.ALL_DATES -> AgendaScreen(state, viewModel)
+                LaunchDestination.ALL_DATES -> AgendaScreen(
+                    state = state,
+                    viewModel = viewModel,
+                    selectedDate = selectedAgendaDate,
+                    onSelectedDateChange = { selectedAgendaDate = it },
+                )
                 LaunchDestination.STATISTICS -> StatisticsScreen(
                     state = state,
                     viewModel = viewModel,
@@ -696,17 +706,68 @@ private fun TargetTree(
 }
 
 @Composable
-private fun AgendaScreen(state: AttentionState, viewModel: AttentionViewModel) {
-    var date by remember { mutableStateOf(state.planningDate(Instant.now()).toString()) }
+private fun AgendaScreen(
+    state: AttentionState,
+    viewModel: AttentionViewModel,
+    selectedDate: String?,
+    onSelectedDateChange: (String?) -> Unit,
+) {
+    val today = state.planningDate(Instant.now())
+    var date by remember(selectedDate) { mutableStateOf(selectedDate ?: today.toString()) }
     var title by remember { mutableStateOf("") }
     var estimate by remember { mutableStateOf("") }
     var recurrenceTitle by remember { mutableStateOf("") }
     var recurrenceFrequency by remember { mutableStateOf(ScheduleFrequency.DAILY) }
+    var dateMenuExpanded by remember { mutableStateOf(false) }
+    var dateError by remember { mutableStateOf(false) }
+    val availableDates = remember(state.schedules, today) {
+        (state.schedules.mapNotNull { runCatching { LocalDate.parse(it.planningDate) }.getOrNull() } + today)
+            .distinct()
+            .sorted()
+    }
+    val filteredDate = selectedDate?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+    val agendaEntries = state.agendaEntries(filteredDate)
+    fun selectDate(value: String?) {
+        onSelectedDateChange(value)
+        date = value ?: today.toString()
+        dateError = false
+    }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("所有日期", style = MaterialTheme.typography.headlineMedium)
+        Text(if (selectedDate == null) "所有日期" else "规划日 $selectedDate", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.testTag("agenda-filter"))
         Text("日程条目可带预计时长；它不会自动变成实际投入。")
+        Box {
+            OutlinedButton(onClick = { dateMenuExpanded = true }, modifier = Modifier.testTag("agenda-date-menu")) {
+                Text(if (selectedDate == null) "筛选：所有日期" else "筛选：规划日 $selectedDate")
+            }
+            DropdownMenu(expanded = dateMenuExpanded, onDismissRequest = { dateMenuExpanded = false }) {
+                DropdownMenuItem(
+                    text = { Text("所有日期") },
+                    onClick = { selectDate(null); dateMenuExpanded = false },
+                    modifier = Modifier.testTag("agenda-all-dates"),
+                )
+                availableDates.forEach { availableDate ->
+                    DropdownMenuItem(
+                        text = { Text("规划日 $availableDate") },
+                        onClick = { selectDate(availableDate.toString()); dateMenuExpanded = false },
+                        modifier = Modifier.testTag("agenda-date-$availableDate"),
+                    )
+                }
+            }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(date, { date = it }, label = { Text("规划日 YYYY-MM-DD") }, modifier = Modifier.weight(1f), singleLine = true)
+            OutlinedTextField(
+                date,
+                { date = it; dateError = false },
+                label = { Text("新增日程规划日 YYYY-MM-DD") },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                isError = dateError,
+                supportingText = if (dateError) ({ Text("请输入有效的规划日") }) else null,
+            )
+            OutlinedButton(onClick = {
+                val parsed = runCatching { LocalDate.parse(date) }.getOrNull()
+                if (parsed == null) dateError = true else selectDate(parsed.toString())
+            }) { Text("打开规划日") }
             OutlinedTextField(estimate, { estimate = it.filter(Char::isDigit) }, label = { Text("预计分钟") }, modifier = Modifier.width(110.dp), singleLine = true)
         }
         Card(Modifier.fillMaxWidth()) {
@@ -720,12 +781,13 @@ private fun AgendaScreen(state: AttentionState, viewModel: AttentionViewModel) {
                     }
                 }
                 Button(onClick = {
-                    if (recurrenceTitle.isNotBlank()) {
-                        val rule = RecurrenceRule(title = recurrenceTitle, startDate = date, frequency = recurrenceFrequency, weekdays = if (recurrenceFrequency == ScheduleFrequency.WEEKLY) listOf(LocalDate.parse(date).dayOfWeek.value) else emptyList())
+                    val parsedDate = runCatching { LocalDate.parse(date) }.getOrNull()
+                    if (recurrenceTitle.isNotBlank() && parsedDate != null) {
+                        val rule = RecurrenceRule(title = recurrenceTitle, startDate = parsedDate.toString(), frequency = recurrenceFrequency, weekdays = if (recurrenceFrequency == ScheduleFrequency.WEEKLY) listOf(parsedDate.dayOfWeek.value) else emptyList())
                         viewModel.addRecurrence(rule)
-                        viewModel.materializeRecurrence(rule, LocalDate.parse(date).plusDays(30))
+                        viewModel.materializeRecurrence(rule, parsedDate.plusDays(30))
                         recurrenceTitle = ""
-                    }
+                    } else dateError = true
                 }) { Text("创建并生成未来 30 天") }
                 state.recurrenceRules.forEach { rule ->
                     Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
@@ -745,8 +807,18 @@ private fun AgendaScreen(state: AttentionState, viewModel: AttentionViewModel) {
                 }
             }) { Text("添加日程") }
         }
-        state.schedules.sortedBy { it.planningDate }.forEach { ScheduleRow(it, viewModel) }
-        if (state.schedules.isEmpty()) Text("还没有日程条目。")
+        if (agendaEntries.isEmpty()) {
+            Text(if (selectedDate == null) "所有日期暂无日程条目。" else "规划日 $selectedDate 暂无日程条目。", modifier = Modifier.testTag("agenda-empty"))
+        } else {
+            var lastPlanningDate: String? = null
+            agendaEntries.forEach { entry ->
+                if (selectedDate == null && entry.planningDate != lastPlanningDate) {
+                    Text("规划日 ${entry.planningDate}", style = MaterialTheme.typography.titleMedium)
+                    lastPlanningDate = entry.planningDate
+                }
+                ScheduleRow(entry, viewModel)
+            }
+        }
     }
 }
 

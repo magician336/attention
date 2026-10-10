@@ -15,6 +15,22 @@ fun AttentionState.planningDate(
     }
 }
 
+/**
+ * Returns the agenda entries for a planning day, or every entry when no day is selected.
+ * Entries are ordered by planning day, start time, end time, and stable id so that the
+ * all-dates view does not change order when Room emits the same rows again.
+ */
+fun AttentionState.agendaEntries(planningDate: LocalDate? = null): List<ScheduleEntry> = schedules
+    .asSequence()
+    .filter { planningDate == null || it.planningDate == planningDate.toString() }
+    .sortedWith(
+        compareBy<ScheduleEntry> { it.planningDate }
+            .thenBy { it.startMinute ?: Int.MAX_VALUE }
+            .thenBy { it.endMinute ?: Int.MAX_VALUE }
+            .thenBy { it.id },
+    )
+    .toList()
+
 fun AttentionState.targetChildren(parentId: String?): List<Target> = targets
     .filter { it.parentId == parentId && !it.archived }
     .sortedBy { it.sortOrder }
