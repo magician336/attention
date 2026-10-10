@@ -372,6 +372,9 @@ fun AttentionState.goalRulesAt(targetId: String, onDate: LocalDate): List<Future
     .filter { it.targetId == targetId && !LocalDate.parse(it.effectiveFrom).isAfter(onDate) }
     .sortedWith(compareBy<FutureGoalRule> { LocalDate.parse(it.effectiveFrom) }.thenBy { it.id })
 
+fun FutureGoalRule.isPending(onDate: LocalDate): Boolean =
+    runCatching { LocalDate.parse(effectiveFrom).isAfter(onDate) }.getOrDefault(false)
+
 fun AttentionState.goalRuleAt(targetId: String, stageId: String?, onDate: LocalDate): FutureGoalRule? = futureGoalRules
     .asSequence()
     .filter { it.targetId == targetId && (it.stageId.isBlank() || it.stageId == stageId) }

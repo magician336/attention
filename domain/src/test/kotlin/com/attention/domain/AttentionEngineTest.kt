@@ -428,6 +428,9 @@ class AttentionEngineTest {
         assertEquals(180, future.goalRulesAt(target.id, date.plusDays(8)).single().targetMinutes)
         assertEquals(1, future.periodSnapshots.size)
         assertEquals(30, future.periodSnapshots.single().gapMinutes)
+        val futureRule = future.futureGoalRules.single()
+        assertTrue(futureRule.isPending(date))
+        assertFalse(futureRule.isPending(date.plusDays(7)))
     }
 
     @Test
@@ -631,16 +634,26 @@ class AttentionEngineTest {
         val newParent = state.targets.last()
         val moved = state.addTarget("子计划", oldParent.id)
         val child = moved.targets.single { it.title == "子计划" }
-        val withHistory = moved
+        val stageState = moved
+            .addGoalStage(child.id, GoalCadence.WEEKLY, 60, date.toString())
             .addTimeEntry(date.toString(), 20, child.id)
-            .addTimeEntry(date.plusDays(2).toString(), 15, child.id)
-            .addFutureTargetMove(child.id, newParent.id, date.plusDays(1).toString(), date)
-        assertEquals(20, withHistory.subtreeMinutes(oldParent.id))
-        assertEquals(15, withHistory.subtreeMinutes(newParent.id))
-        assertEquals(20, withHistory.subtreeMinutes(oldParent.id, date.toString()))
-        assertEquals(0, withHistory.subtreeMinutes(oldParent.id, date.plusDays(2).toString()))
-        assertEquals(0, withHistory.subtreeMinutes(newParent.id, date.toString()))
-        assertEquals(15, withHistory.subtreeMinutes(newParent.id, date.plusDays(2).toString()))
+            .addTimeEntry(date.plusDays(2).toString(), 15, child.id, TimeEntrySource.TIMER, 123L, "计时")
+        val snapshot = stageState.snapshot(stageState.goalStages.single(), date, date.plusDays(6))
+        val withHistory = stageState.addPeriodSnapshot(snapshot)
+        val historicalStages = withHistory.goalStages
+        val historicalEntries = withHistory.timeEntries
+        val historicalSnapshots = withHistory.periodSnapshots
+        val scheduled = withHistory.addFutureTargetMove(child.id, newParent.id, date.plusDays(1).toString(), date)
+
+        assertEquals(historicalStages, scheduled.goalStages)
+        assertEquals(historicalEntries, scheduled.timeEntries)
+        assertEquals(historicalSnapshots, scheduled.periodSnapshots)
+        assertEquals(20, scheduled.subtreeMinutes(oldParent.id))
+        assertEquals(15, scheduled.subtreeMinutes(newParent.id))
+        assertEquals(20, scheduled.subtreeMinutes(oldParent.id, date.toString()))
+        assertEquals(0, scheduled.subtreeMinutes(oldParent.id, date.plusDays(2).toString()))
+        assertEquals(0, scheduled.subtreeMinutes(newParent.id, date.toString()))
+        assertEquals(15, scheduled.subtreeMinutes(newParent.id, date.plusDays(2).toString()))
     }
 
     @Test

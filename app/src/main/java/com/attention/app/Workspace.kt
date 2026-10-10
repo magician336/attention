@@ -73,6 +73,7 @@ import com.attention.domain.effectiveStage
 import com.attention.domain.futureTargetMoveParents
 import com.attention.domain.goalRulesAt
 import com.attention.domain.isFutureTargetMoveDate
+import com.attention.domain.isPending
 import com.attention.domain.levelForExperience
 import com.attention.domain.parseTargetMoveDate
 import com.attention.domain.pendingTargetMoves
@@ -503,7 +504,7 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                         }
                     }) { Text(if (editingFutureRuleId == null) "保存未来规则" else "更新未来规则") }
                     state.futureGoalRules.filter { it.targetId == parentId }.forEach { rule ->
-                        val pending = LocalDate.parse(rule.effectiveFrom).isAfter(planningDate)
+                        val pending = rule.isPending(planningDate)
                         Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                             Text("${rule.effectiveFrom} · ${rule.cadence.label()} ${rule.targetMinutes} 分钟${rule.dueDate?.let { " · 截止 $it" } ?: ""}${if (pending) " · 待生效" else " · 当前/历史"}", Modifier.weight(1f))
                             if (pending) {
