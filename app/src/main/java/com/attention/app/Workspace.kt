@@ -540,12 +540,28 @@ private fun TargetTree(
 ) {
     state.targetChildren(parentId).forEach { target ->
         val children = state.targetChildren(target.id)
+        val planningDate = state.planningDate(Instant.now())
         Column(Modifier.padding(start = (depth * 16).dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                 Text(if (children.isEmpty()) "•" else if (target.expanded) "▾" else "▸")
                 Spacer(Modifier.width(6.dp))
                 Text(target.title, modifier = Modifier.weight(1f))
                 Text("直接 ${state.directMinutes(target.id)} / 汇总 ${state.subtreeMinutes(target.id)} 分钟")
+            }
+            state.goalStages.filter { it.targetId == target.id }.forEach { stage ->
+                val progress = state.progress(stage, planningDate)
+                val stageStart = LocalDate.parse(stage.startDate)
+                val summary = if (planningDate.isBefore(stageStart)) {
+                    "${stage.cadence.label()}目标 ${stage.targetMinutes} 分钟 · 尚未开始"
+                } else {
+                    val status = when {
+                        progress.excessMinutes > 0 -> "达成 · 超额 ${progress.excessMinutes} 分钟"
+                        progress.completed -> "达成"
+                        else -> "缺口 ${progress.gapMinutes} 分钟"
+                    }
+                    "${stage.cadence.label()}目标 ${progress.actualMinutes}/${progress.targetMinutes} 分钟 · $status"
+                }
+                Text(summary, modifier = Modifier.padding(start = 22.dp))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 TextButton(onClick = { viewModel.toggleTarget(target.id, !target.expanded) }) { Text(if (target.expanded) "折叠" else "展开") }

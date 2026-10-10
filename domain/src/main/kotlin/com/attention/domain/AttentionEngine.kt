@@ -196,7 +196,7 @@ fun AttentionState.addGoalStage(
     startDate: String,
     dueDate: String? = null,
 ): AttentionState {
-    require(targets.any { it.id == targetId })
+    require(targets.any { it.id == targetId && !it.archived }) { "目标必须未归档" }
     require(targetMinutes > 0)
     LocalDate.parse(startDate)
     dueDate?.let(LocalDate::parse)

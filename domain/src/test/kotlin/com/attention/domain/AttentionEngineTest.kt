@@ -55,6 +55,57 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun daily_goal_progress_uses_only_the_current_planning_date_and_all_entry_sources() {
+        val withTarget = AttentionState().addTarget("英语")
+        val target = withTarget.targets.single()
+        val withGoal = withTarget.addGoalStage(target.id, GoalCadence.DAILY, 30, date.toString())
+        val state = withGoal
+            .addTimeEntry(date.minusDays(1).toString(), 20, target.id, TimeEntrySource.TIMER)
+            .addTimeEntry(date.toString(), 10, target.id, TimeEntrySource.MANUAL)
+            .addTimeEntry(date.toString(), 20, target.id, TimeEntrySource.IMPORT)
+
+        val progress = state.progress(state.goalStages.single(), date)
+
+        assertEquals(30, progress.actualMinutes)
+        assertEquals(30, progress.targetMinutes)
+        assertEquals(0, progress.gapMinutes)
+        assertEquals(0, progress.excessMinutes)
+        assertTrue(progress.completed)
+
+        val excess = state.addTimeEntry(date.toString(), 5, target.id).progress(state.goalStages.single(), date)
+        assertEquals(35, excess.actualMinutes)
+        assertEquals(5, excess.excessMinutes)
+        assertEquals(0, excess.gapMinutes)
+        assertTrue(excess.completed)
+    }
+
+    @Test
+    fun adding_a_goal_to_an_archived_target_is_rejected_without_changing_state() {
+        val state = AttentionState().addTarget("旧计划")
+        val target = state.targets.single()
+        val archived = state.archiveTarget(target.id)
+        val before = archived
+
+        assertThrows(IllegalArgumentException::class.java) {
+            archived.addGoalStage(target.id, GoalCadence.DAILY, 30, date.toString())
+        }
+        assertEquals(before, archived)
+    }
+
+    @Test
+    fun daily_goal_rejects_non_positive_minutes_and_invalid_start_dates() {
+        val state = AttentionState().addTarget("学习")
+        val target = state.targets.single()
+
+        assertThrows(IllegalArgumentException::class.java) {
+            state.addGoalStage(target.id, GoalCadence.DAILY, 0, date.toString())
+        }
+        assertThrows(java.time.format.DateTimeParseException::class.java) {
+            state.addGoalStage(target.id, GoalCadence.DAILY, 30, "not-a-date")
+        }
+    }
+
+    @Test
     fun timer_crossing_planning_boundary_creates_two_entries() {
         val withTarget = AttentionState().addTarget("专注")
         val target = withTarget.targets.single()
