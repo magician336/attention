@@ -1,0 +1,20 @@
+{
+  "date": "2026-10-10",
+  "mode": "code",
+  "detected": {
+    "languages": ["kotlin"],
+    "frameworks": ["android", "jetpack-compose", "room", "datastore", "coroutines", "kotlinx-serialization"],
+    "database": "room",
+    "buildTool": "gradle-kotlin-dsl",
+    "modules": ["app", "domain"],
+  "testFrameworks": ["junit", "androidx-instrumentation", "compose-ui-test"]
+  },
+  "tools": ["codegraph"],
+  "codegraph": {
+    "enabled": true,
+    "indexPath": ".codegraph/",
+    "mcpTool": "codegraph_explore"
+  },
+  "selectedSkills": ["android", "kotlin", "room", "jetpack-compose", "testing"],
+  "selectedAgents": ["android-reviewer", "kotlin-reviewer", "test-reviewer"]
+}
