@@ -46,8 +46,10 @@ fun AttentionState.directMinutes(targetId: String, date: String? = null): Int = 
 
 fun AttentionState.subtreeMinutes(targetId: String, date: String? = null): Int {
     return if (date == null) {
-        val ids = descendantIds(targetId)
-        timeEntries.filter { it.targetId in ids }.sumOf { it.durationMinutes }
+        timeEntries
+            .filter { it.targetId != null }
+            .filter { isDescendantAt(it.targetId!!, targetId, LocalDate.parse(it.planningDate)) }
+            .sumOf { it.durationMinutes }
     } else {
         val parsed = LocalDate.parse(date)
         timeEntries.filter { it.planningDate == date && it.targetId != null && isDescendantAt(it.targetId, targetId, parsed) }

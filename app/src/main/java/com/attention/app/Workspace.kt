@@ -56,6 +56,7 @@ import com.attention.app.reminder.ReminderScheduler
 import com.attention.domain.AttentionState
 import com.attention.domain.GoalCadence
 import com.attention.domain.FutureGoalRule
+import com.attention.domain.GoalStage
 import com.attention.domain.LaunchDestination
 import com.attention.domain.Migration
 import com.attention.domain.ScheduleEntry
@@ -471,12 +472,19 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                             TextButton(onClick = { viewModel.cancelFutureGoal(rule.id) }) { Text("取消") }
                         }
                     }
-                    val stage = state.goalStages.firstOrNull { it.targetId == parentId }
-                    val gap = stage?.let { state.gapForUi(it, state.planningDate(Instant.now())) } ?: 0
-                    if (stage != null && gap > 0) {
-                        OutlinedButton(onClick = {
-                            viewModel.addMigration(Migration(targetId = parentId!!, sourceStageId = stage.id, minutes = gap, destinationStartDate = state.planningDate(Instant.now()).plusDays(7).toString()))
-                        }) { Text("将当前缺口 $gap 分钟迁移到下周") }
+                    val planningDate = state.planningDate(Instant.now())
+                    val stages = state.goalStages.filter { it.targetId == parentId }
+                    if (stages.isNotEmpty()) {
+                        Text("当前目标进度", style = MaterialTheme.typography.titleSmall)
+                        stages.forEach { stage ->
+                            val progress = state.progress(stage, planningDate)
+                            Text(state.goalProgressLabel(stage, planningDate))
+                            if (progress.gapMinutes > 0) {
+                                OutlinedButton(onClick = {
+                                    viewModel.addMigration(Migration(targetId = parentId!!, sourceStageId = stage.id, minutes = progress.gapMinutes, destinationStartDate = planningDate.plusDays(7).toString()))
+                                }) { Text("将当前缺口 ${progress.gapMinutes} 分钟迁移到下周") }
+                            }
+                        }
                     }
                     val target = state.targets.firstOrNull { it.id == parentId }
                     if (target?.parentId != null) {
@@ -523,10 +531,16 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
         if (state.targets.any { it.archived }) {
             Text("已归档目标", style = MaterialTheme.typography.titleMedium)
             state.targets.filter { it.archived }.forEach { target ->
-                Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Text(target.title, Modifier.weight(1f))
-                    TextButton(onClick = { viewModel.restoreTarget(target.id) }) { Text("恢复") }
-                    TextButton(onClick = { pendingDelete = target }) { Text("安全删除") }
+                Column(Modifier.fillMaxWidth()) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Text(target.title, Modifier.weight(1f))
+                        TextButton(onClick = { viewModel.restoreTarget(target.id) }) { Text("恢复") }
+                        TextButton(onClick = { pendingDelete = target }) { Text("安全删除") }
+                    }
+                    val planningDate = state.planningDate(Instant.now())
+                    state.goalStages.filter { it.targetId == target.id }.forEach { stage ->
+                        Text("历史进度：${state.goalProgressLabel(stage, planningDate)}", modifier = Modifier.padding(start = 16.dp))
+                    }
                 }
             }
         }
@@ -565,28 +579,7 @@ private fun TargetTree(
                 Text("直接 ${state.directMinutes(target.id)} / 汇总 ${state.subtreeMinutes(target.id)} 分钟")
             }
             state.goalStages.filter { it.targetId == target.id }.forEach { stage ->
-                val effectiveStage = state.effectiveStage(stage, planningDate)
-                val progress = state.progress(stage, planningDate)
-                val progressRange = state.progressRange(stage, planningDate)
-                val stageStart = LocalDate.parse(effectiveStage.startDate)
-                val rangeLabel = when (effectiveStage.cadence) {
-                    GoalCadence.ONE_TIME -> {
-                        val openLabel = if (effectiveStage.dueDate == null) " · 开放" else " · 截止 ${effectiveStage.dueDate}"
-                        "范围 ${progressRange.start} 至 ${progressRange.endInclusive}$openLabel"
-                    }
-                    else -> "周期 ${progressRange.start} 至 ${progressRange.endInclusive}"
-                }
-                val summary = if (planningDate.isBefore(stageStart)) {
-                    "${effectiveStage.cadence.label()}目标 ${effectiveStage.targetMinutes} 分钟 · 尚未开始 · 生效日 $stageStart · $rangeLabel"
-                } else {
-                    val status = when {
-                        progress.excessMinutes > 0 -> "达成 · 超额 ${progress.excessMinutes} 分钟"
-                        progress.completed -> "达成"
-                        else -> "缺口 ${progress.gapMinutes} 分钟"
-                    }
-                    "${effectiveStage.cadence.label()}目标 ${progress.actualMinutes}/${progress.targetMinutes} 分钟 · $rangeLabel · $status"
-                }
-                Text(summary, modifier = Modifier.padding(start = 22.dp))
+                Text(state.goalProgressLabel(stage, planningDate), modifier = Modifier.padding(start = 22.dp))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 TextButton(onClick = { viewModel.toggleTarget(target.id, !target.expanded) }) { Text(if (target.expanded) "折叠" else "展开") }
@@ -744,7 +737,29 @@ private fun resolveLaunchDestination(requested: LaunchDestination, lastOpened: L
 
 private fun AttentionState.unownedMinutesForUi(): Int = timeEntries.filter { it.targetId == null }.sumOf { it.durationMinutes }
 
-private fun AttentionState.gapForUi(stage: com.attention.domain.GoalStage, date: LocalDate): Int = progress(stage, date).gapMinutes
+private fun AttentionState.goalProgressLabel(stage: GoalStage, planningDate: LocalDate): String {
+    val effectiveStage = effectiveStage(stage, planningDate)
+    val progress = progress(stage, planningDate)
+    val progressRange = progressRange(stage, planningDate)
+    val stageStart = LocalDate.parse(effectiveStage.startDate)
+    val rangeLabel = when (effectiveStage.cadence) {
+        GoalCadence.ONE_TIME -> {
+            val openLabel = if (effectiveStage.dueDate == null) " · 开放" else " · 截止 ${effectiveStage.dueDate}"
+            "范围 ${progressRange.start} 至 ${progressRange.endInclusive}$openLabel"
+        }
+        else -> "周期 ${progressRange.start} 至 ${progressRange.endInclusive}"
+    }
+    return if (planningDate.isBefore(stageStart)) {
+        "${effectiveStage.cadence.label()}目标 ${effectiveStage.targetMinutes} 分钟 · 尚未开始 · 生效日 $stageStart · $rangeLabel"
+    } else {
+        val status = when {
+            progress.excessMinutes > 0 -> "达成 · 超额 ${progress.excessMinutes} 分钟"
+            progress.completed -> "达成"
+            else -> "缺口 ${progress.gapMinutes} 分钟"
+        }
+        "${effectiveStage.cadence.label()}目标 ${progress.actualMinutes}/${progress.targetMinutes} 分钟 · $rangeLabel · $status"
+    }
+}
 
 private fun AttentionState.targetPath(targetId: String): String {
     val names = mutableListOf<String>()
