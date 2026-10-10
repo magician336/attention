@@ -207,10 +207,57 @@ fun AttentionState.addGoalStage(
 ): AttentionState {
     require(targets.any { it.id == targetId && !it.archived }) { "目标必须未归档" }
     require(targetMinutes > 0)
+    require(cadence != GoalCadence.ONE_TIME || goalStages.none { it.targetId == targetId && it.cadence == GoalCadence.ONE_TIME }) {
+        "已有一次性阶段，请使用追加阶段"
+    }
     val parsedStart = LocalDate.parse(startDate)
     val parsedDue = dueDate?.let(LocalDate::parse)
     require(parsedDue == null || !parsedDue.isBefore(parsedStart)) { "截止日期不能早于开始日期" }
     return copy(goalStages = goalStages + GoalStage(targetId = targetId, cadence = cadence, targetMinutes = targetMinutes, startDate = startDate, dueDate = dueDate))
+}
+
+/**
+ * Returns a target's stages in the order in which their planning dates begin.
+ * The stable stage ID breaks ties so the result remains deterministic after a
+ * backup restore or a Room query.
+ */
+fun AttentionState.goalStagesForTarget(targetId: String): List<GoalStage> = goalStages
+    .filter { it.targetId == targetId }
+    .sortedWith(compareBy<GoalStage> { LocalDate.parse(it.startDate) }.thenBy { it.id })
+
+/**
+ * Appends a new one-time stage after the target's latest stage is achieved.
+ * Validation happens before creating the new stage, so a rejected command
+ * leaves every existing collection unchanged.
+ */
+fun AttentionState.appendOneTimeGoalStage(
+    targetId: String,
+    targetMinutes: Int,
+    startDate: String,
+    dueDate: String? = null,
+): AttentionState {
+    require(targets.any { it.id == targetId && !it.archived }) { "目标必须未归档" }
+    require(targetMinutes > 0) { "目标分钟必须为正整数" }
+
+    val parsedStart = LocalDate.parse(startDate)
+    val parsedDue = dueDate?.let(LocalDate::parse)
+    require(parsedDue == null || !parsedDue.isBefore(parsedStart)) { "截止日期不能早于开始日期" }
+
+    val previous = goalStagesForTarget(targetId).lastOrNull()
+    require(previous != null) { "目标没有可追加的一次性阶段" }
+    require(previous.cadence == GoalCadence.ONE_TIME) { "只能在一次性阶段后追加" }
+    require(parsedStart.isAfter(LocalDate.parse(previous.startDate))) { "新阶段开始日期必须晚于上一阶段" }
+    require(progress(previous, parsedStart).completed) { "上一阶段尚未达成" }
+
+    return copy(
+        goalStages = goalStages + GoalStage(
+            targetId = targetId,
+            cadence = GoalCadence.ONE_TIME,
+            targetMinutes = targetMinutes,
+            startDate = startDate,
+            dueDate = dueDate,
+        ),
+    )
 }
 
 fun AttentionState.addTimeEntry(

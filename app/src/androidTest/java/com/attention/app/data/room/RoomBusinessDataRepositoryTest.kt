@@ -22,11 +22,13 @@ import com.attention.domain.TargetMove
 import com.attention.domain.TimeEntry
 import com.attention.domain.TimeEntrySource
 import com.attention.domain.TimerSegment
+import com.attention.domain.appendOneTimeGoalStage
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
@@ -80,6 +82,57 @@ class RoomBusinessDataRepositoryTest {
         repository.replace(AttentionState(targets = listOf(target), goalStages = listOf(stage)))
 
         assertEquals(stage, repository.read().goalStages.single())
+    }
+
+    @Test
+    fun multiple_one_time_stages_survive_room_round_trip_in_history_order() = runBlocking {
+        val target = Target("one-time-target", title = "项目")
+        val first = GoalStage("first-stage", target.id, GoalCadence.ONE_TIME, 60, "2026-10-10", completed = true)
+        val second = GoalStage("second-stage", target.id, GoalCadence.ONE_TIME, 90, "2026-10-13")
+        val repository = RoomBusinessDataRepository(database)
+
+        repository.replace(AttentionState(targets = listOf(target), goalStages = listOf(second, first)))
+
+        assertEquals(listOf(first, second), repository.read().goalStages)
+        assertEquals(listOf("first-stage", "second-stage"), repository.read().goalStages.map { it.id })
+    }
+
+    @Test
+    fun appended_one_time_stage_survives_room_restart_with_its_history() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val name = "room-appended-stage-restart-test.db"
+        context.deleteDatabase(name)
+        val target = Target("one-time-target", title = "项目")
+        val first = GoalStage("first-stage", target.id, GoalCadence.ONE_TIME, 60, "2026-10-10")
+        val firstDatabase = Room.databaseBuilder(context, AttentionDatabase::class.java, name).build()
+        try {
+            val repository = RoomBusinessDataRepository(firstDatabase)
+            repository.replace(
+                AttentionState(
+                    targets = listOf(target),
+                    goalStages = listOf(first),
+                    timeEntries = listOf(TimeEntry("entry", "2026-10-10", 60, target.id)),
+                ),
+            )
+            repository.update { it.appendOneTimeGoalStage(target.id, 90, "2026-10-11", "2026-10-15") }
+        } finally {
+            firstDatabase.close()
+        }
+
+        val secondDatabase = Room.databaseBuilder(context, AttentionDatabase::class.java, name).build()
+        try {
+            val loaded = RoomBusinessDataRepository(secondDatabase).read()
+            assertEquals(2, loaded.goalStages.size)
+            assertEquals("first-stage", loaded.goalStages.first().id)
+            assertTrue(loaded.goalStages.last().id != first.id)
+            assertEquals(first, loaded.goalStages.first())
+            assertEquals(90, loaded.goalStages.last().targetMinutes)
+            assertEquals("2026-10-11", loaded.goalStages.last().startDate)
+            assertEquals("2026-10-15", loaded.goalStages.last().dueDate)
+        } finally {
+            secondDatabase.close()
+            context.deleteDatabase(name)
+        }
     }
 
     @Test

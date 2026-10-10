@@ -316,6 +316,99 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun appending_one_time_stage_preserves_history_and_assigns_a_new_stable_id() {
+        val initial = AttentionState().addTarget("项目")
+        val target = initial.targets.single()
+        val first = initial
+            .addGoalStage(target.id, GoalCadence.ONE_TIME, 60, "2026-10-10", "2026-10-12")
+            .addTimeEntry("2026-10-11", 60, target.id)
+        val previous = first.goalStages.single()
+
+        val appended = first.appendOneTimeGoalStage(
+            targetId = target.id,
+            targetMinutes = 90,
+            startDate = "2026-10-13",
+        )
+
+        assertEquals(listOf(previous), appended.goalStagesForTarget(target.id).take(1))
+        assertEquals(previous, appended.goalStagesForTarget(target.id).first())
+        assertEquals(2, appended.goalStagesForTarget(target.id).size)
+        assertTrue(appended.goalStagesForTarget(target.id).last().id != previous.id)
+        assertEquals(90, appended.goalStagesForTarget(target.id).last().targetMinutes)
+        assertEquals("2026-10-13", appended.goalStagesForTarget(target.id).last().startDate)
+        assertEquals(null, appended.goalStagesForTarget(target.id).last().dueDate)
+        assertEquals(first.timeEntries, appended.timeEntries)
+    }
+
+    @Test
+    fun appending_one_time_stage_rejects_invalid_state_without_mutation() {
+        val initial = AttentionState().addTarget("项目")
+        val target = initial.targets.single()
+        val initialBefore = initial
+        assertThrows(IllegalArgumentException::class.java) {
+            initial.appendOneTimeGoalStage(target.id, 30, "2026-10-11")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            initial.appendOneTimeGoalStage("missing", 30, "2026-10-11")
+        }
+        assertEquals(initialBefore, initial)
+
+        val oneTime = initial.addGoalStage(target.id, GoalCadence.ONE_TIME, 60, "2026-10-10")
+        val incomplete = oneTime
+        val before = incomplete
+
+        assertThrows(IllegalArgumentException::class.java) {
+            incomplete.appendOneTimeGoalStage(target.id, 30, "2026-10-11")
+        }
+        assertEquals(before, incomplete)
+
+        val completed = oneTime.addTimeEntry("2026-10-10", 60, target.id)
+        val completedBefore = completed
+        assertThrows(IllegalArgumentException::class.java) {
+            completed.appendOneTimeGoalStage(target.id, 0, "2026-10-11")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            completed.appendOneTimeGoalStage(target.id, 30, "2026-10-11", dueDate = "2026-10-10")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            completed.appendOneTimeGoalStage(target.id, 30, "2026-10-10")
+        }
+        assertEquals(completedBefore, completed)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            completed.addGoalStage(target.id, GoalCadence.ONE_TIME, 30, "2026-10-11")
+        }
+        assertEquals(completedBefore, completed)
+
+        val weekly = initial.addGoalStage(target.id, GoalCadence.WEEKLY, 30, "2026-10-01")
+        val nonOneTimeAndOneTime = weekly.copy(
+            goalStages = weekly.goalStages + GoalStage(
+                targetId = target.id,
+                cadence = GoalCadence.ONE_TIME,
+                targetMinutes = 30,
+                startDate = "2026-10-10",
+            ),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            nonOneTimeAndOneTime.appendOneTimeGoalStage(target.id, 30, "2026-10-11")
+        }
+
+        val archived = completed.archiveTarget(target.id)
+        val archivedBefore = archived
+        assertThrows(IllegalArgumentException::class.java) {
+            archived.appendOneTimeGoalStage(target.id, 30, "2026-10-11")
+        }
+        assertEquals(archivedBefore, archived)
+
+        val periodic = initial.addGoalStage(target.id, GoalCadence.WEEKLY, 60, "2026-10-10")
+        val periodicBefore = periodic
+        assertThrows(IllegalArgumentException::class.java) {
+            periodic.appendOneTimeGoalStage(target.id, 30, "2026-10-11")
+        }
+        assertEquals(periodicBefore, periodic)
+    }
+
+    @Test
     fun one_time_goal_rejects_a_due_date_before_start_without_changing_state() {
         val state = AttentionState().addTarget("论文")
         val target = state.targets.single()

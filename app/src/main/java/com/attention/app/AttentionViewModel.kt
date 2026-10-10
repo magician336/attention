@@ -11,6 +11,7 @@ import com.attention.domain.ScheduleEntry
 import com.attention.domain.StoredSettings
 import com.attention.domain.TimeEntrySource
 import com.attention.domain.addGoalStage
+import com.attention.domain.appendOneTimeGoalStage
 import com.attention.domain.addFutureGoalRule
 import com.attention.domain.addMigration
 import com.attention.domain.addFutureTargetMove
@@ -94,6 +95,15 @@ class AttentionViewModel(
 
     fun addGoal(targetId: String, cadence: GoalCadence, minutes: Int, startDate: String, dueDate: String? = null) =
         runCommand { it.addGoalStage(targetId, cadence, minutes, startDate, dueDate) }
+    fun appendOneTimeGoal(
+        targetId: String,
+        minutes: Int,
+        startDate: String,
+        dueDate: String? = null,
+        onSuccess: () -> Unit = {},
+    ) = runCommand(onSuccess = onSuccess) {
+        it.appendOneTimeGoalStage(targetId, minutes, startDate, dueDate)
+    }
     fun addFutureGoal(rule: FutureGoalRule) = runCommand { it.addFutureGoalRule(rule) }
     fun updateFutureGoal(rule: FutureGoalRule) = runCommand { it.updateFutureGoalRule(rule) }
     fun cancelFutureGoal(ruleId: String) = runCommand { it.cancelFutureGoalRule(ruleId) }
@@ -158,8 +168,12 @@ class AttentionViewModel(
             .onFailure { _error.value = it.message ?: "导入失败，现有数据未改变" }
     }
 
-    private fun runCommand(transform: (AttentionState) -> AttentionState) = scope.launch {
+    private fun runCommand(
+        onSuccess: () -> Unit = {},
+        transform: (AttentionState) -> AttentionState,
+    ) = scope.launch {
         runCatching { repository.updateBusiness(transform) }
+            .onSuccess { onSuccess() }
             .onFailure { _error.value = it.message ?: "操作未保存" }
     }
 
