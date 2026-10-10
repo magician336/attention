@@ -808,7 +808,7 @@ private fun StatisticsScreen(
         if (state.periodSnapshots.isEmpty()) {
             Text("还没有已保存的周期快照。")
         } else {
-            state.periodSnapshots.sortedWith(compareBy({ it.periodStart }, { it.id })).takeLast(8).forEach { snapshot ->
+            state.periodSnapshots.sortedWith(compareBy({ it.periodStart }, { it.id })).forEach { snapshot ->
                 val targetLabel = state.targets.firstOrNull { it.id == snapshot.targetId }?.title
                     ?: "已删除目标 ${snapshot.targetId.take(8)}"
                 Text(

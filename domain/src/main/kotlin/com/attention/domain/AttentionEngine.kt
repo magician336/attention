@@ -424,7 +424,10 @@ fun AttentionState.addPeriodSnapshot(snapshot: PeriodSnapshot): AttentionState {
 
 fun AttentionState.snapshot(stage: GoalStage, periodStart: LocalDate, periodEnd: LocalDate): PeriodSnapshot {
     require(!periodEnd.isBefore(periodStart)) { "周期结束日不能早于开始日" }
-    val effective = effectiveStage(stage, periodEnd)
+    // A cycle is governed by the rule that was active when that cycle began.
+    // This keeps a future rule from rewriting an already-started weekly or
+    // monthly cycle when it becomes effective in the middle of that cycle.
+    val effective = effectiveStage(stage, periodStart)
     val effectiveStart = LocalDate.parse(effective.startDate)
     require(!periodEnd.isBefore(effectiveStart)) { "目标阶段尚未开始" }
     val actualStart = maxOf(periodStart, effectiveStart)

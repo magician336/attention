@@ -489,6 +489,34 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun a_future_rule_does_not_rewrite_a_cycle_that_started_before_it() {
+        val start = LocalDate.of(2026, 10, 1)
+        val target = AttentionState().addTarget("跨周期规则").targets.single()
+        val state = AttentionState(targets = listOf(target))
+            .addGoalStage(target.id, GoalCadence.WEEKLY, 120, start.toString())
+            .addTimeEntry(start.plusDays(1).toString(), 60, target.id)
+            .addTimeEntry(start.plusDays(5).toString(), 30, target.id)
+            .addFutureGoalRule(
+                FutureGoalRule(
+                    targetId = target.id,
+                    cadence = GoalCadence.DAILY,
+                    targetMinutes = 30,
+                    effectiveFrom = start.plusDays(4).toString(),
+                ),
+                start,
+            )
+
+        val settled = state.settlePeriodSnapshots(start.plusDays(7))
+        val snapshot = settled.periodSnapshots.first { it.cadence == GoalCadence.WEEKLY }
+        assertEquals(GoalCadence.WEEKLY, snapshot.cadence)
+        assertEquals(start.toString(), snapshot.periodStart)
+        assertEquals(start.plusDays(3).toString(), snapshot.periodEnd)
+        assertEquals(120, snapshot.targetMinutes)
+        assertEquals(60, snapshot.actualMinutes)
+        assertEquals(60, snapshot.gapMinutes)
+    }
+
+    @Test
     fun future_goal_rules_require_a_valid_future_commitment_and_are_selected_by_scope() {
         val state = AttentionState().addTarget("项目")
         val target = state.targets.single()
