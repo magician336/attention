@@ -27,6 +27,48 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun schedule_entry_edits_validate_every_field_and_keep_stable_id() {
+        val target = AttentionState().addTarget("学习").targets.single()
+        val original = ScheduleEntry(
+            id = "schedule-1",
+            planningDate = "2026-10-08",
+            title = "阅读",
+            startMinute = 60,
+            endMinute = 90,
+            estimatedMinutes = 30,
+            note = "原备注",
+            targetId = target.id,
+        )
+        val state = AttentionState(targets = listOf(target)).addSchedule(original)
+        val edited = state.updateSchedule(
+            original.copy(
+                planningDate = "2026-10-09",
+                title = "复习",
+                startMinute = 120,
+                endMinute = 180,
+                estimatedMinutes = 60,
+                note = "新备注",
+            ),
+        )
+
+        assertEquals("schedule-1", edited.schedules.single().id)
+        assertEquals("2026-10-09", edited.schedules.single().planningDate)
+        assertEquals("新备注", edited.schedules.single().note)
+        assertThrows(java.time.format.DateTimeParseException::class.java) {
+            state.updateSchedule(original.copy(planningDate = "2026-02-30"))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            state.updateSchedule(original.copy(startMinute = 100, endMinute = 90))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            state.updateSchedule(original.copy(estimatedMinutes = 0))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            state.updateSchedule(original.copy(title = "   "))
+        }
+    }
+
+    @Test
     fun target_tree_supports_arbitrary_depth_and_subtree_rollup() {
         val state = AttentionState()
             .addTarget("阅读")

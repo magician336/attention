@@ -6,6 +6,7 @@ import com.attention.domain.GoalCadence
 import com.attention.domain.GoalStage
 import com.attention.domain.LaunchDestination
 import com.attention.domain.StoredSettings
+import com.attention.domain.ScheduleEntry
 import com.attention.domain.Target
 import com.attention.domain.TimeEntry
 import java.time.LocalDate
@@ -20,6 +21,7 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -47,6 +49,30 @@ class AttentionViewModelTest {
             advanceUntilIdle()
 
             assertEquals(1, repository.state.value.milestones.count { it.kind == "one_time_goal" })
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun schedule_edit_persists_all_fields_and_reports_invalid_input() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val original = ScheduleEntry(id = "schedule-1", planningDate = "2026-10-08", title = "阅读", estimatedMinutes = 30)
+            val repository = FakeRepository(AttentionState(schedules = listOf(original)))
+            val viewModel = AttentionViewModel(repository, ZoneOffset.UTC)
+
+            viewModel.updateSchedule(original.copy(planningDate = "2026-10-09", title = "复习", note = "章节 2", startMinute = 60, endMinute = 90, estimatedMinutes = 30))
+            advanceUntilIdle()
+            assertEquals("schedule-1", repository.state.value.schedules.single().id)
+            assertEquals("章节 2", repository.state.value.schedules.single().note)
+            assertEquals(60, repository.state.value.schedules.single().startMinute)
+
+            viewModel.updateSchedule(original.copy(planningDate = "bad-date"))
+            advanceUntilIdle()
+            assertEquals("2026-10-09", repository.state.value.schedules.single().planningDate)
+            assertTrue(!viewModel.error.value.isNullOrBlank())
         } finally {
             Dispatchers.resetMain()
         }
