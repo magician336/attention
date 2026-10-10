@@ -131,6 +131,9 @@ fun AttentionState.periodStats(date: LocalDate, cadence: GoalCadence): PeriodSta
 
 fun AttentionState.validTarget(targetId: String?): Boolean = targetId == null || targets.any { it.id == targetId }
 
+private fun AttentionState.validRecordTarget(targetId: String?): Boolean =
+    targetId == null || targets.any { it.id == targetId && !it.archived }
+
 fun AttentionState.addTarget(title: String, parentId: String? = null): AttentionState {
     require(title.isNotBlank())
     require(parentId == null || targets.any { it.id == parentId })
@@ -210,20 +213,24 @@ fun AttentionState.addTimeEntry(
 ): AttentionState {
     LocalDate.parse(planningDate)
     require(durationMinutes > 0)
-    require(validTarget(targetId))
+    require(validRecordTarget(targetId)) { "时间记录只能归入未归档目标" }
     return copy(timeEntries = timeEntries + TimeEntry(planningDate = planningDate, durationMinutes = durationMinutes, targetId = targetId, source = source, occurredAtEpochMillis = occurredAtEpochMillis, note = note))
 }
 
 fun AttentionState.editTimeEntry(entryId: String, durationMinutes: Int, targetId: String?, note: String = ""): AttentionState {
-    require(durationMinutes > 0 && validTarget(targetId))
-    require(timeEntries.any { it.id == entryId })
+    require(durationMinutes > 0 && validRecordTarget(targetId)) { "时间记录只能归入未归档目标" }
+    require(timeEntries.any { it.id == entryId }) { "时间记录不存在" }
     return copy(timeEntries = timeEntries.map { if (it.id == entryId) it.copy(durationMinutes = durationMinutes, targetId = targetId, note = note) else it })
 }
 
 fun AttentionState.deleteTimeEntry(entryId: String): AttentionState = copy(timeEntries = timeEntries.filterNot { it.id == entryId })
 
 fun AttentionState.assignUnowned(entryIds: Set<String>, targetId: String): AttentionState {
-    require(targets.any { it.id == targetId })
+    if (entryIds.isEmpty()) return this
+    require(targets.any { it.id == targetId && !it.archived }) { "时间记录只能归入未归档目标" }
+    require(entryIds.all { id -> timeEntries.any { it.id == id && it.targetId == null } }) {
+        "只能归入存在且未归属的时间记录"
+    }
     return copy(timeEntries = timeEntries.map {
         if (it.id in entryIds && it.targetId == null) it.copy(targetId = targetId) else it
     }).recalculateExperience()
@@ -367,7 +374,7 @@ fun AttentionState.materializeOccurrences(rule: RecurrenceRule, through: LocalDa
 }
 
 fun AttentionState.startTimer(targetId: String?, now: Instant, zone: ZoneId = ZoneId.systemDefault()): AttentionState {
-    require(validTarget(targetId))
+    require(validRecordTarget(targetId)) { "计时只能归入未归档目标" }
     require(activeTimer == null)
     return copy(activeTimer = ActiveTimer(targetId = targetId, startedAtEpochMillis = now.toEpochMilli(), lastPlanningDate = planningDate(now, zone).toString()))
 }
