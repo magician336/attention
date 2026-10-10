@@ -33,6 +33,7 @@ import com.attention.domain.startTimer
 import com.attention.domain.stopTimer
 import com.attention.domain.stopRecurrence
 import com.attention.domain.updateSchedule
+import com.attention.domain.toggleScheduleCompleted
 import com.attention.domain.updateFutureGoalRule
 import com.attention.domain.updateMigration
 import com.attention.domain.cancelMigration
@@ -121,6 +122,7 @@ class AttentionViewModel(
 
     fun addSchedule(entry: ScheduleEntry) = runCommand { it.addSchedule(entry) }
     fun updateSchedule(entry: ScheduleEntry) = runCommand { it.updateSchedule(entry) }
+    fun toggleScheduleCompleted(entryId: String) = runCommand { it.toggleScheduleCompleted(entryId) }
     fun addRecurrence(rule: RecurrenceRule) = runCommand { it.addRecurrence(rule) }
     fun materializeRecurrence(rule: RecurrenceRule, through: LocalDate) = runCommand { it.materializeOccurrences(rule, through) }
     fun stopRecurrence(ruleId: String) = runCommand { it.stopRecurrence(ruleId) }

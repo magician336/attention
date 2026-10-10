@@ -878,7 +878,10 @@ private fun ScheduleRow(entry: ScheduleEntry, state: AttentionState, viewModel: 
                 if (entry.note.isNotBlank()) Text(entry.note)
             }
             TextButton(onClick = { onEdit(entry) }) { Text("编辑") }
-            TextButton(onClick = { viewModel.updateSchedule(entry.copy(completed = !entry.completed)) }) { Text(if (entry.completed) "取消完成" else "完成") }
+            TextButton(
+                onClick = { viewModel.updateSchedule(entry.copy(completed = !entry.completed)) },
+                modifier = Modifier.testTag("schedule-completion-${entry.id}"),
+            ) { Text(if (entry.completed) "取消完成" else "完成") }
             TextButton(onClick = {
                 val updated = entry.copy(reminderEpochMillis = if (entry.reminderEpochMillis == null) System.currentTimeMillis() + 3_600_000 else null)
                 viewModel.updateSchedule(updated)
