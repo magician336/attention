@@ -22,12 +22,15 @@ import com.attention.domain.TargetMove
 import com.attention.domain.TimeEntry
 import com.attention.domain.TimeEntrySource
 import com.attention.domain.TimerSegment
+import com.attention.domain.addFutureTargetMove
+import com.attention.domain.addTarget
 import com.attention.domain.parentAt
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
@@ -157,6 +160,23 @@ class RoomBusinessDataRepositoryTest {
         assertEquals(listOf(move), loaded.targetMoves)
         assertEquals(oldParent.id, loaded.parentAt(child.id, LocalDate.parse("2026-10-31")))
         assertEquals(newParent.id, loaded.parentAt(child.id, LocalDate.parse("2026-11-01")))
+    }
+
+    @Test
+    fun future_target_move_rejects_past_dates_and_scheduled_cycles_on_android() {
+        val state = AttentionState().addTarget("父目标").addTarget("另一个父目标")
+        val parent = state.targets[0]
+        val otherParent = state.targets[1]
+        val withChild = state.addTarget("子计划", parent.id)
+        val child = withChild.targets.single { it.title == "子计划" }
+
+        assertThrows(IllegalArgumentException::class.java) {
+            withChild.addFutureTargetMove(child.id, otherParent.id, "2026-10-08", LocalDate.parse("2026-10-08"))
+        }
+        val scheduled = withChild.addFutureTargetMove(parent.id, otherParent.id, "2026-10-09", LocalDate.parse("2026-10-08"))
+        assertThrows(IllegalArgumentException::class.java) {
+            scheduled.addFutureTargetMove(otherParent.id, parent.id, "2026-10-10", LocalDate.parse("2026-10-08"))
+        }
     }
 
     @Test
