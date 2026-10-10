@@ -72,6 +72,17 @@ class RoomBusinessDataRepositoryTest {
     }
 
     @Test
+    fun one_time_goal_survives_room_round_trip_with_deadline() = runBlocking {
+        val target = Target("one-time-target", title = "项目")
+        val stage = GoalStage("one-time-stage", target.id, GoalCadence.ONE_TIME, 240, "2026-10-10", "2026-10-12")
+        val repository = RoomBusinessDataRepository(database)
+
+        repository.replace(AttentionState(targets = listOf(target), goalStages = listOf(stage)))
+
+        assertEquals(stage, repository.read().goalStages.single())
+    }
+
+    @Test
     fun dao_queries_use_planning_date_indexes() = runBlocking {
         val state = sampleState()
         RoomBusinessDataRepository(database).replace(state)

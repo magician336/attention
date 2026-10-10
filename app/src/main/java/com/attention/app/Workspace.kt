@@ -70,9 +70,9 @@ import com.attention.domain.descendantIds
 import com.attention.domain.effectiveStage
 import com.attention.domain.levelForExperience
 import com.attention.domain.planningDate
-import com.attention.domain.periodRange
 import com.attention.domain.periodStats
 import com.attention.domain.progress
+import com.attention.domain.progressRange
 import com.attention.domain.subtreeMinutes
 import com.attention.domain.targetChildren
 import java.time.Instant
@@ -368,6 +368,8 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
     var parentId by remember { mutableStateOf<String?>(null) }
     var goalMinutes by remember { mutableStateOf("") }
     var goalCadence by remember { mutableStateOf(GoalCadence.DAILY) }
+    var goalStartDate by remember { mutableStateOf(state.planningDate(Instant.now()).toString()) }
+    var goalDueDate by remember { mutableStateOf("") }
     var futureDate by remember { mutableStateOf(LocalDate.now().plusDays(7).toString()) }
     var futureMinutes by remember { mutableStateOf("") }
     var futureCadence by remember { mutableStateOf(GoalCadence.WEEKLY) }
@@ -397,11 +399,23 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                         }
                     }
                     Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        OutlinedTextField(goalStartDate, { goalStartDate = it }, label = { Text("开始规划日") }, modifier = Modifier.width(145.dp), singleLine = true)
+                        if (goalCadence == GoalCadence.ONE_TIME) {
+                            Spacer(Modifier.width(8.dp))
+                            OutlinedTextField(goalDueDate, { goalDueDate = it }, label = { Text("截止规划日（可选）") }, modifier = Modifier.width(145.dp), singleLine = true)
+                        }
+                    }
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                         OutlinedTextField(goalMinutes, { goalMinutes = it.filter(Char::isDigit) }, label = { Text("目标分钟") }, modifier = Modifier.width(140.dp), singleLine = true)
                         Spacer(Modifier.width(8.dp))
                         Button(onClick = {
                             goalMinutes.toIntOrNull()?.takeIf { it > 0 }?.let {
-                                viewModel.addGoal(parentId!!, goalCadence, it, state.planningDate(Instant.now()).toString())
+                                val dueDate = if (goalCadence == GoalCadence.ONE_TIME) {
+                                    goalDueDate.trim().takeIf(String::isNotEmpty)
+                                } else {
+                                    null
+                                }
+                                viewModel.addGoal(parentId!!, goalCadence, it, goalStartDate, dueDate)
                                 goalMinutes = ""
                             }
                         }) { Text("保存目标") }
@@ -553,22 +567,24 @@ private fun TargetTree(
             state.goalStages.filter { it.targetId == target.id }.forEach { stage ->
                 val effectiveStage = state.effectiveStage(stage, planningDate)
                 val progress = state.progress(stage, planningDate)
+                val progressRange = state.progressRange(stage, planningDate)
                 val stageStart = LocalDate.parse(effectiveStage.startDate)
-                val periodRange = when (effectiveStage.cadence) {
-                    GoalCadence.ONE_TIME -> null
-                    else -> state.periodRange(planningDate, effectiveStage.cadence)
+                val rangeLabel = when (effectiveStage.cadence) {
+                    GoalCadence.ONE_TIME -> {
+                        val openLabel = if (effectiveStage.dueDate == null) " · 开放" else " · 截止 ${effectiveStage.dueDate}"
+                        "范围 ${progressRange.start} 至 ${progressRange.endInclusive}$openLabel"
+                    }
+                    else -> "周期 ${progressRange.start} 至 ${progressRange.endInclusive}"
                 }
-                val periodLabel = periodRange?.let { "周期 ${it.start} 至 ${it.endInclusive}" }
                 val summary = if (planningDate.isBefore(stageStart)) {
-                    "${effectiveStage.cadence.label()}目标 ${effectiveStage.targetMinutes} 分钟 · 尚未开始 · 生效日 $stageStart"
+                    "${effectiveStage.cadence.label()}目标 ${effectiveStage.targetMinutes} 分钟 · 尚未开始 · 生效日 $stageStart · $rangeLabel"
                 } else {
                     val status = when {
                         progress.excessMinutes > 0 -> "达成 · 超额 ${progress.excessMinutes} 分钟"
                         progress.completed -> "达成"
                         else -> "缺口 ${progress.gapMinutes} 分钟"
                     }
-                    val period = periodLabel?.let { " · $it" }.orEmpty()
-                    "${effectiveStage.cadence.label()}目标 ${progress.actualMinutes}/${progress.targetMinutes} 分钟$period · $status"
+                    "${effectiveStage.cadence.label()}目标 ${progress.actualMinutes}/${progress.targetMinutes} 分钟 · $rangeLabel · $status"
                 }
                 Text(summary, modifier = Modifier.padding(start = 22.dp))
             }

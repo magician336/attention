@@ -84,4 +84,15 @@ class AttentionBackupCodecTest {
         assertEquals(LaunchDestination.STATISTICS, merged.launchDestination)
         assertEquals(incoming.activeTimer, merged.activeTimer)
     }
+
+    @Test
+    fun backup_round_trip_preserves_one_time_goal_deadline() {
+        val target = Target("target", title = "项目")
+        val expected = AttentionState(
+            targets = listOf(target),
+            goalStages = listOf(GoalStage("one-time", target.id, GoalCadence.ONE_TIME, 240, "2026-10-10", "2026-10-12")),
+        )
+
+        assertEquals(expected, AttentionBackupCodec.decode(AttentionBackupCodec.encode(expected)))
+    }
 }

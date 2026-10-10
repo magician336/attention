@@ -4,6 +4,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -140,6 +141,77 @@ class AttentionEngineTest {
         assertEquals(0, excess.gapMinutes)
         assertEquals(5, excess.excessMinutes)
         assertTrue(excess.completed)
+    }
+
+    @Test
+    fun one_time_goal_includes_start_and_due_dates_but_excludes_late_records() {
+        val state = AttentionState().addTarget("考试准备")
+        val target = state.targets.single()
+        val withGoal = state.addGoalStage(
+            target.id,
+            GoalCadence.ONE_TIME,
+            60,
+            "2026-10-10",
+            dueDate = "2026-10-12",
+        )
+        val stage = withGoal.goalStages.single()
+        val records = withGoal
+            .addTimeEntry("2026-10-09", 100, target.id)
+            .addTimeEntry("2026-10-10", 20, target.id)
+            .addTimeEntry("2026-10-12", 45, target.id)
+            .addTimeEntry("2026-10-13", 90, target.id)
+
+        val before = records.progress(stage, LocalDate.of(2026, 10, 9))
+        val due = records.progress(stage, LocalDate.of(2026, 10, 12))
+        val after = records.progress(stage, LocalDate.of(2026, 10, 13))
+
+        assertEquals(0, before.actualMinutes)
+        assertEquals(0, before.targetMinutes)
+        assertEquals(0, before.gapMinutes)
+        assertFalse(before.completed)
+        assertEquals(LocalDate.of(2026, 10, 10), records.progressRange(stage, LocalDate.of(2026, 10, 10)).start)
+        assertEquals(LocalDate.of(2026, 10, 10), records.progressRange(stage, LocalDate.of(2026, 10, 10)).endInclusive)
+        assertEquals(65, due.actualMinutes)
+        assertEquals(0, due.gapMinutes)
+        assertEquals(5, due.excessMinutes)
+        assertTrue(due.completed)
+        assertEquals(65, after.actualMinutes)
+        assertEquals(5, after.excessMinutes)
+        assertTrue(after.completed)
+        assertEquals(4, records.timeEntries.size)
+    }
+
+    @Test
+    fun open_one_time_goal_uses_query_date_as_the_right_boundary() {
+        val state = AttentionState().addTarget("项目")
+        val target = state.targets.single()
+        val stage = state.addGoalStage(target.id, GoalCadence.ONE_TIME, 60, "2026-10-10").goalStages.single()
+        val records = state
+            .addTimeEntry("2026-10-09", 100, target.id)
+            .addTimeEntry("2026-10-10", 20, target.id)
+            .addTimeEntry("2026-10-12", 40, target.id)
+
+        val firstDay = records.progress(stage, LocalDate.of(2026, 10, 10))
+        val later = records.progress(stage, LocalDate.of(2026, 10, 12))
+
+        assertEquals(20, firstDay.actualMinutes)
+        assertEquals(40, firstDay.gapMinutes)
+        assertEquals(LocalDate.of(2026, 10, 10), records.progressRange(stage, LocalDate.of(2026, 10, 10)).endInclusive)
+        assertEquals(60, later.actualMinutes)
+        assertEquals(0, later.gapMinutes)
+        assertTrue(later.completed)
+        assertEquals(null, stage.dueDate)
+    }
+
+    @Test
+    fun one_time_goal_rejects_a_due_date_before_start_without_changing_state() {
+        val state = AttentionState().addTarget("论文")
+        val target = state.targets.single()
+
+        assertThrows(IllegalArgumentException::class.java) {
+            state.addGoalStage(target.id, GoalCadence.ONE_TIME, 60, "2026-10-10", dueDate = "2026-10-09")
+        }
+        assertEquals(emptyList<GoalStage>(), state.goalStages)
     }
 
     @Test

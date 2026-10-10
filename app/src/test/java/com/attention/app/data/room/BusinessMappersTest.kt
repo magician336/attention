@@ -54,4 +54,11 @@ class BusinessMappersTest {
 
         assertEquals(rule, rule.toEntity().toDomain())
     }
+
+    @Test
+    fun one_time_goal_mapper_preserves_start_deadline_and_minutes() {
+        val stage = GoalStage("one-time", "target", GoalCadence.ONE_TIME, 240, "2026-10-10", "2026-10-12")
+
+        assertEquals(stage, stage.toEntity().toDomain())
+    }
 }
