@@ -93,9 +93,7 @@ fun AttentionState.progress(stage: GoalStage, onDate: LocalDate): GoalProgress {
 }
 
 fun AttentionState.effectiveStage(stage: GoalStage, onDate: LocalDate): GoalStage {
-    val rule = futureGoalRules.asSequence()
-        .filter { it.targetId == stage.targetId && (it.stageId.isBlank() || it.stageId == stage.id) && !LocalDate.parse(it.effectiveFrom).isAfter(onDate) }
-        .maxByOrNull { it.effectiveFrom }
+    val rule = goalRuleAt(stage.targetId, stage.id, onDate)
         ?: return stage
     return stage.copy(
         cadence = rule.cadence,
@@ -320,26 +318,84 @@ fun AttentionState.cancelMigration(migrationId: String): AttentionState = copy(
 
 fun AttentionState.gapFor(stage: GoalStage, onDate: LocalDate): Int = progress(stage, onDate).gapMinutes
 
-fun AttentionState.addFutureGoalRule(rule: FutureGoalRule): AttentionState {
-    require(targets.any { it.id == rule.targetId })
-    require(rule.stageId.isBlank() || goalStages.any { it.id == rule.stageId && it.targetId == rule.targetId })
-    require(rule.targetMinutes > 0)
-    LocalDate.parse(rule.effectiveFrom)
-    rule.dueDate?.let(LocalDate::parse)
+/**
+ * Adds a future target commitment. [notBefore] is supplied by the caller's
+ * current planning day so tests and backup replay do not read the system clock.
+ */
+fun AttentionState.addFutureGoalRule(
+    rule: FutureGoalRule,
+    notBefore: LocalDate,
+): AttentionState {
+    validateFutureGoalRule(rule, notBefore)
+    require(futureGoalRules.none { it.id == rule.id }) { "未来目标规则 ID 已存在" }
+    require(futureGoalRules.none { it.sameScopeAs(rule) && it.effectiveFrom == rule.effectiveFrom }) {
+        "同一目标和阶段在同一生效日只能有一条未来规则"
+    }
     return copy(futureGoalRules = futureGoalRules + rule)
 }
 
-fun AttentionState.updateFutureGoalRule(rule: FutureGoalRule): AttentionState = copy(
-    futureGoalRules = futureGoalRules.map { if (it.id == rule.id) rule else it },
-)
+fun AttentionState.updateFutureGoalRule(
+    rule: FutureGoalRule,
+    notBefore: LocalDate,
+): AttentionState {
+    val existing = futureGoalRules.firstOrNull { it.id == rule.id } ?: error("未来目标规则不存在")
+    require(existing.targetId == rule.targetId && existing.stageId == rule.stageId) {
+        "未来目标规则的目标和阶段不能修改"
+    }
+    require(LocalDate.parse(existing.effectiveFrom).isAfter(notBefore)) {
+        "已经生效的未来目标规则不能修改"
+    }
+    validateFutureGoalRule(rule, notBefore)
+    require(futureGoalRules.none { it.id != rule.id && it.sameScopeAs(rule) && it.effectiveFrom == rule.effectiveFrom }) {
+        "同一目标和阶段在同一生效日只能有一条未来规则"
+    }
+    return copy(futureGoalRules = futureGoalRules.map { if (it.id == rule.id) rule else it })
+}
 
-fun AttentionState.cancelFutureGoalRule(ruleId: String): AttentionState = copy(
-    futureGoalRules = futureGoalRules.filterNot { it.id == ruleId },
-)
+fun AttentionState.cancelFutureGoalRule(ruleId: String, notBefore: LocalDate): AttentionState {
+    val existing = futureGoalRules.firstOrNull { it.id == ruleId } ?: error("未来目标规则不存在")
+    require(LocalDate.parse(existing.effectiveFrom).isAfter(notBefore)) {
+        "已经生效的未来目标规则不能取消"
+    }
+    return copy(futureGoalRules = futureGoalRules.filterNot { it.id == ruleId })
+}
 
 fun AttentionState.goalRulesAt(targetId: String, onDate: LocalDate): List<FutureGoalRule> = futureGoalRules
     .filter { it.targetId == targetId && !LocalDate.parse(it.effectiveFrom).isAfter(onDate) }
-    .sortedBy { it.effectiveFrom }
+    .sortedWith(compareBy<FutureGoalRule> { LocalDate.parse(it.effectiveFrom) }.thenBy { it.id })
+
+fun AttentionState.goalRuleAt(targetId: String, stageId: String?, onDate: LocalDate): FutureGoalRule? = futureGoalRules
+    .asSequence()
+    .filter { it.targetId == targetId && (it.stageId.isBlank() || it.stageId == stageId) }
+    .filter { !LocalDate.parse(it.effectiveFrom).isAfter(onDate) }
+    .maxWithOrNull(
+        compareBy<FutureGoalRule> { LocalDate.parse(it.effectiveFrom) }
+            .thenBy { it.stageId.isNotBlank() }
+            .thenBy { it.id },
+    )
+
+private fun FutureGoalRule.sameScopeAs(other: FutureGoalRule): Boolean =
+    targetId == other.targetId && stageId.trim().ifBlank { "" } == other.stageId.trim().ifBlank { "" }
+
+private fun AttentionState.validateFutureGoalRule(rule: FutureGoalRule, notBefore: LocalDate) {
+    require(targets.any { it.id == rule.targetId && !it.archived }) { "未来目标规则只能用于未归档目标" }
+    require(rule.stageId.isBlank() || goalStages.any { it.id == rule.stageId && it.targetId == rule.targetId }) {
+        "未来目标规则的阶段不存在或不属于目标"
+    }
+    require(rule.targetMinutes > 0) { "目标分钟必须为正整数" }
+    val effectiveFrom = runCatching { LocalDate.parse(rule.effectiveFrom) }
+        .getOrElse { throw IllegalArgumentException("生效规划日无效", it) }
+    require(effectiveFrom.isAfter(notBefore)) {
+        "未来目标规则必须从未来规划日生效"
+    }
+    val dueDate = rule.dueDate?.let {
+        runCatching { LocalDate.parse(it) }
+            .getOrElse { error -> throw IllegalArgumentException("截止规划日无效", error) }
+    }
+    require(dueDate == null || !dueDate.isBefore(effectiveFrom)) {
+        "截止规划日不能早于生效规划日"
+    }
+}
 
 fun AttentionState.addPeriodSnapshot(snapshot: PeriodSnapshot): AttentionState {
     require(periodSnapshots.none { it.targetId == snapshot.targetId && it.periodStart == snapshot.periodStart && it.cadence == snapshot.cadence })

@@ -94,9 +94,12 @@ class AttentionViewModel(
 
     fun addGoal(targetId: String, cadence: GoalCadence, minutes: Int, startDate: String, dueDate: String? = null) =
         runCommand { it.addGoalStage(targetId, cadence, minutes, startDate, dueDate) }
-    fun addFutureGoal(rule: FutureGoalRule) = runCommand { it.addFutureGoalRule(rule) }
-    fun updateFutureGoal(rule: FutureGoalRule) = runCommand { it.updateFutureGoalRule(rule) }
-    fun cancelFutureGoal(ruleId: String) = runCommand { it.cancelFutureGoalRule(ruleId) }
+    fun addFutureGoal(rule: FutureGoalRule, notBefore: LocalDate) =
+        runCommand { it.addFutureGoalRule(rule, notBefore) }
+    fun updateFutureGoal(rule: FutureGoalRule, notBefore: LocalDate) =
+        runCommand { it.updateFutureGoalRule(rule, notBefore) }
+    fun cancelFutureGoal(ruleId: String, notBefore: LocalDate) =
+        runCommand { it.cancelFutureGoalRule(ruleId, notBefore) }
     fun addMigration(migration: Migration) = runCommand { it.addMigration(migration) }
     fun updateMigration(migration: Migration) = runCommand { it.updateMigration(migration) }
     fun cancelMigration(migrationId: String) = runCommand { it.cancelMigration(migrationId) }

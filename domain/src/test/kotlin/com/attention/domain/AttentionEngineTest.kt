@@ -422,12 +422,88 @@ class AttentionEngineTest {
         val stage = state.addGoalStage(target.id, GoalCadence.WEEKLY, 120, date.toString()).goalStages.single()
         val snapshot = state.addTimeEntry(date.toString(), 90, target.id)
             .snapshot(stage, date.minusDays(3), date.plusDays(3))
-        val future = state.addFutureGoalRule(FutureGoalRule(targetId = target.id, cadence = GoalCadence.WEEKLY, targetMinutes = 180, effectiveFrom = date.plusDays(7).toString()))
+        val future = state.addFutureGoalRule(FutureGoalRule(targetId = target.id, cadence = GoalCadence.WEEKLY, targetMinutes = 180, effectiveFrom = date.plusDays(7).toString()), date)
             .addPeriodSnapshot(snapshot)
 
         assertEquals(180, future.goalRulesAt(target.id, date.plusDays(8)).single().targetMinutes)
         assertEquals(1, future.periodSnapshots.size)
         assertEquals(30, future.periodSnapshots.single().gapMinutes)
+    }
+
+    @Test
+    fun future_goal_rules_require_a_valid_future_commitment_and_are_selected_by_scope() {
+        val state = AttentionState().addTarget("项目")
+        val target = state.targets.single()
+        val withStage = state.addGoalStage(target.id, GoalCadence.WEEKLY, 120, date.toString())
+        val stage = withStage.goalStages.single()
+        val effectiveFrom = date.plusDays(7)
+        val targetRule = FutureGoalRule(
+            targetId = target.id,
+            cadence = GoalCadence.MONTHLY,
+            targetMinutes = 180,
+            effectiveFrom = effectiveFrom.toString(),
+        )
+        val stageRule = targetRule.copy(
+            id = "stage-rule",
+            stageId = stage.id,
+            targetMinutes = 240,
+        )
+
+        val scheduled = withStage
+            .addFutureGoalRule(targetRule, date)
+            .addFutureGoalRule(stageRule, date)
+
+        assertEquals(stageRule, scheduled.goalRuleAt(target.id, stage.id, effectiveFrom))
+        assertEquals(240, scheduled.progress(stage, effectiveFrom).targetMinutes)
+        assertThrows(IllegalArgumentException::class.java) {
+            withStage.addFutureGoalRule(targetRule.copy(effectiveFrom = date.toString()), date)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            withStage.addFutureGoalRule(targetRule.copy(dueDate = date.plusDays(6).toString()), date)
+        }
+    }
+
+    @Test
+    fun future_goal_rule_updates_and_cancellation_preserve_pending_only_boundary() {
+        val state = AttentionState().addTarget("项目")
+        val target = state.targets.single()
+        val rule = FutureGoalRule(
+            targetId = target.id,
+            cadence = GoalCadence.DAILY,
+            targetMinutes = 30,
+            effectiveFrom = date.plusDays(3).toString(),
+        )
+        val scheduled = state.addFutureGoalRule(rule, date)
+        val updated = scheduled.updateFutureGoalRule(rule.copy(targetMinutes = 45), date)
+
+        assertEquals(rule.id, updated.futureGoalRules.single().id)
+        assertEquals(45, updated.futureGoalRules.single().targetMinutes)
+        assertEquals(0, updated.cancelFutureGoalRule(rule.id, date).futureGoalRules.size)
+        assertThrows(IllegalArgumentException::class.java) {
+            updated.updateFutureGoalRule(rule.copy(targetMinutes = 60), date.plusDays(3))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            updated.cancelFutureGoalRule(rule.id, date.plusDays(3))
+        }
+    }
+
+    @Test
+    fun future_goal_rules_reject_archived_targets_and_same_scope_dates() {
+        val state = AttentionState().addTarget("项目")
+        val target = state.targets.single()
+        val rule = FutureGoalRule(
+            targetId = target.id,
+            cadence = GoalCadence.DAILY,
+            targetMinutes = 30,
+            effectiveFrom = date.plusDays(1).toString(),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            state.archiveTarget(target.id).addFutureGoalRule(rule, date)
+        }
+        val scheduled = state.addFutureGoalRule(rule, date)
+        assertThrows(IllegalArgumentException::class.java) {
+            scheduled.addFutureGoalRule(rule.copy(id = "another"), date)
+        }
     }
 
     @Test

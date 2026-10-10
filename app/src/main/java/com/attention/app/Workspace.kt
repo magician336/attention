@@ -69,6 +69,7 @@ import com.attention.domain.capacitySummary
 import com.attention.domain.directMinutes
 import com.attention.domain.descendantIds
 import com.attention.domain.effectiveStage
+import com.attention.domain.goalRulesAt
 import com.attention.domain.levelForExperience
 import com.attention.domain.planningDate
 import com.attention.domain.periodStats
@@ -365,15 +366,18 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
 
 @Composable
 private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) {
+    val planningDate = state.planningDate(Instant.now())
     var title by remember { mutableStateOf("") }
     var parentId by remember { mutableStateOf<String?>(null) }
     var goalMinutes by remember { mutableStateOf("") }
     var goalCadence by remember { mutableStateOf(GoalCadence.DAILY) }
     var goalStartDate by remember { mutableStateOf(state.planningDate(Instant.now()).toString()) }
     var goalDueDate by remember { mutableStateOf("") }
-    var futureDate by remember { mutableStateOf(LocalDate.now().plusDays(7).toString()) }
+    var futureDate by remember { mutableStateOf(planningDate.plusDays(7).toString()) }
     var futureMinutes by remember { mutableStateOf("") }
+    var futureDueDate by remember { mutableStateOf("") }
     var futureCadence by remember { mutableStateOf(GoalCadence.WEEKLY) }
+    var editingFutureRuleId by remember { mutableStateOf<String?>(null) }
     var pendingDelete by remember { mutableStateOf<Target?>(null) }
     var renameTarget by remember { mutableStateOf<Target?>(null) }
     var renameText by remember { mutableStateOf("") }
@@ -450,9 +454,18 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                         }
                     }
                     Text("未来生效的目标规则", style = MaterialTheme.typography.titleSmall)
+                    val currentRule = state.goalRulesAt(parentId!!, planningDate)
+                        .lastOrNull { it.stageId.isBlank() }
+                    Text(
+                        currentRule?.let { "当前规则：${it.cadence.label()} ${it.targetMinutes} 分钟 · 生效于 ${it.effectiveFrom}" }
+                            ?: "当前规则：使用目标阶段的承诺",
+                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         OutlinedTextField(futureDate, { futureDate = it }, label = { Text("生效日") }, modifier = Modifier.width(145.dp), singleLine = true)
                         OutlinedTextField(futureMinutes, { futureMinutes = it.filter(Char::isDigit) }, label = { Text("未来分钟") }, modifier = Modifier.width(120.dp), singleLine = true)
+                        if (futureCadence == GoalCadence.ONE_TIME) {
+                            OutlinedTextField(futureDueDate, { futureDueDate = it }, label = { Text("截止日（可选）") }, modifier = Modifier.width(145.dp), singleLine = true)
+                        }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         GoalCadence.entries.forEach { value ->
@@ -462,17 +475,40 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                     }
                     Button(onClick = {
                         futureMinutes.toIntOrNull()?.takeIf { it > 0 }?.let {
-                            viewModel.addFutureGoal(FutureGoalRule(targetId = parentId!!, cadence = futureCadence, targetMinutes = it, effectiveFrom = futureDate))
+                            val rule = FutureGoalRule(
+                                id = editingFutureRuleId ?: com.attention.domain.newId(),
+                                targetId = parentId!!,
+                                cadence = futureCadence,
+                                targetMinutes = it,
+                                effectiveFrom = futureDate,
+                                dueDate = futureDueDate.trim().takeIf { value -> futureCadence == GoalCadence.ONE_TIME && value.isNotEmpty() },
+                            )
+                            if (editingFutureRuleId == null) {
+                                viewModel.addFutureGoal(rule, planningDate)
+                            } else {
+                                viewModel.updateFutureGoal(rule, planningDate)
+                            }
                             futureMinutes = ""
+                            futureDueDate = ""
+                            editingFutureRuleId = null
                         }
-                    }) { Text("保存未来规则") }
+                    }) { Text(if (editingFutureRuleId == null) "保存未来规则" else "更新未来规则") }
                     state.futureGoalRules.filter { it.targetId == parentId }.forEach { rule ->
+                        val pending = LocalDate.parse(rule.effectiveFrom).isAfter(planningDate)
                         Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                            Text("${rule.effectiveFrom} · ${rule.cadence.label()} ${rule.targetMinutes} 分钟", Modifier.weight(1f))
-                            TextButton(onClick = { viewModel.cancelFutureGoal(rule.id) }) { Text("取消") }
+                            Text("${rule.effectiveFrom} · ${rule.cadence.label()} ${rule.targetMinutes} 分钟${rule.dueDate?.let { " · 截止 $it" } ?: ""}${if (pending) " · 待生效" else " · 当前/历史"}", Modifier.weight(1f))
+                            if (pending) {
+                                TextButton(onClick = {
+                                    editingFutureRuleId = rule.id
+                                    futureDate = rule.effectiveFrom
+                                    futureMinutes = rule.targetMinutes.toString()
+                                    futureCadence = rule.cadence
+                                    futureDueDate = rule.dueDate.orEmpty()
+                                }) { Text("编辑") }
+                                TextButton(onClick = { viewModel.cancelFutureGoal(rule.id, planningDate) }) { Text("取消") }
+                            }
                         }
                     }
-                    val planningDate = state.planningDate(Instant.now())
                     val stages = state.goalStages.filter { it.targetId == parentId }
                     if (stages.isNotEmpty()) {
                         Text("当前目标进度", style = MaterialTheme.typography.titleSmall)
