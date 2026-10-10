@@ -418,22 +418,21 @@ fun AttentionState.availableMigrationMinutes(stage: GoalStage, onDate: LocalDate
     return (progress(stage, onDate).gapMinutes - reserved).coerceAtLeast(0)
 }
 
-fun AttentionState.addMigration(migration: Migration, onDate: LocalDate? = null): AttentionState {
+fun AttentionState.addMigration(migration: Migration, onDate: LocalDate): AttentionState {
     require(migration.minutes > 0)
+    require(!migration.cancelled)
     require(targets.any { it.id == migration.targetId && !it.archived })
     val sourceStage = goalStages.firstOrNull { it.id == migration.sourceStageId && it.targetId == migration.targetId }
         ?: error("来源目标阶段不存在")
     val destinationStart = LocalDate.parse(migration.destinationStartDate)
     val destinationEnd = migration.destinationEndDate?.let(LocalDate::parse)
     require(destinationEnd == null || !destinationEnd.isBefore(destinationStart))
-    onDate?.let { date ->
-        require(destinationStart.isAfter(progressRange(sourceStage, date).endInclusive))
-        require(migration.minutes <= availableMigrationMinutes(sourceStage, date))
-    }
+    require(destinationStart.isAfter(progressRange(sourceStage, onDate).endInclusive))
+    require(migration.minutes <= availableMigrationMinutes(sourceStage, onDate))
     return copy(migrations = migrations + migration)
 }
 
-fun AttentionState.updateMigration(migration: Migration, onDate: LocalDate? = null): AttentionState {
+fun AttentionState.updateMigration(migration: Migration, onDate: LocalDate): AttentionState {
     val existing = migrations.firstOrNull { it.id == migration.id } ?: error("迁移记录不存在")
     require(!existing.cancelled)
     val withoutExisting = copy(migrations = migrations - existing)

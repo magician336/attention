@@ -19,6 +19,7 @@ import com.attention.domain.Target
 import com.attention.domain.addMigration
 import com.attention.domain.cancelMigration
 import com.attention.domain.updateMigration
+import java.time.LocalDate
 import java.io.File
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -125,9 +126,9 @@ class RoomBackupIntegrationTest {
         )
 
         repository.updateBusiness { it.copy(targets = listOf(target), goalStages = listOf(stage)) }
-        repository.updateBusiness { it.addMigration(migration) }
+        repository.updateBusiness { it.addMigration(migration, LocalDate.parse("2026-10-02")) }
         repository.updateBusiness {
-            it.updateMigration(migration.copy(minutes = 90, destinationEndDate = "2026-10-09"))
+            it.updateMigration(migration.copy(minutes = 90, destinationEndDate = "2026-10-09"), LocalDate.parse("2026-10-02"))
         }
         repository.updateBusiness { it.cancelMigration(migration.id) }
 
