@@ -46,8 +46,10 @@ fun AttentionState.directMinutes(targetId: String, date: String? = null): Int = 
 
 fun AttentionState.subtreeMinutes(targetId: String, date: String? = null): Int {
     return if (date == null) {
-        val ids = descendantIds(targetId)
-        timeEntries.filter { it.targetId in ids }.sumOf { it.durationMinutes }
+        timeEntries
+            .filter { it.targetId != null }
+            .filter { isDescendantAt(it.targetId!!, targetId, LocalDate.parse(it.planningDate)) }
+            .sumOf { it.durationMinutes }
     } else {
         val parsed = LocalDate.parse(date)
         timeEntries.filter { it.planningDate == date && it.targetId != null && isDescendantAt(it.targetId, targetId, parsed) }
@@ -68,13 +70,20 @@ fun AttentionState.periodRange(
     GoalCadence.ONE_TIME -> date..date
 }
 
+fun AttentionState.progressRange(stage: GoalStage, onDate: LocalDate): ClosedRange<LocalDate> {
+    val effective = effectiveStage(stage, onDate)
+    val start = LocalDate.parse(effective.startDate)
+    if (onDate.isBefore(start)) return start..start
+    if (effective.cadence != GoalCadence.ONE_TIME) return periodRange(onDate, effective.cadence)
+    val due = effective.dueDate?.let(LocalDate::parse)
+    val end = due?.let { minOf(onDate, it) } ?: onDate
+    return start..end
+}
+
 fun AttentionState.progress(stage: GoalStage, onDate: LocalDate): GoalProgress {
     val effective = effectiveStage(stage, onDate)
     if (onDate.isBefore(LocalDate.parse(effective.startDate))) return GoalProgress(0, 0, 0, 0, false)
-    val range = if (effective.cadence == GoalCadence.ONE_TIME) {
-        val end = effective.dueDate?.let(LocalDate::parse) ?: onDate
-        LocalDate.parse(effective.startDate)..end
-    } else periodRange(onDate, effective.cadence)
+    val range = progressRange(stage, onDate)
     val actual = timeEntries.filter { it.targetId != null }
         .filter { LocalDate.parse(it.planningDate) in range }
         .filter { isDescendantAt(it.targetId!!, effective.targetId, LocalDate.parse(it.planningDate)) }
@@ -196,10 +205,11 @@ fun AttentionState.addGoalStage(
     startDate: String,
     dueDate: String? = null,
 ): AttentionState {
-    require(targets.any { it.id == targetId })
+    require(targets.any { it.id == targetId && !it.archived }) { "目标必须未归档" }
     require(targetMinutes > 0)
-    LocalDate.parse(startDate)
-    dueDate?.let(LocalDate::parse)
+    val parsedStart = LocalDate.parse(startDate)
+    val parsedDue = dueDate?.let(LocalDate::parse)
+    require(parsedDue == null || !parsedDue.isBefore(parsedStart)) { "截止日期不能早于开始日期" }
     return copy(goalStages = goalStages + GoalStage(targetId = targetId, cadence = cadence, targetMinutes = targetMinutes, startDate = startDate, dueDate = dueDate))
 }
 
