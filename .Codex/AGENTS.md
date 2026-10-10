@@ -22,7 +22,7 @@ Attention 是 Android 原生时间投入与目标树应用。根项目使用 Gra
 常规 JVM 检查：`./gradlew test`。Android 构建或 instrumentation 测试需使用已配置的 Android SDK/AVD；环境失败应与代码断言失败分开记录。
 
 ## CodeGraph
-本项目已启用 CodeGraph，索引位于 `.codegraph/`。在理解代码、定位符号或编辑前，优先调用 `codegraph_explore`，并传入项目根路径；它返回当前源代码、调用路径和影响范围。索引数据库是本机生成物，由 `.codegraph/.gitignore` 排除，不提交到仓库。索引变化后运行 `codegraph update`（或重新 `codegraph init`）。
+本项目已启用 CodeGraph，索引位于 `.codegraph/`。在理解代码、定位符号或编辑前，优先调用 `codegraph_explore`，并传入项目根路径；它返回当前源代码、调用路径和影响范围。索引数据库是本机生成物，由 `.codegraph/.gitignore` 排除，不提交到仓库。已有索引变化后运行 `codegraph sync`，需要完整重建时运行 `codegraph index`；工作树没有索引时运行 `codegraph init`。
 
 ## 变更约束
 先阅读相关 ADR、规格和现有测试；保持未提交工作；数据库 schema 变化要更新迁移与 schema fixture；新增领域规则必须有纯 Kotlin 测试。不要把历史快照语义或设置职责重新移回 DataStore。
