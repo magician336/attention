@@ -107,7 +107,7 @@ class AttentionEngineTest {
         assertEquals(migrated.experience, cancelled.experience)
         assertTrue(cancelled.migrations.single().cancelled)
         assertThrows(IllegalArgumentException::class.java) {
-            cancelled.updateMigration(migration.copy(minutes = 20))
+            cancelled.updateMigration(migration.copy(minutes = 20), date)
         }
     }
 
