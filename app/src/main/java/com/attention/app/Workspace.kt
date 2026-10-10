@@ -67,16 +67,24 @@ import com.attention.domain.ScheduleFrequency
 import com.attention.domain.RecurrenceRule
 import com.attention.domain.StoredSettings
 import com.attention.domain.Target
+import com.attention.domain.TargetMove
 import com.attention.domain.TimeEntry
 import com.attention.domain.capacitySummary
 import com.attention.domain.directMinutes
 import com.attention.domain.descendantIds
 import com.attention.domain.effectiveStage
+import com.attention.domain.futureTargetMoveParents
+import com.attention.domain.goalRulesAt
+import com.attention.domain.isFutureTargetMoveDate
+import com.attention.domain.isPending
 import com.attention.domain.goalStagesForTarget
 import com.attention.domain.goalSummary
 import com.attention.domain.levelForExperience
+import com.attention.domain.parseTargetMoveDate
+import com.attention.domain.pendingTargetMoves
 import com.attention.domain.planningDate
 import com.attention.domain.periodStats
+import com.attention.domain.parentAt
 import com.attention.domain.progress
 import com.attention.domain.progressRange
 import com.attention.domain.subtreeMinutes
@@ -371,22 +379,28 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
 
 @Composable
 private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) {
+    val planningDate = state.planningDate(Instant.now())
     var title by remember { mutableStateOf("") }
     var parentId by remember { mutableStateOf<String?>(null) }
     var goalMinutes by remember { mutableStateOf("") }
     var goalCadence by remember { mutableStateOf(GoalCadence.DAILY) }
     var goalStartDate by remember { mutableStateOf(state.planningDate(Instant.now()).toString()) }
     var goalDueDate by remember { mutableStateOf("") }
+    var futureDate by remember { mutableStateOf(planningDate.plusDays(7).toString()) }
     var selectedPlanningDate by remember { mutableStateOf(state.planningDate(Instant.now()).toString()) }
-    var futureDate by remember { mutableStateOf(LocalDate.now().plusDays(7).toString()) }
     var futureMinutes by remember { mutableStateOf("") }
+    var futureDueDate by remember { mutableStateOf("") }
     var futureCadence by remember { mutableStateOf(GoalCadence.WEEKLY) }
+    var editingFutureRuleId by remember { mutableStateOf<String?>(null) }
     var appendGoalMinutes by remember { mutableStateOf("") }
     var appendGoalDueDate by remember { mutableStateOf("") }
     var pendingDelete by remember { mutableStateOf<Target?>(null) }
     var renameTarget by remember { mutableStateOf<Target?>(null) }
     var renameText by remember { mutableStateOf("") }
     var movingTarget by remember { mutableStateOf<Target?>(null) }
+    var editingMove by remember { mutableStateOf<TargetMove?>(null) }
+    var moveParentId by remember { mutableStateOf<String?>(null) }
+    var moveEffectiveDate by remember { mutableStateOf("") }
     var selectedUnownedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("目标树", style = MaterialTheme.typography.headlineMedium)
@@ -462,9 +476,18 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                         }
                     }
                     Text("未来生效的目标规则", style = MaterialTheme.typography.titleSmall)
+                    val currentRule = state.goalRulesAt(parentId!!, planningDate)
+                        .lastOrNull { it.stageId.isBlank() }
+                    Text(
+                        currentRule?.let { "当前规则：${it.cadence.label()} ${it.targetMinutes} 分钟 · 生效于 ${it.effectiveFrom}" }
+                            ?: "当前规则：使用目标阶段的承诺",
+                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         OutlinedTextField(futureDate, { futureDate = it }, label = { Text("生效日") }, modifier = Modifier.width(145.dp), singleLine = true)
                         OutlinedTextField(futureMinutes, { futureMinutes = it.filter(Char::isDigit) }, label = { Text("未来分钟") }, modifier = Modifier.width(120.dp), singleLine = true)
+                        if (futureCadence == GoalCadence.ONE_TIME) {
+                            OutlinedTextField(futureDueDate, { futureDueDate = it }, label = { Text("截止日（可选）") }, modifier = Modifier.width(145.dp), singleLine = true)
+                        }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         GoalCadence.entries.forEach { value ->
@@ -474,21 +497,45 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                     }
                     Button(onClick = {
                         futureMinutes.toIntOrNull()?.takeIf { it > 0 }?.let {
-                            viewModel.addFutureGoal(FutureGoalRule(targetId = parentId!!, cadence = futureCadence, targetMinutes = it, effectiveFrom = futureDate))
+                            val rule = FutureGoalRule(
+                                id = editingFutureRuleId ?: com.attention.domain.newId(),
+                                targetId = parentId!!,
+                                cadence = futureCadence,
+                                targetMinutes = it,
+                                effectiveFrom = futureDate,
+                                dueDate = futureDueDate.trim().takeIf { value -> futureCadence == GoalCadence.ONE_TIME && value.isNotEmpty() },
+                            )
+                            if (editingFutureRuleId == null) {
+                                viewModel.addFutureGoal(rule, planningDate)
+                            } else {
+                                viewModel.updateFutureGoal(rule, planningDate)
+                            }
                             futureMinutes = ""
+                            futureDueDate = ""
+                            editingFutureRuleId = null
                         }
-                    }) { Text("保存未来规则") }
+                    }) { Text(if (editingFutureRuleId == null) "保存未来规则" else "更新未来规则") }
                     state.futureGoalRules.filter { it.targetId == parentId }.forEach { rule ->
+                        val pending = rule.isPending(planningDate)
                         Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                            Text("${rule.effectiveFrom} · ${rule.cadence.label()} ${rule.targetMinutes} 分钟", Modifier.weight(1f))
-                            TextButton(onClick = { viewModel.cancelFutureGoal(rule.id) }) { Text("取消") }
+                            Text("${rule.effectiveFrom} · ${rule.cadence.label()} ${rule.targetMinutes} 分钟${rule.dueDate?.let { " · 截止 $it" } ?: ""}${if (pending) " · 待生效" else " · 当前/历史"}", Modifier.weight(1f))
+                            if (pending) {
+                                TextButton(onClick = {
+                                    editingFutureRuleId = rule.id
+                                    futureDate = rule.effectiveFrom
+                                    futureMinutes = rule.targetMinutes.toString()
+                                    futureCadence = rule.cadence
+                                    futureDueDate = rule.dueDate.orEmpty()
+                                }) { Text("编辑") }
+                                TextButton(onClick = { viewModel.cancelFutureGoal(rule.id, planningDate) }) { Text("取消") }
+                            }
                         }
                     }
                     val parsedPlanningDate = runCatching { LocalDate.parse(selectedPlanningDate) }.getOrNull()
-                    val planningDate = parsedPlanningDate ?: state.planningDate(Instant.now())
+                    val progressPlanningDate = parsedPlanningDate ?: planningDate
                     val target = state.targets.firstOrNull { it.id == parentId }
                     val stages = state.goalStagesForTarget(parentId!!)
-                    val oneTimeSummary = state.goalSummary(parentId!!, planningDate)
+                    val oneTimeSummary = state.goalSummary(parentId!!, progressPlanningDate)
                     if (stages.isNotEmpty()) {
                         Text("当前目标进度", style = MaterialTheme.typography.titleSmall)
                         OutlinedTextField(
@@ -506,24 +553,24 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                         }
                         stages.forEach { stage ->
                             val detail = oneTimeSummary.stageProgresses.firstOrNull { it.stage.id == stage.id }
-                            val progress = state.progress(stage, planningDate)
-                            Text(detail?.let { state.goalProgressLabel(it, planningDate) } ?: state.goalProgressLabel(stage, planningDate))
+                            val progress = state.progress(stage, progressPlanningDate)
+                            Text(detail?.let { state.goalProgressLabel(it, progressPlanningDate) } ?: state.goalProgressLabel(stage, progressPlanningDate))
                             state.stageFeedbackLabels(stage).forEach { label ->
                                 Text(label, modifier = Modifier.padding(start = 16.dp))
                             }
                             if (progress.gapMinutes > 0) {
                                 OutlinedButton(onClick = {
-                                    viewModel.addMigration(Migration(targetId = parentId!!, sourceStageId = stage.id, minutes = progress.gapMinutes, destinationStartDate = planningDate.plusDays(7).toString()))
+                                    viewModel.addMigration(Migration(targetId = parentId!!, sourceStageId = stage.id, minutes = progress.gapMinutes, destinationStartDate = progressPlanningDate.plusDays(7).toString()))
                                 }) { Text("将当前缺口 ${progress.gapMinutes} 分钟迁移到下周") }
                             }
                         }
                         val latest = stages.last()
-                        val latestProgress = state.progress(latest, planningDate)
+                        val latestProgress = state.progress(latest, progressPlanningDate)
                         if (parsedPlanningDate != null && target?.archived == false && latest.cadence == GoalCadence.ONE_TIME && latestProgress.completed) {
                             Card(Modifier.fillMaxWidth()) {
                                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Text("追加一次性阶段", style = MaterialTheme.typography.titleSmall)
-                                    Text("起始规划日：$planningDate")
+                                    Text("起始规划日：$progressPlanningDate")
                                     Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                                         OutlinedTextField(
                                             appendGoalMinutes,
@@ -547,7 +594,7 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                                             viewModel.appendOneTimeGoal(
                                                 targetId = parentId!!,
                                                 minutes = appendGoalMinutes.toIntOrNull() ?: 0,
-                                                startDate = planningDate.toString(),
+                                                startDate = progressPlanningDate.toString(),
                                                 dueDate = appendGoalDueDate.trim().takeIf(String::isNotEmpty),
                                                 onSuccess = {
                                                     appendGoalMinutes = ""
@@ -561,8 +608,23 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                             }
                         }
                     }
-                    if (target?.parentId != null) {
+                    if (target != null) {
+                        val futureMove = state.pendingTargetMoves(target.id, planningDate).firstOrNull()
+                        if (futureMove != null) {
+                            Text("待生效移动：${futureMove.effectiveFrom} → ${futureMove.parentId?.let { state.targetPath(it, parseTargetMoveDate(futureMove.effectiveFrom)) } ?: "根计划"}")
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                OutlinedButton(onClick = {
+                                    movingTarget = target
+                                    editingMove = futureMove
+                                    moveParentId = futureMove.parentId
+                                    moveEffectiveDate = futureMove.effectiveFrom
+                                }) { Text("编辑移动") }
+                                TextButton(onClick = { viewModel.cancelFutureTargetMove(futureMove.id) }) { Text("取消移动") }
+                            }
+                        }
+                        if (target.parentId != null) {
                         OutlinedButton(onClick = { viewModel.moveTargetFrom(target.id, null, state.planningDate(Instant.now()).plusDays(1).toString()) }) { Text("从明日起移到根计划") }
+                        }
                     }
                 }
             }
@@ -575,19 +637,67 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
             }
         }
         movingTarget?.let { target ->
-            val excludedIds = state.descendantIds(target.id)
+            val parsedEffectiveDate = parseTargetMoveDate(moveEffectiveDate)
+            val validEffectiveDate = isFutureTargetMoveDate(moveEffectiveDate, planningDate)
+            val candidateParents = state.futureTargetMoveParents(target.id, moveEffectiveDate, planningDate)
+            val pendingMoves = state.pendingTargetMoves(target.id, planningDate)
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("移动 ${target.title}：选择新的父目标", style = MaterialTheme.typography.titleSmall)
-                    OutlinedButton(onClick = { viewModel.moveTarget(target.id, null); movingTarget = null }) { Text("移到根计划") }
-                    state.targets
-                        .filter { !it.archived && it.id !in excludedIds }
-                        .sortedBy { state.targetPath(it.id) }
+                    OutlinedTextField(
+                        moveEffectiveDate,
+                        { moveEffectiveDate = it },
+                        label = { Text("生效规划日") },
+                        modifier = Modifier.width(160.dp),
+                        singleLine = true,
+                    )
+                    if (!validEffectiveDate) {
+                        Text("生效日必须晚于当前规划日 $planningDate", color = MaterialTheme.colorScheme.error)
+                    }
+                    if (moveParentId == null) Button(onClick = {}) { Text("移到根计划") }
+                    else OutlinedButton(onClick = { moveParentId = null }) { Text("移到根计划") }
+                    candidateParents
+                        .sortedBy { state.targetPath(it.id, parsedEffectiveDate ?: planningDate) }
                         .forEach { candidate ->
-                            OutlinedButton(onClick = { viewModel.moveTarget(target.id, candidate.id); movingTarget = null }) {
-                                Text("移到：${state.targetPath(candidate.id)}")
+                            if (moveParentId == candidate.id) {
+                                Button(onClick = {}) { Text("移到：${state.targetPath(candidate.id, parsedEffectiveDate ?: planningDate)}") }
+                            } else {
+                                OutlinedButton(onClick = { moveParentId = candidate.id }) {
+                                    Text("移到：${state.targetPath(candidate.id, parsedEffectiveDate ?: planningDate)}")
+                                }
                             }
                         }
+                    Button(
+                        enabled = validEffectiveDate,
+                        onClick = {
+                            val effectiveFrom = parsedEffectiveDate?.toString() ?: return@Button
+                            val existing = editingMove
+                            if (existing == null) {
+                                viewModel.moveTargetFrom(target.id, moveParentId, effectiveFrom)
+                            } else {
+                                viewModel.updateFutureTargetMove(existing.copy(parentId = moveParentId, effectiveFrom = effectiveFrom))
+                            }
+                            movingTarget = null
+                            editingMove = null
+                        },
+                    ) { Text(if (editingMove == null) "保存未来移动" else "保存移动修改") }
+                    if (pendingMoves.isNotEmpty()) {
+                        Text("待生效移动", style = MaterialTheme.typography.titleSmall)
+                        pendingMoves.forEach { move ->
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                Text(
+                                    "${move.effectiveFrom} → ${move.parentId?.let { state.targetPath(it, parseTargetMoveDate(move.effectiveFrom)) } ?: "根计划"}",
+                                    Modifier.weight(1f),
+                                )
+                                TextButton(onClick = {
+                                    editingMove = move
+                                    moveParentId = move.parentId
+                                    moveEffectiveDate = move.effectiveFrom
+                                }) { Text("编辑") }
+                                TextButton(onClick = { viewModel.cancelFutureTargetMove(move.id) }) { Text("取消") }
+                            }
+                        }
+                    }
                     TextButton(onClick = { movingTarget = null }) { Text("取消移动") }
                 }
             }
@@ -599,7 +709,12 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
             0,
             chooseParent = { parentId = it },
             rename = { target -> renameTarget = target; renameText = target.title },
-            move = { movingTarget = it },
+            move = {
+                movingTarget = it
+                editingMove = null
+                moveParentId = state.parentAt(it.id, planningDate)
+                moveEffectiveDate = planningDate.plusDays(1).toString()
+            },
         )
         if (state.targets.none { !it.archived }) Text("还没有计划。")
         if (state.targets.any { it.archived }) {
@@ -654,15 +769,22 @@ private fun TargetTree(
     rename: (Target) -> Unit,
     move: (Target) -> Unit,
 ) {
-    state.targetChildren(parentId).forEach { target ->
-        val children = state.targetChildren(target.id)
-        val planningDate = state.planningDate(Instant.now())
+    val planningDate = state.planningDate(Instant.now())
+    state.targetChildren(parentId, planningDate).forEach { target ->
+        val children = state.targetChildren(target.id, planningDate)
+        val pendingMove = state.pendingTargetMoves(target.id, planningDate).firstOrNull()
         Column(Modifier.padding(start = (depth * 16).dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                 Text(if (children.isEmpty()) "•" else if (target.expanded) "▾" else "▸")
                 Spacer(Modifier.width(6.dp))
                 Text(target.title, modifier = Modifier.weight(1f))
                 Text("直接 ${state.directMinutes(target.id)} / 汇总 ${state.subtreeMinutes(target.id)} 分钟")
+            }
+            pendingMove?.let { move ->
+                Text(
+                    "待移动：${move.effectiveFrom} → ${move.parentId?.let { state.targetPath(it, parseTargetMoveDate(move.effectiveFrom)) } ?: "根计划"}",
+                    modifier = Modifier.padding(start = 22.dp),
+                )
             }
             val stages = state.goalStagesForTarget(target.id)
             val oneTimeSummary = state.goalSummary(target.id, planningDate)
@@ -684,7 +806,7 @@ private fun TargetTree(
                 TextButton(onClick = { chooseParent(target.id) }) { Text("添加子计划") }
                 TextButton(onClick = { rename(target) }) { Text("重命名") }
                 TextButton(onClick = { move(target) }) { Text("移动") }
-                val siblings = state.targetChildren(parentId)
+                val siblings = state.targetChildren(parentId, planningDate)
                 val index = siblings.indexOf(target)
                 if (index > 0) TextButton(onClick = { viewModel.reorderTarget(target.id, index - 1) }) { Text("上移") }
                 if (index < siblings.lastIndex) TextButton(onClick = { viewModel.reorderTarget(target.id, index + 1) }) { Text("下移") }
@@ -782,6 +904,22 @@ private fun StatisticsScreen(
     val stats = state.periodStats(LocalDate.parse(date), cadence)
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("统计与成长", style = MaterialTheme.typography.headlineMedium)
+        Text("历史周期快照", style = MaterialTheme.typography.titleMedium)
+        Text("快照保存周期结束时的目标、实际投入、缺口和达成结果；重复结算不会新增记录。")
+        Button(onClick = viewModel::settlePeriodSnapshots) { Text("结算已结束周期") }
+        if (state.periodSnapshots.isEmpty()) {
+            Text("还没有已保存的周期快照。")
+        } else {
+            state.periodSnapshots.sortedWith(compareBy({ it.periodStart }, { it.id })).forEach { snapshot ->
+                val targetLabel = state.targets.firstOrNull { it.id == snapshot.targetId }?.title
+                    ?: "已删除目标 ${snapshot.targetId.take(8)}"
+                Text(
+                    "$targetLabel · ${snapshot.cadence.label()} ${snapshot.periodStart}～${snapshot.periodEnd}：" +
+                        "${snapshot.actualMinutes}/${snapshot.targetMinutes} 分钟" +
+                        if (snapshot.completed) " · 达成" else " · 缺口 ${snapshot.gapMinutes}",
+                )
+            }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             GoalCadence.entries.forEach { value ->
                 if (cadence == value) Button(onClick = {}) { Text(value.label()) }
@@ -796,9 +934,6 @@ private fun StatisticsScreen(
                 Text("主动迁移 ${migration.minutes} 分钟 · ${migration.destinationStartDate}", Modifier.weight(1f))
                 TextButton(onClick = { viewModel.cancelMigration(migration.id) }) { Text("取消") }
             }
-        }
-        state.periodSnapshots.takeLast(5).forEach { snapshot ->
-            Text("周期快照 ${snapshot.periodStart}～${snapshot.periodEnd}：${snapshot.actualMinutes}/${snapshot.targetMinutes} 分钟${if (snapshot.completed) " · 达成" else " · 缺口 ${snapshot.gapMinutes}"}")
         }
         Text("投入经验：${state.experience} · 等级 ${levelForExperience(state.experience)}")
         Button(onClick = viewModel::awardMilestones) { Text("结算可达成里程碑") }
@@ -888,13 +1023,14 @@ private fun AttentionState.stageFeedbackLabels(stage: GoalStage): List<String> =
         }
     }
 
-private fun AttentionState.targetPath(targetId: String): String {
+private fun AttentionState.targetPath(targetId: String, onDate: LocalDate? = null): String {
     val names = mutableListOf<String>()
     val seen = mutableSetOf<String>()
     var current = targets.firstOrNull { it.id == targetId }
     while (current != null && seen.add(current.id)) {
         names += current.title
-        current = current.parentId?.let { parentId -> targets.firstOrNull { it.id == parentId } }
+        val parentId = onDate?.let { parentAt(current.id, it) } ?: current.parentId
+        current = parentId?.let { id -> targets.firstOrNull { it.id == id } }
     }
     return names.asReversed().joinToString(" / ")
 }

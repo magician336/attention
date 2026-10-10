@@ -22,19 +22,26 @@ import com.attention.domain.TargetMove
 import com.attention.domain.TimeEntry
 import com.attention.domain.TimeEntrySource
 import com.attention.domain.TimerSegment
+import com.attention.domain.addFutureTargetMove
+import com.attention.domain.addGoalStage
+import com.attention.domain.addTarget
+import com.attention.domain.addTimeEntry
+import com.attention.domain.parentAt
+import com.attention.domain.settlePeriodSnapshots
 import com.attention.domain.appendOneTimeGoalStage
 import com.attention.domain.awardEligibleMilestones
-import com.attention.domain.addTimeEntry
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.time.LocalDate
 
 @RunWith(AndroidJUnit4::class)
 class RoomBusinessDataRepositoryTest {
@@ -197,6 +204,55 @@ class RoomBusinessDataRepositoryTest {
     }
 
     @Test
+    fun target_move_round_trip_preserves_stable_id_parent_and_effective_date() = runBlocking {
+        val oldParent = Target("old-parent", title = "旧父目标")
+        val newParent = Target("new-parent", title = "新父目标")
+        val child = Target("child", parentId = oldParent.id, title = "子计划")
+        val move = TargetMove("move-child", child.id, newParent.id, "2026-11-01")
+        val repository = RoomBusinessDataRepository(database)
+
+        repository.replace(AttentionState(targets = listOf(oldParent, newParent, child), targetMoves = listOf(move)))
+
+        val loaded = repository.read()
+        assertEquals(listOf(move), loaded.targetMoves)
+        assertEquals(oldParent.id, loaded.parentAt(child.id, LocalDate.parse("2026-10-31")))
+        assertEquals(newParent.id, loaded.parentAt(child.id, LocalDate.parse("2026-11-01")))
+    }
+
+    @Test
+    fun future_target_move_rejects_past_dates_and_scheduled_cycles_on_android() {
+        val state = AttentionState().addTarget("父目标").addTarget("另一个父目标")
+        val parent = state.targets[0]
+        val otherParent = state.targets[1]
+        val withChild = state.addTarget("子计划", parent.id)
+        val child = withChild.targets.single { it.title == "子计划" }
+
+        assertThrows(IllegalArgumentException::class.java) {
+            withChild.addFutureTargetMove(child.id, otherParent.id, "2026-10-08", LocalDate.parse("2026-10-08"))
+        }
+        val scheduled = withChild.addFutureTargetMove(parent.id, otherParent.id, "2026-10-09", LocalDate.parse("2026-10-08"))
+        assertThrows(IllegalArgumentException::class.java) {
+            scheduled.addFutureTargetMove(otherParent.id, parent.id, "2026-10-10", LocalDate.parse("2026-10-08"))
+        }
+    }
+
+    @Test
+    fun settled_snapshots_are_observed_and_remain_idempotent_in_room() = runBlocking {
+        val target = Target("snapshot-target", title = "周期目标")
+        val state = AttentionState(targets = listOf(target))
+            .addGoalStage(target.id, GoalCadence.WEEKLY, 120, "2026-10-01")
+            .addTimeEntry("2026-10-02", 90, target.id)
+        val settled = state.settlePeriodSnapshots(LocalDate.parse("2026-10-08"))
+        val repository = RoomBusinessDataRepository(database)
+
+        repository.replace(settled)
+
+        val loaded = repository.read()
+        assertEquals(settled.periodSnapshots, loaded.periodSnapshots)
+        assertEquals(1, loaded.settlePeriodSnapshots(LocalDate.parse("2026-10-08")).periodSnapshots.size)
+    }
+
+    @Test
     fun deleting_target_relations_removes_descendants_leaf_first() = runBlocking {
         val parent = Target("parent", title = "父目标")
         val child = Target("child", parentId = parent.id, title = "子目标")
@@ -298,7 +354,7 @@ class RoomBusinessDataRepositoryTest {
             recurrenceRules = listOf(RecurrenceRule("rule", "阅读", "2026-10-01", ScheduleFrequency.DAILY, targetId = target.id)),
             migrations = listOf(Migration("migration", target.id, "stage", 20, "2026-10-08")),
             futureGoalRules = listOf(FutureGoalRule("future", target.id, "stage", GoalCadence.MONTHLY, 300, "2026-11-01")),
-            periodSnapshots = listOf(PeriodSnapshot("snapshot", target.id, GoalCadence.WEEKLY, "2026-10-01", "2026-10-07", 120, 90, 30, 0, false)),
+            periodSnapshots = listOf(PeriodSnapshot("snapshot", target.id, GoalCadence.WEEKLY, "2026-10-01", "2026-10-07", 120, 90, 30, 0, false, stageId = "stage")),
             targetMoves = listOf(TargetMove("move", target.id, null, "2026-11-01")),
             milestones = listOf(Milestone("milestone", "goal_period", "target:2026-10-01", 20, 789L)),
             experience = 1234L,
