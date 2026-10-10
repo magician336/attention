@@ -67,8 +67,10 @@ import com.attention.domain.TimeEntry
 import com.attention.domain.capacitySummary
 import com.attention.domain.directMinutes
 import com.attention.domain.descendantIds
+import com.attention.domain.effectiveStage
 import com.attention.domain.levelForExperience
 import com.attention.domain.planningDate
+import com.attention.domain.periodRange
 import com.attention.domain.periodStats
 import com.attention.domain.progress
 import com.attention.domain.subtreeMinutes
@@ -549,17 +551,24 @@ private fun TargetTree(
                 Text("直接 ${state.directMinutes(target.id)} / 汇总 ${state.subtreeMinutes(target.id)} 分钟")
             }
             state.goalStages.filter { it.targetId == target.id }.forEach { stage ->
+                val effectiveStage = state.effectiveStage(stage, planningDate)
                 val progress = state.progress(stage, planningDate)
-                val stageStart = LocalDate.parse(stage.startDate)
+                val stageStart = LocalDate.parse(effectiveStage.startDate)
+                val periodRange = when (effectiveStage.cadence) {
+                    GoalCadence.ONE_TIME -> null
+                    else -> state.periodRange(planningDate, effectiveStage.cadence)
+                }
+                val periodLabel = periodRange?.let { "周期 ${it.start} 至 ${it.endInclusive}" }
                 val summary = if (planningDate.isBefore(stageStart)) {
-                    "${stage.cadence.label()}目标 ${stage.targetMinutes} 分钟 · 尚未开始"
+                    "${effectiveStage.cadence.label()}目标 ${effectiveStage.targetMinutes} 分钟 · 尚未开始 · 生效日 $stageStart"
                 } else {
                     val status = when {
                         progress.excessMinutes > 0 -> "达成 · 超额 ${progress.excessMinutes} 分钟"
                         progress.completed -> "达成"
                         else -> "缺口 ${progress.gapMinutes} 分钟"
                     }
-                    "${stage.cadence.label()}目标 ${progress.actualMinutes}/${progress.targetMinutes} 分钟 · $status"
+                    val period = periodLabel?.let { " · $it" }.orEmpty()
+                    "${effectiveStage.cadence.label()}目标 ${progress.actualMinutes}/${progress.targetMinutes} 分钟$period · $status"
                 }
                 Text(summary, modifier = Modifier.padding(start = 22.dp))
             }

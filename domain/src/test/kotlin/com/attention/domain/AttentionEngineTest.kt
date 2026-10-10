@@ -80,6 +80,69 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun weekly_goal_uses_configured_seven_day_boundaries_and_excludes_adjacent_weeks() {
+        val mondayStart = AttentionState().addTarget("英语").copy(
+            settings = StoredSettings(weekStartDay = 1),
+        )
+        val mondayTarget = mondayStart.targets.single()
+        val stage = mondayStart.addGoalStage(mondayTarget.id, GoalCadence.WEEKLY, 60, date.toString()).goalStages.single()
+        val records = mondayStart
+            .addTimeEntry("2026-10-04", 100, mondayTarget.id)
+            .addTimeEntry("2026-10-05", 30, mondayTarget.id)
+            .addTimeEntry("2026-10-11", 40, mondayTarget.id)
+            .addTimeEntry("2026-10-12", 200, mondayTarget.id)
+
+        val mondayRange = records.periodRange(date, GoalCadence.WEEKLY)
+        val mondayProgress = records.progress(stage, date)
+        val sundayStart = records.copy(settings = StoredSettings(weekStartDay = 7))
+        val sundayRange = sundayStart.periodRange(date, GoalCadence.WEEKLY)
+        val sundayProgress = sundayStart.progress(stage, date)
+
+        assertEquals(LocalDate.of(2026, 10, 5), mondayRange.start)
+        assertEquals(LocalDate.of(2026, 10, 11), mondayRange.endInclusive)
+        assertEquals(70, mondayProgress.actualMinutes)
+        assertTrue(mondayProgress.completed)
+        assertEquals(10, mondayProgress.excessMinutes)
+        assertEquals(LocalDate.of(2026, 10, 4), sundayRange.start)
+        assertEquals(LocalDate.of(2026, 10, 10), sundayRange.endInclusive)
+        assertEquals(130, sundayProgress.actualMinutes)
+        assertTrue(sundayProgress.completed)
+        assertEquals(70, sundayProgress.excessMinutes)
+    }
+
+    @Test
+    fun monthly_goal_uses_calendar_month_boundaries_including_february_leap_day() {
+        val state = AttentionState().addTarget("阅读")
+        val target = state.targets.single()
+        val stage = state.addGoalStage(target.id, GoalCadence.MONTHLY, 60, "2024-02-01").goalStages.single()
+        val records = state
+            .addTimeEntry("2024-01-31", 90, target.id)
+            .addTimeEntry("2024-02-01", 20, target.id)
+            .addTimeEntry("2024-02-29", 25, target.id)
+            .addTimeEntry("2024-03-01", 120, target.id)
+
+        val leapFebruary = records.periodRange(LocalDate.of(2024, 2, 14), GoalCadence.MONTHLY)
+        val regularFebruary = records.periodRange(LocalDate.of(2025, 2, 14), GoalCadence.MONTHLY)
+        val sundaySettingsFebruary = records.copy(settings = StoredSettings(weekStartDay = 7))
+        val progress = records.progress(stage, LocalDate.of(2024, 2, 14))
+        val excess = records.addTimeEntry("2024-02-29", 20, target.id)
+            .progress(stage, LocalDate.of(2024, 2, 29))
+
+        assertEquals(LocalDate.of(2024, 2, 1), leapFebruary.start)
+        assertEquals(LocalDate.of(2024, 2, 29), leapFebruary.endInclusive)
+        assertEquals(leapFebruary, sundaySettingsFebruary.periodRange(LocalDate.of(2024, 2, 14), GoalCadence.MONTHLY))
+        assertEquals(LocalDate.of(2025, 2, 1), regularFebruary.start)
+        assertEquals(LocalDate.of(2025, 2, 28), regularFebruary.endInclusive)
+        assertEquals(45, progress.actualMinutes)
+        assertEquals(15, progress.gapMinutes)
+        assertEquals(0, progress.excessMinutes)
+        assertEquals(65, excess.actualMinutes)
+        assertEquals(0, excess.gapMinutes)
+        assertEquals(5, excess.excessMinutes)
+        assertTrue(excess.completed)
+    }
+
+    @Test
     fun adding_a_goal_to_an_archived_target_is_rejected_without_changing_state() {
         val state = AttentionState().addTarget("旧计划")
         val target = state.targets.single()
