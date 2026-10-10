@@ -56,6 +56,62 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun migrations_are_limited_by_current_gap_and_source_period_boundary() {
+        val targetState = AttentionState().addTarget("英语")
+        val target = targetState.targets.single()
+        val withStage = targetState.addGoalStage(
+            target.id,
+            GoalCadence.WEEKLY,
+            100,
+            LocalDate.of(2026, 10, 5).toString(),
+        )
+        val stage = withStage.goalStages.single()
+        val current = withStage.addTimeEntry(date.toString(), 40, target.id)
+        val migration = Migration(
+            id = "migration-1",
+            targetId = target.id,
+            sourceStageId = stage.id,
+            minutes = 30,
+            destinationStartDate = "2026-10-12",
+        )
+
+        val migrated = current.addMigration(migration, date)
+
+        assertEquals(30, migrated.availableMigrationMinutes(stage, date))
+        assertThrows(IllegalArgumentException::class.java) {
+            migrated.addMigration(migration.copy(id = "migration-2", minutes = 31), date)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            current.addMigration(migration.copy(destinationStartDate = "2026-10-11"), date)
+        }
+    }
+
+    @Test
+    fun cancelling_a_migration_releases_capacity_without_changing_time_or_experience() {
+        val targetState = AttentionState().addTarget("英语")
+        val target = targetState.targets.single()
+        val withStage = targetState.addGoalStage(
+            target.id,
+            GoalCadence.WEEKLY,
+            100,
+            LocalDate.of(2026, 10, 5).toString(),
+        )
+        val stage = withStage.goalStages.single()
+        val current = withStage.addTimeEntry(date.toString(), 40, target.id)
+        val migration = Migration("migration-1", target.id, stage.id, 30, "2026-10-12")
+        val migrated = current.addMigration(migration, date)
+        val cancelled = migrated.cancelMigration(migration.id)
+
+        assertEquals(60, cancelled.availableMigrationMinutes(stage, date))
+        assertEquals(40, cancelled.activeTargetMinutes(date.toString()))
+        assertEquals(migrated.experience, cancelled.experience)
+        assertTrue(cancelled.migrations.single().cancelled)
+        assertThrows(IllegalArgumentException::class.java) {
+            cancelled.updateMigration(migration.copy(minutes = 20))
+        }
+    }
+
+    @Test
     fun parent_and_child_goals_roll_up_arbitrary_depth_once_across_sources() {
         val rootState = AttentionState().addTarget("根目标")
         val root = rootState.targets.single()

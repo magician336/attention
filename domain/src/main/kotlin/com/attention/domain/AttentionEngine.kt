@@ -410,21 +410,40 @@ fun AttentionState.occurrences(rule: RecurrenceRule, through: LocalDate): List<S
         .toList()
 }
 
-fun AttentionState.addMigration(migration: Migration): AttentionState {
+fun AttentionState.availableMigrationMinutes(stage: GoalStage, onDate: LocalDate): Int {
+    require(goalStages.any { it.id == stage.id && it.targetId == stage.targetId })
+    val reserved = migrations
+        .filter { it.sourceStageId == stage.id && !it.cancelled }
+        .sumOf { it.minutes }
+    return (progress(stage, onDate).gapMinutes - reserved).coerceAtLeast(0)
+}
+
+fun AttentionState.addMigration(migration: Migration, onDate: LocalDate? = null): AttentionState {
     require(migration.minutes > 0)
-    require(goalStages.any { it.id == migration.sourceStageId && it.targetId == migration.targetId })
-    LocalDate.parse(migration.destinationStartDate)
-    migration.destinationEndDate?.let(LocalDate::parse)
+    require(targets.any { it.id == migration.targetId && !it.archived })
+    val sourceStage = goalStages.firstOrNull { it.id == migration.sourceStageId && it.targetId == migration.targetId }
+        ?: error("来源目标阶段不存在")
+    val destinationStart = LocalDate.parse(migration.destinationStartDate)
+    val destinationEnd = migration.destinationEndDate?.let(LocalDate::parse)
+    require(destinationEnd == null || !destinationEnd.isBefore(destinationStart))
+    onDate?.let { date ->
+        require(destinationStart.isAfter(progressRange(sourceStage, date).endInclusive))
+        require(migration.minutes <= availableMigrationMinutes(sourceStage, date))
+    }
     return copy(migrations = migrations + migration)
 }
 
-fun AttentionState.updateMigration(migration: Migration): AttentionState = copy(
-    migrations = migrations.map { if (it.id == migration.id) migration else it },
-)
+fun AttentionState.updateMigration(migration: Migration, onDate: LocalDate? = null): AttentionState {
+    val existing = migrations.firstOrNull { it.id == migration.id } ?: error("迁移记录不存在")
+    require(!existing.cancelled)
+    val withoutExisting = copy(migrations = migrations - existing)
+    return withoutExisting.addMigration(migration, onDate)
+}
 
-fun AttentionState.cancelMigration(migrationId: String): AttentionState = copy(
-    migrations = migrations.map { if (it.id == migrationId) it.copy(cancelled = true) else it },
-)
+fun AttentionState.cancelMigration(migrationId: String): AttentionState {
+    require(migrations.any { it.id == migrationId })
+    return copy(migrations = migrations.map { if (it.id == migrationId) it.copy(cancelled = true) else it })
+}
 
 fun AttentionState.gapFor(stage: GoalStage, onDate: LocalDate): Int = progress(stage, onDate).gapMinutes
 
