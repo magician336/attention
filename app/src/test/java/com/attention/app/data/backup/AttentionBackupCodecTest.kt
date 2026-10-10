@@ -36,7 +36,7 @@ class AttentionBackupCodecTest {
             recurrenceRules = listOf(RecurrenceRule("rule", "阅读", "2026-10-01", ScheduleFrequency.DAILY, targetId = target.id)),
             migrations = listOf(Migration("migration", target.id, "stage", 20, "2026-10-08")),
             futureGoalRules = listOf(com.attention.domain.FutureGoalRule("future", target.id, "stage", GoalCadence.MONTHLY, 300, "2026-11-01")),
-            periodSnapshots = listOf(PeriodSnapshot("snapshot", target.id, GoalCadence.WEEKLY, "2026-10-01", "2026-10-07", 120, 90, 30, 0, false)),
+            periodSnapshots = listOf(PeriodSnapshot("snapshot", target.id, GoalCadence.WEEKLY, "2026-10-01", "2026-10-07", 120, 90, 30, 0, false, stageId = "stage")),
             targetMoves = listOf(TargetMove("move", target.id, null, "2026-11-01")),
             milestones = listOf(Milestone("milestone", "goal_period", "target:2026-10-01", 20, 789L)),
             experience = 1234L,

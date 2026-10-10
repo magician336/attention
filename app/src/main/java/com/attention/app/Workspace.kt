@@ -802,6 +802,22 @@ private fun StatisticsScreen(
     val stats = state.periodStats(LocalDate.parse(date), cadence)
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("统计与成长", style = MaterialTheme.typography.headlineMedium)
+        Text("历史周期快照", style = MaterialTheme.typography.titleMedium)
+        Text("快照保存周期结束时的目标、实际投入、缺口和达成结果；重复结算不会新增记录。")
+        Button(onClick = viewModel::settlePeriodSnapshots) { Text("结算已结束周期") }
+        if (state.periodSnapshots.isEmpty()) {
+            Text("还没有已保存的周期快照。")
+        } else {
+            state.periodSnapshots.sortedWith(compareBy({ it.periodStart }, { it.id })).takeLast(8).forEach { snapshot ->
+                val targetLabel = state.targets.firstOrNull { it.id == snapshot.targetId }?.title
+                    ?: "已删除目标 ${snapshot.targetId.take(8)}"
+                Text(
+                    "$targetLabel · ${snapshot.cadence.label()} ${snapshot.periodStart}～${snapshot.periodEnd}：" +
+                        "${snapshot.actualMinutes}/${snapshot.targetMinutes} 分钟" +
+                        if (snapshot.completed) " · 达成" else " · 缺口 ${snapshot.gapMinutes}",
+                )
+            }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             GoalCadence.entries.forEach { value ->
                 if (cadence == value) Button(onClick = {}) { Text(value.label()) }
@@ -816,9 +832,6 @@ private fun StatisticsScreen(
                 Text("主动迁移 ${migration.minutes} 分钟 · ${migration.destinationStartDate}", Modifier.weight(1f))
                 TextButton(onClick = { viewModel.cancelMigration(migration.id) }) { Text("取消") }
             }
-        }
-        state.periodSnapshots.takeLast(5).forEach { snapshot ->
-            Text("周期快照 ${snapshot.periodStart}～${snapshot.periodEnd}：${snapshot.actualMinutes}/${snapshot.targetMinutes} 分钟${if (snapshot.completed) " · 达成" else " · 缺口 ${snapshot.gapMinutes}"}")
         }
         Text("投入经验：${state.experience} · 等级 ${levelForExperience(state.experience)}")
         Button(onClick = viewModel::awardMilestones) { Text("结算可达成里程碑") }

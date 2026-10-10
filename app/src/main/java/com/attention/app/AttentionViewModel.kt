@@ -46,6 +46,7 @@ import com.attention.domain.timeEntriesCsv
 import com.attention.domain.setTargetExpanded
 import com.attention.domain.moveTarget
 import com.attention.domain.reorderTarget
+import com.attention.domain.settlePeriodSnapshots
 import com.attention.domain.materializeOccurrences
 import com.attention.domain.planningDate
 import com.attention.domain.updateFutureTargetMove
@@ -152,6 +153,7 @@ class AttentionViewModel(
     }
 
     fun awardMilestones() = runCommand { it.awardEligibleMilestones(java.time.LocalDate.now(zone)) }
+    fun settlePeriodSnapshots() = runCommand { it.settlePeriodSnapshots(it.planningDate(Instant.now(), zone)) }
 
     fun exportJson(onResult: (String) -> Unit) = scope.launch {
         runCatching { repository.exportJson() }

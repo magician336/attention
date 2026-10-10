@@ -132,6 +132,7 @@ data class PeriodSnapshot(
     val gapMinutes: Int,
     val excessMinutes: Int,
     val completed: Boolean,
+    val stageId: String = "",
 )
 
 @Serializable

@@ -408,24 +408,68 @@ private fun AttentionState.validateFutureGoalRule(rule: FutureGoalRule, notBefor
     }
 }
 
+private fun PeriodSnapshot.samePeriodAs(other: PeriodSnapshot): Boolean {
+    val sameStage = stageId == other.stageId || stageId.isBlank() || other.stageId.isBlank()
+    return sameStage && targetId == other.targetId && cadence == other.cadence &&
+        periodStart == other.periodStart && periodEnd == other.periodEnd
+}
+
 fun AttentionState.addPeriodSnapshot(snapshot: PeriodSnapshot): AttentionState {
-    require(periodSnapshots.none { it.targetId == snapshot.targetId && it.periodStart == snapshot.periodStart && it.cadence == snapshot.cadence })
+    if (periodSnapshots.any { it.samePeriodAs(snapshot) }) return this
+    require(!LocalDate.parse(snapshot.periodEnd).isBefore(LocalDate.parse(snapshot.periodStart))) {
+        "周期结束日不能早于开始日"
+    }
     return copy(periodSnapshots = periodSnapshots + snapshot)
 }
 
 fun AttentionState.snapshot(stage: GoalStage, periodStart: LocalDate, periodEnd: LocalDate): PeriodSnapshot {
-    val result = progress(stage, periodEnd)
+    require(!periodEnd.isBefore(periodStart)) { "周期结束日不能早于开始日" }
+    val effective = effectiveStage(stage, periodEnd)
+    val effectiveStart = LocalDate.parse(effective.startDate)
+    require(!periodEnd.isBefore(effectiveStart)) { "目标阶段尚未开始" }
+    val actualStart = maxOf(periodStart, effectiveStart)
+    val actual = timeEntries
+        .filter { LocalDate.parse(it.planningDate) in actualStart..periodEnd }
+        .filter { it.targetId != null }
+        .filter { isDescendantAt(it.targetId!!, effective.targetId, LocalDate.parse(it.planningDate)) }
+        .sumOf { it.durationMinutes }
+    val days = (periodEnd.toEpochDay() - actualStart.toEpochDay() + 1).toInt()
+    val targetMinutes = if (effective.cadence == GoalCadence.DAILY) effective.targetMinutes * days else effective.targetMinutes
+    val gap = (targetMinutes - actual).coerceAtLeast(0)
     return PeriodSnapshot(
         targetId = stage.targetId,
-        cadence = stage.cadence,
+        cadence = effective.cadence,
         periodStart = periodStart.toString(),
         periodEnd = periodEnd.toString(),
-        targetMinutes = result.targetMinutes,
-        actualMinutes = result.actualMinutes,
-        gapMinutes = result.gapMinutes,
-        excessMinutes = result.excessMinutes,
-        completed = result.completed,
+        targetMinutes = targetMinutes,
+        actualMinutes = actual,
+        gapMinutes = gap,
+        excessMinutes = (actual - targetMinutes).coerceAtLeast(0),
+        completed = actual >= targetMinutes,
+        stageId = stage.id,
     )
+}
+
+fun AttentionState.settlePeriodSnapshots(asOf: LocalDate): AttentionState =
+    goalStages.fold(this) { state, stage -> state.settleStageSnapshots(stage, asOf) }
+
+private fun AttentionState.settleStageSnapshots(stage: GoalStage, asOf: LocalDate): AttentionState {
+    var state = this
+    var cursor = LocalDate.parse(stage.startDate)
+    while (true) {
+        val effective = state.effectiveStage(stage, cursor)
+        val calendarRange = state.periodRange(cursor, effective.cadence)
+        val periodStart = maxOf(cursor, calendarRange.start)
+        val periodEnd = when (effective.cadence) {
+            GoalCadence.ONE_TIME -> effective.dueDate?.let(LocalDate::parse) ?: periodStart
+            else -> calendarRange.endInclusive
+        }
+        if (!periodEnd.isBefore(asOf)) break
+        state = state.addPeriodSnapshot(state.snapshot(stage, periodStart, periodEnd))
+        if (effective.cadence == GoalCadence.ONE_TIME) break
+        cursor = periodEnd.plusDays(1)
+    }
+    return state
 }
 
 fun AttentionState.addFutureTargetMove(

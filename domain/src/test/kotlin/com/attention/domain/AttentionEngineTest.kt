@@ -434,6 +434,61 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun settling_finished_periods_supports_all_cadences_and_is_idempotent() {
+        val start = LocalDate.of(2026, 10, 1)
+        val base = AttentionState()
+            .addTarget("每日")
+            .addTarget("每周")
+            .addTarget("每月")
+            .addTarget("一次性")
+        val daily = base.targets[0]
+        val weekly = base.targets[1]
+        val monthly = base.targets[2]
+        val oneTime = base.targets[3]
+        val state = base
+            .addGoalStage(daily.id, GoalCadence.DAILY, 60, start.toString())
+            .addGoalStage(weekly.id, GoalCadence.WEEKLY, 120, start.toString())
+            .addGoalStage(monthly.id, GoalCadence.MONTHLY, 300, start.toString())
+            .addGoalStage(oneTime.id, GoalCadence.ONE_TIME, 90, start.toString(), start.plusDays(2).toString())
+            .addTimeEntry(start.toString(), 75, daily.id, TimeEntrySource.TIMER, 123L, "计时")
+            .addTimeEntry(start.plusDays(1).toString(), 90, oneTime.id)
+        val asOf = LocalDate.of(2026, 11, 2)
+
+        val settled = state.settlePeriodSnapshots(asOf)
+        val dailySnapshot = settled.periodSnapshots.first { it.stageId == settled.goalStages.first { stage -> stage.targetId == daily.id }.id && it.periodStart == start.toString() }
+        assertEquals(60, dailySnapshot.targetMinutes)
+        assertEquals(75, dailySnapshot.actualMinutes)
+        assertEquals(15, dailySnapshot.excessMinutes)
+        assertTrue(dailySnapshot.completed)
+        assertTrue(settled.periodSnapshots.any { it.targetId == weekly.id && it.cadence == GoalCadence.WEEKLY })
+        assertTrue(settled.periodSnapshots.any { it.targetId == monthly.id && it.cadence == GoalCadence.MONTHLY })
+        assertTrue(settled.periodSnapshots.any { it.targetId == oneTime.id && it.cadence == GoalCadence.ONE_TIME })
+        assertEquals(settled.periodSnapshots.size, settled.settlePeriodSnapshots(asOf).periodSnapshots.size)
+        assertEquals(state.timeEntries, settled.timeEntries)
+        assertEquals(state.experience, settled.experience)
+        assertEquals(state.milestones, settled.milestones)
+
+        val changedFutureRule = settled.addFutureGoalRule(
+            FutureGoalRule(targetId = daily.id, cadence = GoalCadence.MONTHLY, targetMinutes = 600, effectiveFrom = "2026-12-01"),
+            asOf,
+        )
+        assertEquals(settled.periodSnapshots, changedFutureRule.periodSnapshots)
+    }
+
+    @Test
+    fun snapshots_are_idempotent_per_stage_and_period() {
+        val target = AttentionState().addTarget("阶段目标").targets.single()
+        val withStages = AttentionState(targets = listOf(target))
+            .addGoalStage(target.id, GoalCadence.WEEKLY, 60, date.minusDays(7).toString())
+            .addGoalStage(target.id, GoalCadence.WEEKLY, 120, date.minusDays(7).toString())
+
+        val settled = withStages.settlePeriodSnapshots(date)
+        assertEquals(2, settled.periodSnapshots.size)
+        assertEquals(2, settled.settlePeriodSnapshots(date).periodSnapshots.size)
+        assertEquals(2, settled.periodSnapshots.map { it.stageId }.toSet().size)
+    }
+
+    @Test
     fun future_goal_rules_require_a_valid_future_commitment_and_are_selected_by_scope() {
         val state = AttentionState().addTarget("项目")
         val target = state.targets.single()

@@ -30,7 +30,7 @@ class BusinessMappersTest {
         val recurrence = RecurrenceRule("rule", "阅读", "2026-10-01", ScheduleFrequency.WEEKLY, listOf(1, 3, 5), 2, "2026-12-31", active = false, 30, target.id, "note", 75)
         val migration = Migration("migration", target.id, stage.id, 20, "2026-10-08", "2026-10-09", cancelled = true)
         val futureRule = FutureGoalRule("future", target.id, stage.id, GoalCadence.MONTHLY, 300, "2026-11-01", "2026-11-30")
-        val snapshot = PeriodSnapshot("snapshot", target.id, GoalCadence.WEEKLY, "2026-10-01", "2026-10-07", 120, 90, 30, 0, completed = false)
+        val snapshot = PeriodSnapshot("snapshot", target.id, GoalCadence.WEEKLY, "2026-10-01", "2026-10-07", 120, 90, 30, 0, completed = false, stageId = stage.id)
         val move = TargetMove("move", target.id, null, "2026-11-01")
         val milestone = Milestone("milestone", "goal_period", "target:2026-10-01", 20, 789L)
         val timer = ActiveTimer(target.id, 100L, 200L, paused = true, "2026-10-02", listOf(TimerSegment(100L, 200L)))
