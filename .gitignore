@@ -5,3 +5,4 @@ local.properties
 *.iml
 .idea/
 .codex-worktree-setup.log
+.Codex/environments/
