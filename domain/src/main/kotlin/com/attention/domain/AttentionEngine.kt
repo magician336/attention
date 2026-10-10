@@ -394,6 +394,7 @@ private fun AttentionState.validateScheduleEntry(entry: ScheduleEntry) {
     LocalDate.parse(entry.planningDate)
     require(entry.startMinute == null || entry.startMinute in 0 until 1440) { "开始时间必须在 00:00 到 23:59 之间" }
     require(entry.endMinute == null || entry.endMinute in 1..1440) { "结束时间必须在 00:01 到次日 00:00 之间" }
+    require((entry.startMinute == null) == (entry.endMinute == null)) { "时间段必须同时填写开始和结束时间" }
     if (entry.startMinute != null && entry.endMinute != null) {
         require(entry.endMinute > entry.startMinute) { "结束时间必须晚于开始时间" }
     }

@@ -14,6 +14,7 @@ import com.attention.domain.AttentionState
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.Target
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
 import org.junit.BeforeClass
 import org.junit.Rule
 import org.junit.Test
@@ -29,6 +30,18 @@ class WorkspaceScheduleCompletionIntegrationTest {
         openAgenda()
         composeRule.onNodeWithTag("schedule-completion-$SCHEDULE_ID").performClick()
         composeRule.waitForIdle()
+
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val database = AttentionDatabase.create(context)
+        try {
+            composeRule.waitUntil(timeoutMillis = 5_000) {
+                runBlocking { RoomBusinessDataRepository(database).read().schedules.single { it.id == SCHEDULE_ID }.completed }
+            }
+            val loaded = runBlocking { RoomBusinessDataRepository(database).read() }
+            assertEquals(true, loaded.schedules.single { it.id == SCHEDULE_ID }.completed)
+        } finally {
+            database.close()
+        }
     }
 
     private fun openAgenda() {

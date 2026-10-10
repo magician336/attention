@@ -16,9 +16,9 @@ class AttentionEngineTest {
     @Test
     fun agenda_entries_filter_by_planning_date_and_sort_all_dates_stably() {
         val state = AttentionState()
-            .addSchedule(ScheduleEntry(id = "later", planningDate = "2026-10-09", title = "Later", startMinute = 5))
-            .addSchedule(ScheduleEntry(id = "same-b", planningDate = "2026-10-08", title = "Same B", startMinute = 30))
-            .addSchedule(ScheduleEntry(id = "same-a", planningDate = "2026-10-08", title = "Same A", startMinute = 30))
+            .addSchedule(ScheduleEntry(id = "later", planningDate = "2026-10-09", title = "Later", startMinute = 5, endMinute = 15))
+            .addSchedule(ScheduleEntry(id = "same-b", planningDate = "2026-10-08", title = "Same B", startMinute = 30, endMinute = 40))
+            .addSchedule(ScheduleEntry(id = "same-a", planningDate = "2026-10-08", title = "Same A", startMinute = 30, endMinute = 40))
             .addSchedule(ScheduleEntry(id = "earlier", planningDate = "2026-10-07", title = "Earlier"))
 
         assertEquals(listOf("earlier", "same-a", "same-b", "later"), state.agendaEntries().map { it.id })
@@ -59,6 +59,12 @@ class AttentionEngineTest {
         }
         assertThrows(IllegalArgumentException::class.java) {
             state.updateSchedule(original.copy(startMinute = 100, endMinute = 90))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            state.updateSchedule(original.copy(startMinute = 100, endMinute = null))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            state.updateSchedule(original.copy(startMinute = null, endMinute = 90))
         }
         assertThrows(IllegalArgumentException::class.java) {
             state.updateSchedule(original.copy(estimatedMinutes = 0))
