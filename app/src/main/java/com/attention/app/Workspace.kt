@@ -879,7 +879,7 @@ private fun ScheduleRow(entry: ScheduleEntry, state: AttentionState, viewModel: 
             }
             TextButton(onClick = { onEdit(entry) }) { Text("编辑") }
             TextButton(
-                onClick = { viewModel.updateSchedule(entry.copy(completed = !entry.completed)) },
+                onClick = { viewModel.toggleScheduleCompleted(entry.id) },
                 modifier = Modifier.testTag("schedule-completion-${entry.id}"),
             ) { Text(if (entry.completed) "取消完成" else "完成") }
             TextButton(onClick = {
