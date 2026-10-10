@@ -69,6 +69,39 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun toggling_schedule_completion_changes_only_completion_state() {
+        val target = AttentionState().addTarget("学习").targets.single()
+        val schedule = ScheduleEntry(
+            id = "completion-schedule",
+            planningDate = "2026-10-08",
+            title = "阅读",
+            startMinute = 60,
+            endMinute = 90,
+            estimatedMinutes = 30,
+            note = "章节 2",
+            targetId = target.id,
+            reminderEpochMillis = 123L,
+            recurrenceRuleId = "rule",
+        )
+        val timeEntry = TimeEntry("actual-entry", "2026-10-08", 20, target.id)
+        val state = AttentionState(
+            targets = listOf(target),
+            schedules = listOf(schedule),
+            timeEntries = listOf(timeEntry),
+            experience = 500L,
+            milestones = listOf(Milestone("milestone", "goal_period", "period", 500L, 1L)),
+        )
+
+        val completed = state.toggleScheduleCompleted(schedule.id)
+
+        assertEquals(schedule.copy(completed = true), completed.schedules.single())
+        assertEquals(state.timeEntries, completed.timeEntries)
+        assertEquals(state.experience, completed.experience)
+        assertEquals(state.milestones, completed.milestones)
+        assertFalse(completed.toggleScheduleCompleted(schedule.id).schedules.single().completed)
+    }
+
+    @Test
     fun target_tree_supports_arbitrary_depth_and_subtree_rollup() {
         val state = AttentionState()
             .addTarget("阅读")

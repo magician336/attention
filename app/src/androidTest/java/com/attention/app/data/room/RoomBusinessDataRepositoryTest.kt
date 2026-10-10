@@ -25,6 +25,7 @@ import com.attention.domain.TimerSegment
 import com.attention.domain.appendOneTimeGoalStage
 import com.attention.domain.awardEligibleMilestones
 import com.attention.domain.addTimeEntry
+import com.attention.domain.toggleScheduleCompleted
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -73,6 +74,24 @@ class RoomBusinessDataRepositoryTest {
         assertEquals(state.milestones.sortedBy { it.id }, loaded.milestones.sortedBy { it.id })
         assertEquals(state.experience, loaded.experience)
         assertEquals(state.activeTimer, loaded.activeTimer)
+    }
+
+    @Test
+    fun toggling_schedule_completion_persists_without_changing_actual_investment_or_rewards() = runBlocking {
+        val initial = sampleState()
+        val repository = RoomBusinessDataRepository(database)
+        repository.replace(initial)
+
+        repository.update { it.toggleScheduleCompleted("schedule") }
+        val loaded = repository.read()
+
+        assertEquals(initial.schedules.single().copy(completed = true), loaded.schedules.single())
+        assertEquals(initial.timeEntries, loaded.timeEntries)
+        assertEquals(initial.milestones, loaded.milestones)
+        assertEquals(initial.experience, loaded.experience)
+
+        repository.update { it.toggleScheduleCompleted("schedule") }
+        assertEquals(initial.schedules.single(), repository.read().schedules.single())
     }
 
     @Test

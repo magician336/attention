@@ -381,6 +381,14 @@ fun AttentionState.updateSchedule(entry: ScheduleEntry): AttentionState {
     return copy(schedules = schedules.map { if (it.id == entry.id) entry.copy(title = entry.title.trim()) else it })
 }
 
+/** Toggles only a schedule entry's completion state. Completion is not actual time invested. */
+fun AttentionState.toggleScheduleCompleted(entryId: String): AttentionState {
+    require(schedules.any { it.id == entryId }) { "日程条目不存在" }
+    return copy(schedules = schedules.map { entry ->
+        if (entry.id == entryId) entry.copy(completed = !entry.completed) else entry
+    })
+}
+
 private fun AttentionState.validateScheduleEntry(entry: ScheduleEntry) {
     require(entry.title.isNotBlank()) { "日程标题不能为空" }
     LocalDate.parse(entry.planningDate)
