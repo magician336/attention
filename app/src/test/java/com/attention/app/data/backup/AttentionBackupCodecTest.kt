@@ -23,6 +23,7 @@ import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class AttentionBackupCodecTest {
@@ -221,5 +222,38 @@ class AttentionBackupCodecTest {
 
         assertEquals(listOf("same", "new"), merged.migrations.map { it.id })
         assertTrue(merged.migrations.first().cancelled)
+    }
+
+    @Test
+    fun decoder_rejects_invalid_active_timer_segments() {
+        val invalid = AttentionState(
+            activeTimer = ActiveTimer(
+                targetId = null,
+                startedAtEpochMillis = 200L,
+                accumulatedMillis = -1L,
+                lastPlanningDate = "2026-10-02",
+                completedSegments = listOf(TimerSegment(200L, 100L)),
+            ),
+        )
+
+        assertThrows(IllegalArgumentException::class.java) {
+            AttentionBackupCodec.decode(AttentionBackupCodec.encode(invalid))
+        }
+    }
+
+    @Test
+    fun backup_round_trip_preserves_running_timer_context() {
+        val expected = AttentionState(
+            activeTimer = ActiveTimer(
+                targetId = "target",
+                startedAtEpochMillis = 2_000L,
+                accumulatedMillis = 60_000L,
+                paused = false,
+                lastPlanningDate = "2026-10-08",
+                completedSegments = listOf(TimerSegment(1_000L, 1_500L)),
+            ),
+        )
+
+        assertEquals(expected, AttentionBackupCodec.decode(AttentionBackupCodec.encode(expected)))
     }
 }

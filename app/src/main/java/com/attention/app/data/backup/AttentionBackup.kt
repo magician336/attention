@@ -100,7 +100,22 @@ object AttentionBackupCodec {
         require(backup.version == AttentionBackup.CURRENT_VERSION) {
             "不支持的备份版本：${backup.version}"
         }
+        backup.activeTimer?.validate()
         return backup.toDomain()
+    }
+
+    /**
+     * Timer context is persisted as user data, so reject impossible values
+     * before an import reaches Room. This keeps malformed segments from being
+     * treated as zero-duration work when the restored timer is stopped.
+     */
+    private fun ActiveTimer.validate() {
+        require(accumulatedMillis >= 0) { "活动计时器累计时长不能为负数" }
+        completedSegments.forEach { segment ->
+            require(segment.startedAtEpochMillis <= segment.endedAtEpochMillis) {
+                "活动计时器完成片段的结束时间不能早于开始时间"
+            }
+        }
     }
 
     fun merge(current: AttentionState, incoming: AttentionState): AttentionState = current.copy(
