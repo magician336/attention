@@ -62,6 +62,7 @@ import com.attention.app.timer.AttentionTimerService
 import com.attention.app.reminder.AlarmReminderCoordinator
 import com.attention.app.reminder.ReminderScheduler
 import com.attention.domain.AttentionState
+import com.attention.domain.CapacitySummary
 import com.attention.domain.availableMigrationMinutes
 import com.attention.domain.GoalCadence
 import com.attention.domain.FutureGoalRule
@@ -233,6 +234,7 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
     var dailyCapacity by remember(state.settings.dailyCapacityMinutes) {
         mutableStateOf(state.settings.dailyCapacityMinutes?.toString() ?: "")
     }
+    var dailyCapacityError by remember { mutableStateOf<String?>(null) }
     var editingEntry by remember { mutableStateOf<TimeEntry?>(null) }
     var editingSchedule by remember { mutableStateOf<ScheduleEntry?>(null) }
     var editMinutes by remember { mutableStateOf("") }
@@ -329,15 +331,31 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("每日容量", style = MaterialTheme.typography.titleMedium)
-                Text(if (capacity.capacityMinutes == null) "未设置" else "已安排 ${capacity.usedMinutes} / ${capacity.capacityMinutes} 分钟${if (capacity.overloaded) "（超载）" else ""}")
+                Text(capacitySummaryText(capacity), modifier = Modifier.testTag("daily-capacity-summary"))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(boundary, { boundary = it.filter(Char::isDigit) }, label = { Text("界线分钟") }, modifier = Modifier.width(150.dp), singleLine = true)
-                    OutlinedTextField(dailyCapacity, { dailyCapacity = it.filter(Char::isDigit) }, label = { Text("容量分钟") }, modifier = Modifier.width(150.dp), singleLine = true)
+                    OutlinedTextField(boundary, { boundary = it.filter(Char::isDigit) }, label = { Text("界线分钟") }, modifier = Modifier.width(150.dp).testTag("planning-boundary-input"), singleLine = true)
+                    OutlinedTextField(
+                        dailyCapacity,
+                        { dailyCapacity = it; dailyCapacityError = null },
+                        label = { Text("容量分钟") },
+                        modifier = Modifier.width(150.dp).testTag("daily-capacity-input"),
+                        singleLine = true,
+                        isError = dailyCapacityError != null,
+                    )
                 }
-                Button(onClick = {
+                dailyCapacityError?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("daily-capacity-error"))
+                }
+                Button(modifier = Modifier.testTag("daily-capacity-save"), onClick = {
                     val b = boundary.toIntOrNull()?.takeIf { it in 0 until 1440 } ?: state.settings.planningDayBoundaryMinutes
-                    val c = dailyCapacity.toIntOrNull()?.takeIf { it > 0 }
-                    viewModel.setSettings(StoredSettings(b, state.settings.weekStartDay, c))
+                    val input = dailyCapacity.trim()
+                    val c = input.toIntOrNull()?.takeIf { it > 0 }
+                    if (input.isNotEmpty() && c == null) {
+                        dailyCapacityError = "每日容量必须是正整数，或留空清除"
+                    } else {
+                        dailyCapacityError = null
+                        viewModel.setSettings(StoredSettings(b, state.settings.weekStartDay, c))
+                    }
                 }) { Text("保存设置") }
             }
         }
@@ -1012,6 +1030,17 @@ private fun AgendaScreen(
                 if (parsed == null) dateError = true else selectDate(parsed.toString())
             }) { Text("打开规划日") }
         }
+        if (selectedDate != null) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("每日容量", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        capacitySummaryText(state.capacitySummary(selectedDate)),
+                        modifier = Modifier.testTag("agenda-capacity-summary"),
+                    )
+                }
+            }
+        }
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("重复日程", style = MaterialTheme.typography.titleSmall)
@@ -1155,11 +1184,11 @@ private fun AgendaScreen(
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("新增日程", style = MaterialTheme.typography.titleSmall)
-                OutlinedTextField(title, { title = it; formError = null }, label = { Text("日程标题") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                OutlinedTextField(title, { title = it; formError = null }, label = { Text("日程标题") }, modifier = Modifier.fillMaxWidth().testTag("agenda-title-input"), singleLine = true)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(startTime, { startTime = it; formError = null }, label = { Text("开始时间 HH:mm（可选）") }, modifier = Modifier.weight(1f), singleLine = true)
-                    OutlinedTextField(endTime, { endTime = it; formError = null }, label = { Text("结束时间 HH:mm（可选）") }, modifier = Modifier.weight(1f), singleLine = true)
-                    OutlinedTextField(estimate, { estimate = it; formError = null }, label = { Text("预计分钟") }, modifier = Modifier.width(110.dp), singleLine = true)
+                    OutlinedTextField(startTime, { startTime = it; formError = null }, label = { Text("开始时间 HH:mm（可选）") }, modifier = Modifier.weight(1f).testTag("agenda-start-input"), singleLine = true)
+                    OutlinedTextField(endTime, { endTime = it; formError = null }, label = { Text("结束时间 HH:mm（可选）") }, modifier = Modifier.weight(1f).testTag("agenda-end-input"), singleLine = true)
+                    OutlinedTextField(estimate, { estimate = it; formError = null }, label = { Text("预计分钟") }, modifier = Modifier.width(110.dp).testTag("agenda-estimate-input"), singleLine = true)
                 }
                 OutlinedTextField(reminderTime, { reminderTime = it; formError = null }, label = { Text("提醒 HH:mm（可选）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 OutlinedTextField(note, { note = it }, label = { Text("备注（可选）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
@@ -1175,7 +1204,7 @@ private fun AgendaScreen(
                     }
                 }
                 formError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                Button(onClick = {
+                Button(modifier = Modifier.testTag("agenda-add-submit"), onClick = {
                     val parsedDate = runCatching { LocalDate.parse(date) }.getOrNull()
                     val parsedStart = parseScheduleMinute(startTime)
                     val parsedEnd = parseScheduleMinute(endTime, allowEndOfDay = true)
@@ -1216,13 +1245,19 @@ private fun AgendaScreen(
         }
         if (agendaEntries.isEmpty()) {
             Text(if (selectedDate == null) "所有日期暂无日程条目。" else "规划日 $selectedDate 暂无日程条目。", modifier = Modifier.testTag("agenda-empty"))
-        } else {
-            var lastPlanningDate: String? = null
-            agendaEntries.forEach { entry ->
-                if (selectedDate == null && entry.planningDate != lastPlanningDate) {
-                    Text("规划日 ${entry.planningDate}", style = MaterialTheme.typography.titleMedium)
-                    lastPlanningDate = entry.planningDate
+        } else if (selectedDate == null) {
+            agendaEntries.groupBy { it.planningDate }.forEach { (planningDate, entries) ->
+                Text("规划日 $planningDate", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    capacitySummaryText(state.capacitySummary(planningDate)),
+                    modifier = Modifier.testTag("agenda-capacity-summary-$planningDate"),
+                )
+                entries.forEach { entry ->
+                    ScheduleRow(entry, state, viewModel, onEdit = { editingEntry = it })
                 }
+            }
+        } else {
+            agendaEntries.forEach { entry ->
                 ScheduleRow(entry, state, viewModel, onEdit = { editingEntry = it })
             }
         }
@@ -1251,13 +1286,19 @@ private fun ScheduleRow(entry: ScheduleEntry, state: AttentionState, viewModel: 
                 Text("${entry.planningDate}$time · ${entry.estimatedMinutes ?: 0} 分钟$target$reminder${if (entry.completed) " · 已完成" else ""}")
                 if (entry.note.isNotBlank()) Text(entry.note)
             }
-            TextButton(onClick = { onEdit(entry) }) { Text("编辑") }
+            TextButton(onClick = { onEdit(entry) }, modifier = Modifier.testTag("schedule-edit-${entry.id}")) { Text("编辑") }
             TextButton(
                 onClick = { viewModel.toggleScheduleCompleted(entry.id) },
                 modifier = Modifier.testTag("schedule-completion-${entry.id}"),
             ) { Text(if (entry.completed) "取消完成" else "完成") }
         }
     }
+}
+
+private fun capacitySummaryText(summary: CapacitySummary): String = when {
+    summary.capacityMinutes == null -> "已安排 ${summary.usedMinutes} 分钟（每日容量未设置）"
+    summary.overloaded -> "已安排 ${summary.usedMinutes} / ${summary.capacityMinutes} 分钟（超载）"
+    else -> "已安排 ${summary.usedMinutes} / ${summary.capacityMinutes} 分钟"
 }
 
 @Composable
@@ -1289,7 +1330,7 @@ private fun ScheduleEditDialog(
                     OutlinedTextField(startTime, { startTime = it }, label = { Text("开始 HH:mm") }, modifier = Modifier.weight(1f), singleLine = true)
                     OutlinedTextField(endTime, { endTime = it }, label = { Text("结束 HH:mm") }, modifier = Modifier.weight(1f), singleLine = true)
                 }
-                OutlinedTextField(estimate, { estimate = it }, label = { Text("预计分钟") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                OutlinedTextField(estimate, { estimate = it }, label = { Text("预计分钟") }, modifier = Modifier.fillMaxWidth().testTag("schedule-edit-estimate-${entry.id}"), singleLine = true)
                 OutlinedTextField(reminderTime, { reminderTime = it }, label = { Text("提醒 HH:mm（可选）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 OutlinedTextField(note, { note = it }, label = { Text("备注（可选）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 Box {
@@ -1303,7 +1344,7 @@ private fun ScheduleEditDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = {
+            TextButton(modifier = Modifier.testTag("schedule-edit-save-${entry.id}"), onClick = {
                 val parsedDate = runCatching { LocalDate.parse(date) }.getOrNull()
                 val parsedStart = parseScheduleMinute(startTime)
                 val parsedEnd = parseScheduleMinute(endTime, allowEndOfDay = true)

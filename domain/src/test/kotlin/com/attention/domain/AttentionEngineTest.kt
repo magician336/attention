@@ -15,6 +15,135 @@ class AttentionEngineTest {
     private val date = LocalDate.of(2026, 10, 8)
 
     @Test
+    fun capacity_summary_uses_schedule_planning_minutes_only_and_marks_strict_overload() {
+        val state = AttentionState(
+            settings = StoredSettings(dailyCapacityMinutes = 60),
+            schedules = listOf(
+                ScheduleEntry(
+                    id = "estimated-first",
+                    planningDate = date.toString(),
+                    title = "预计优先",
+                    startMinute = 60,
+                    endMinute = 120,
+                    estimatedMinutes = 30,
+                ),
+                ScheduleEntry(
+                    id = "time-range",
+                    planningDate = date.toString(),
+                    title = "时间段",
+                    startMinute = 120,
+                    endMinute = 150,
+                ),
+                ScheduleEntry(id = "no-duration", planningDate = date.toString(), title = "无时长"),
+                ScheduleEntry(id = "other-day", planningDate = date.plusDays(1).toString(), title = "其他日", estimatedMinutes = 90),
+            ),
+            timeEntries = listOf(TimeEntry("actual", date.toString(), 300)),
+        )
+
+        assertEquals(CapacitySummary(60, 60, false), state.capacitySummary(date.toString()))
+        assertEquals(CapacitySummary(60, 60, false), state.copy(schedules = state.schedules.map { it.copy(completed = true) }).capacitySummary(date.toString()))
+        val overloaded = state.copy(settings = StoredSettings(dailyCapacityMinutes = 59))
+        assertEquals(CapacitySummary(59, 60, true), overloaded.capacitySummary(date.toString()))
+        val added = overloaded.addSchedule(ScheduleEntry(id = "added", planningDate = date.toString(), title = "继续安排", estimatedMinutes = 15))
+        val edited = added.updateSchedule(added.schedules.single { it.id == "added" }.copy(title = "继续编辑", estimatedMinutes = 20))
+        assertEquals("继续编辑", edited.schedules.single { it.id == "added" }.title)
+        assertTrue(edited.toggleScheduleCompleted("added").schedules.single { it.id == "added" }.completed)
+        assertEquals(CapacitySummary(null, 60, false), state.copy(settings = StoredSettings()).capacitySummary(date.toString()))
+    }
+
+    @Test
+    fun capacity_summary_handles_partial_ranges_and_ignores_non_schedule_work() {
+        val day = date.toString()
+        val state = AttentionState(
+            settings = StoredSettings(dailyCapacityMinutes = 90),
+            goalStages = listOf(GoalStage("stage", "target", GoalCadence.DAILY, 600, day)),
+            timeEntries = listOf(TimeEntry("actual", day, 500)),
+            schedules = listOf(
+                ScheduleEntry("estimate", day, "预计优先", startMinute = 60, endMinute = 180, estimatedMinutes = 30),
+                ScheduleEntry("range", day, "完整时间段", startMinute = 180, endMinute = 240),
+                ScheduleEntry("only-start", day, "只有开始", startMinute = 300),
+                ScheduleEntry("only-end", day, "只有结束", endMinute = 360),
+                ScheduleEntry("none", day, "没有时长"),
+                // Imported data can bypass add/update validation; it must not
+                // make a day look less occupied through a negative duration.
+                ScheduleEntry("malformed", day, "逆序时间段", startMinute = 500, endMinute = 400),
+                ScheduleEntry("other-day", date.plusDays(1).toString(), "其他日", estimatedMinutes = 15),
+            ),
+            recurrenceRules = listOf(
+                RecurrenceRule("rule", "重复规则", day, ScheduleFrequency.DAILY, estimatedMinutes = 999),
+            ),
+            migrations = listOf(Migration("migration", "target", "stage", 300, day)),
+            activeTimer = ActiveTimer(null, 1L, lastPlanningDate = day),
+            milestones = listOf(Milestone("milestone", "reward", "instance", 999, 2L)),
+        )
+
+        assertEquals(CapacitySummary(90, 90, false), state.capacitySummary(day))
+        assertEquals(CapacitySummary(90, 15, false), state.capacitySummary(date.plusDays(1).toString()))
+        assertEquals(CapacitySummary(89, 90, true), state.copy(settings = StoredSettings(dailyCapacityMinutes = 89)).capacitySummary(day))
+    }
+
+    @Test
+    fun capacity_summary_falls_back_from_invalid_estimates_without_reducing_used_minutes() {
+        val day = date.toString()
+        val state = AttentionState(
+            settings = StoredSettings(dailyCapacityMinutes = 115),
+            schedules = listOf(
+                ScheduleEntry("negative-estimate", day, "负数预计", startMinute = 60, endMinute = 120, estimatedMinutes = -15),
+                ScheduleEntry("zero-estimate", day, "零预计", startMinute = 120, endMinute = 150, estimatedMinutes = 0),
+                ScheduleEntry("negative-no-duration", day, "负数无时长", estimatedMinutes = -20),
+                ScheduleEntry("negative-invalid-range", day, "负数逆序", startMinute = 500, endMinute = 400, estimatedMinutes = -20),
+                ScheduleEntry("valid-estimate", day, "有效预计", startMinute = 150, endMinute = 240, estimatedMinutes = 25),
+            ),
+        )
+
+        assertEquals(CapacitySummary(115, 115, false), state.capacitySummary(day))
+    }
+
+    @Test
+    fun recurring_occurrences_are_counted_once_on_their_own_planning_days() {
+        val rule = RecurrenceRule(
+            id = "daily-capacity-rule",
+            title = "每日复盘",
+            startDate = date.toString(),
+            frequency = ScheduleFrequency.DAILY,
+            estimatedMinutes = 25,
+        )
+        val materialized = AttentionState(settings = StoredSettings(dailyCapacityMinutes = 25))
+            .addRecurrenceAndMaterialize(rule, date.plusDays(2))
+
+        assertEquals(3, materialized.schedules.size)
+        assertEquals(CapacitySummary(25, 25, false), materialized.capacitySummary(date.toString()))
+        assertEquals(CapacitySummary(25, 25, false), materialized.capacitySummary(date.plusDays(1).toString()))
+        assertEquals(CapacitySummary(25, 25, false), materialized.capacitySummary(date.plusDays(2).toString()))
+        assertEquals(CapacitySummary(25, 0, false), materialized.capacitySummary(date.plusDays(3).toString()))
+        assertEquals(
+            CapacitySummary(25, 25, false),
+            materialized.toggleScheduleCompleted(materialized.schedules.first().id).capacitySummary(date.toString()),
+        )
+    }
+
+    @Test
+    fun planning_boundary_changes_current_date_without_rewriting_saved_schedule_dates() {
+        val previousDate = date.minusDays(1)
+        val state = AttentionState(
+            settings = StoredSettings(planningDayBoundaryMinutes = 180, dailyCapacityMinutes = 30),
+            schedules = listOf(
+                ScheduleEntry("previous", previousDate.toString(), "上一规划日", estimatedMinutes = 20),
+                ScheduleEntry("current", date.toString(), "当前规划日", estimatedMinutes = 40),
+            ),
+        )
+        val instant = Instant.parse("2026-10-08T02:30:00Z")
+
+        assertEquals(previousDate, state.planningDate(instant, utc))
+        assertEquals(CapacitySummary(30, 20, false), state.capacitySummary(previousDate.toString()))
+
+        val movedBoundary = state.copy(settings = state.settings.copy(planningDayBoundaryMinutes = 120))
+        assertEquals(date, movedBoundary.planningDate(instant, utc))
+        assertEquals(CapacitySummary(30, 40, true), movedBoundary.capacitySummary(date.toString()))
+        assertEquals(listOf(previousDate.toString(), date.toString()), movedBoundary.schedules.map { it.planningDate })
+    }
+
+    @Test
     fun agenda_entries_filter_by_planning_date_and_sort_all_dates_stably() {
         val state = AttentionState()
             .addSchedule(ScheduleEntry(id = "later", planningDate = "2026-10-09", title = "Later", startMinute = 5, endMinute = 15))

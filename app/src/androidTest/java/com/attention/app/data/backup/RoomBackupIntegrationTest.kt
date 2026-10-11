@@ -10,14 +10,17 @@ import com.attention.app.data.room.RoomBusinessDataRepository
 import com.attention.app.data.settings.SettingsSnapshot
 import com.attention.app.data.settings.SettingsStore
 import com.attention.domain.AttentionState
+import com.attention.domain.CapacitySummary
 import com.attention.domain.GoalCadence
 import com.attention.domain.GoalStage
 import com.attention.domain.LaunchDestination
 import com.attention.domain.Migration
+import com.attention.domain.ScheduleEntry
 import com.attention.domain.StoredSettings
 import com.attention.domain.Target
 import com.attention.domain.addMigration
 import com.attention.domain.cancelMigration
+import com.attention.domain.capacitySummary
 import com.attention.domain.updateMigration
 import java.time.LocalDate
 import java.io.File
@@ -70,6 +73,46 @@ class RoomBackupIntegrationTest {
 
         repository.importJson(exported, clearExisting = true)
         assertEquals(listOf("old"), repository.state.first().targets.map { it.id })
+    }
+
+    @Test
+    fun restoring_backup_recomputes_capacity_from_settings_and_schedules() = runBlocking {
+        val day = "2026-10-08"
+        val repository = RoomAttentionStateRepository(
+            RoomBusinessDataRepository(database),
+            settingsStore(),
+        )
+        val expected = AttentionState(
+            settings = StoredSettings(planningDayBoundaryMinutes = 120, dailyCapacityMinutes = 60),
+            schedules = listOf(
+                ScheduleEntry(
+                    id = "estimated",
+                    planningDate = day,
+                    title = "预计优先",
+                    startMinute = 60,
+                    endMinute = 180,
+                    estimatedMinutes = 20,
+                    completed = true,
+                ),
+                ScheduleEntry(
+                    id = "range",
+                    planningDate = day,
+                    title = "完整时间段",
+                    startMinute = 180,
+                    endMinute = 220,
+                ),
+            ),
+        )
+
+        repository.replace(expected)
+        val exported = repository.exportJson()
+        repository.replace(AttentionState())
+        val restored = repository.importJson(exported, clearExisting = true)
+
+        assertEquals(expected.settings, restored.settings)
+        assertEquals(expected.schedules, restored.schedules)
+        assertEquals(CapacitySummary(60, 60, false), restored.capacitySummary(day))
+        assertEquals(CapacitySummary(60, 0, false), restored.capacitySummary("2026-10-09"))
     }
 
     @Test
