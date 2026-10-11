@@ -900,6 +900,43 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun switching_timer_to_unowned_saves_the_previous_target_with_its_occurrence_time() {
+        val withTargets = AttentionState()
+            .addTarget("专注")
+            .addTarget("写作")
+        val previous = withTargets.targets.first()
+        val startedAt = Instant.parse("2026-10-08T01:20:00Z")
+        val switchedAt = Instant.parse("2026-10-08T01:35:00Z")
+
+        val result = withTargets
+            .startTimer(previous.id, startedAt, utc)
+            .switchTimer(null, switchedAt, utc)
+
+        val saved = result.entries.single()
+        assertEquals(previous.id, saved.targetId)
+        assertEquals(TimeEntrySource.TIMER, saved.source)
+        assertEquals(15, saved.durationMinutes)
+        assertEquals(startedAt.toEpochMilli(), saved.occurredAtEpochMillis)
+        assertEquals(null, result.state.activeTimer?.targetId)
+        assertEquals(switchedAt.toEpochMilli(), result.state.activeTimer?.startedAtEpochMillis)
+    }
+
+    @Test
+    fun switching_timer_uses_a_custom_planning_day_boundary_in_the_local_zone() {
+        val state = AttentionState(settings = StoredSettings(planningDayBoundaryMinutes = 5 * 60))
+            .addTarget("专注")
+        val target = state.targets.single()
+        val startedAt = Instant.parse("2026-10-08T04:50:00Z")
+        val switchedAt = Instant.parse("2026-10-08T05:10:00Z")
+
+        val result = state.startTimer(target.id, startedAt, utc).switchTimer(null, switchedAt, utc)
+
+        assertEquals(listOf("2026-10-07", "2026-10-08"), result.entries.map { it.planningDate })
+        assertEquals(listOf(10, 10), result.entries.map { it.durationMinutes })
+        assertEquals(listOf(startedAt.toEpochMilli(), Instant.parse("2026-10-08T05:00:00Z").toEpochMilli()), result.entries.map { it.occurredAtEpochMillis })
+    }
+
+    @Test
     fun paused_timer_only_counts_running_segments() {
         val state = AttentionState().addTarget("专注")
         val target = state.targets.single()

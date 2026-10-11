@@ -12,6 +12,7 @@ import com.attention.app.data.room.RoomBusinessDataRepository
 import com.attention.app.data.settings.DataStoreSettingsStore
 import com.attention.domain.LaunchDestination
 import com.attention.domain.Target
+import com.attention.domain.TimeEntrySource
 import com.attention.domain.addTarget
 import com.attention.domain.pauseTimer
 import com.attention.domain.recalculateExperience
@@ -35,6 +36,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -153,6 +155,49 @@ class RoomAttentionStateRepositoryTest {
         assertNull(state.activeTimer)
         assertEquals(2, state.timeEntries.single { it.targetId == "a" }.durationMinutes)
         assertEquals(1, state.timeEntries.single { it.targetId == "b" }.durationMinutes)
+    }
+
+    @Test
+    fun timer_switch_uses_custom_boundary_and_keeps_each_segment_occurrence_time() = runBlocking {
+        val repository = repository()
+        repository.updateBusiness { it.copy(targets = listOf(Target("a", title = "A"), Target("b", title = "B"))) }
+        repository.setPlannerSettings(repository.state.first().settings.copy(planningDayBoundaryMinutes = 5 * 60))
+
+        val startedAt = Instant.parse("2026-10-10T04:50:00Z")
+        val switchedAt = Instant.parse("2026-10-10T05:10:00Z")
+        repository.updateBusiness { it.startTimer("a", startedAt, ZoneId.of("UTC")) }
+        repository.updateBusiness { it.switchTimer("b", switchedAt, ZoneId.of("UTC")).state }
+
+        val entries = repository.state.first().timeEntries.sortedBy { it.occurredAtEpochMillis }
+        assertEquals(listOf("2026-10-09", "2026-10-10"), entries.map { it.planningDate })
+        assertEquals(listOf(10, 10), entries.map { it.durationMinutes })
+        assertEquals(listOf("a", "a"), entries.map { it.targetId })
+        assertEquals(listOf(TimeEntrySource.TIMER, TimeEntrySource.TIMER), entries.map { it.source })
+        assertEquals(
+            listOf(startedAt.toEpochMilli(), Instant.parse("2026-10-10T05:00:00Z").toEpochMilli()),
+            entries.map { it.occurredAtEpochMillis },
+        )
+        assertEquals("b", repository.state.first().activeTimer?.targetId)
+    }
+
+    @Test
+    fun failed_timer_switch_rolls_back_the_old_timer_without_partial_entries() = runBlocking {
+        val repository = repository()
+        repository.updateBusiness { it.copy(targets = listOf(Target("a", title = "A"))) }
+        val startedAt = Instant.parse("2026-10-10T04:50:00Z")
+        val switchedAt = Instant.parse("2026-10-10T05:10:00Z")
+        repository.updateBusiness { it.startTimer("a", startedAt, ZoneId.of("UTC")) }
+
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking {
+                repository.updateBusiness { it.switchTimer("missing", switchedAt, ZoneId.of("UTC")).state }
+            }
+        }
+
+        val state = repository.state.first()
+        assertEquals("a", state.activeTimer?.targetId)
+        assertEquals(startedAt.toEpochMilli(), state.activeTimer?.startedAtEpochMillis)
+        assertTrue(state.timeEntries.isEmpty())
     }
 
     @Test
