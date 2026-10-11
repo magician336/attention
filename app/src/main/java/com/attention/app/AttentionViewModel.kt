@@ -147,9 +147,9 @@ class AttentionViewModel(
     }
     fun addRecurrence(rule: RecurrenceRule) = runCommand { it.addRecurrence(rule) }
     fun addRecurrenceAndMaterialize(rule: RecurrenceRule, through: LocalDate) = runCommand {
-        it.addRecurrenceAndMaterialize(rule, through)
+        it.addRecurrenceAndMaterialize(rule, through, zone)
     }
-    fun materializeRecurrence(rule: RecurrenceRule, through: LocalDate) = runCommand { it.materializeOccurrences(rule, through) }
+    fun materializeRecurrence(rule: RecurrenceRule, through: LocalDate) = runCommand { it.materializeOccurrences(rule, through, zone) }
     fun stopRecurrence(ruleId: String) = runCommand { it.stopRecurrence(ruleId) }
 
     fun setSettings(settings: StoredSettings) = runSettingsCommand { repository.setPlannerSettings(settings) }
@@ -201,6 +201,11 @@ class AttentionViewModel(
         runCatching { repository.importJson(encoded, clearExisting) }
             .onSuccess { onComplete() }
             .onFailure { _error.value = it.message ?: "导入失败，现有数据未改变" }
+    }
+
+    fun restoreReminders() = scope.launch {
+        runCatching { repository.restoreReminders() }
+            .onFailure { _error.value = it.message ?: "提醒恢复失败" }
     }
 
     private fun runCommand(

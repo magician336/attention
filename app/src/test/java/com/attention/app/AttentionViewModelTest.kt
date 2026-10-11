@@ -100,6 +100,7 @@ class AttentionViewModelTest {
         override suspend fun setOnboardingCompleted(completed: Boolean) = Unit
         override suspend fun setNotificationsEnabled(enabled: Boolean) = Unit
         override suspend fun replace(state: AttentionState) { values.value = state }
+        override suspend fun restoreReminders() = Unit
         override suspend fun exportJson(): String = ""
         override suspend fun importJson(encoded: String, clearExisting: Boolean): AttentionState = values.value
         override suspend fun lastImportBackup(): String? = null

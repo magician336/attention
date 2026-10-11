@@ -1,6 +1,8 @@
 package com.attention.app
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -8,6 +10,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.core.app.ActivityCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -56,6 +59,7 @@ import com.attention.app.data.room.AttentionDatabase
 import com.attention.app.data.room.RoomBusinessDataRepository
 import com.attention.app.data.settings.createSettingsStore
 import com.attention.app.timer.AttentionTimerService
+import com.attention.app.reminder.AlarmReminderCoordinator
 import com.attention.app.reminder.ReminderScheduler
 import com.attention.domain.AttentionState
 import com.attention.domain.availableMigrationMinutes
@@ -92,6 +96,7 @@ import com.attention.domain.periodStats
 import com.attention.domain.parentAt
 import com.attention.domain.progress
 import com.attention.domain.progressRange
+import com.attention.domain.reminderEpochMillis
 import com.attention.domain.subtreeMinutes
 import com.attention.domain.targetChildren
 import com.attention.domain.oneTimeStageMilestones
@@ -107,7 +112,7 @@ private class WorkspaceViewModelFactory(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WorkspaceApp() {
+fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = null) {
     val context = LocalContext.current
     val database = remember { AttentionDatabase.create(context) }
     val repository = remember {
@@ -115,15 +120,16 @@ fun WorkspaceApp() {
             business = RoomBusinessDataRepository(database),
             settings = context.createSettingsStore(),
             backupStore = FileImportBackupStore(context),
+            reminderCoordinator = AlarmReminderCoordinator(ReminderScheduler(context)),
         )
     }
     val viewModel: AttentionViewModel = viewModel(factory = WorkspaceViewModelFactory(repository))
     val state by viewModel.state.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     var destination by remember {
-        mutableStateOf(resolveLaunchDestination(state.launchDestination, state.lastOpenedDestination))
+        mutableStateOf(if (openScheduleDate != null) LaunchDestination.ALL_DATES else resolveLaunchDestination(state.launchDestination, state.lastOpenedDestination))
     }
-    var selectedAgendaDate by remember { mutableStateOf<String?>(null) }
+    var selectedAgendaDate by remember { mutableStateOf(openScheduleDate) }
     var jsonPreview by remember { mutableStateOf<String?>(null) }
     var csvPreview by remember { mutableStateOf<String?>(null) }
     var pendingImport by remember { mutableStateOf<String?>(null) }
@@ -138,6 +144,7 @@ fun WorkspaceApp() {
         }
     }
     androidx.compose.runtime.LaunchedEffect(destination) { viewModel.saveLastOpened(destination) }
+    androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.restoreReminders() }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Attention") }) },
@@ -168,6 +175,7 @@ fun WorkspaceApp() {
                     viewModel = viewModel,
                     selectedDate = selectedAgendaDate,
                     onSelectedDateChange = { selectedAgendaDate = it },
+                    openScheduleId = openScheduleId,
                 )
                 LaunchDestination.STATISTICS -> StatisticsScreen(
                     state = state,
@@ -927,18 +935,30 @@ private fun AgendaScreen(
     viewModel: AttentionViewModel,
     selectedDate: String?,
     onSelectedDateChange: (String?) -> Unit,
+    openScheduleId: String? = null,
 ) {
+    val context = LocalContext.current
     val today = state.planningDate(Instant.now())
     var date by remember(selectedDate) { mutableStateOf(selectedDate ?: today.toString()) }
     var title by remember { mutableStateOf("") }
     var estimate by remember { mutableStateOf("") }
     var startTime by remember { mutableStateOf("") }
     var endTime by remember { mutableStateOf("") }
+    var reminderTime by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
     var targetId by remember { mutableStateOf<String?>(null) }
     var targetMenuExpanded by remember { mutableStateOf(false) }
     var formError by remember { mutableStateOf<String?>(null) }
     var editingEntry by remember { mutableStateOf<ScheduleEntry?>(null) }
+    var notificationOpenHandled by remember(openScheduleId) { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(openScheduleId, state.schedules) {
+        if (!notificationOpenHandled && openScheduleId != null) {
+            state.schedules.firstOrNull { it.id == openScheduleId }?.let {
+                editingEntry = it
+                notificationOpenHandled = true
+            }
+        }
+    }
     var recurrenceTitle by remember { mutableStateOf("") }
     var recurrenceFrequency by remember { mutableStateOf(ScheduleFrequency.DAILY) }
     var recurrenceUntilDate by remember { mutableStateOf("") }
@@ -1108,6 +1128,7 @@ private fun AgendaScreen(
                             reminderMinuteOfDay = parsedReminderMinute,
                         )
                         viewModel.addRecurrenceAndMaterialize(rule, LocalDate.parse(rule.startDate).plusDays(30))
+                        if (parsedReminderMinute != null) requestReminderPermission(context)
                         recurrenceTitle = ""
                         recurrenceUntilDate = ""
                         recurrenceEstimatedMinutes = ""
@@ -1140,6 +1161,7 @@ private fun AgendaScreen(
                     OutlinedTextField(endTime, { endTime = it; formError = null }, label = { Text("结束时间 HH:mm（可选）") }, modifier = Modifier.weight(1f), singleLine = true)
                     OutlinedTextField(estimate, { estimate = it; formError = null }, label = { Text("预计分钟") }, modifier = Modifier.width(110.dp), singleLine = true)
                 }
+                OutlinedTextField(reminderTime, { reminderTime = it; formError = null }, label = { Text("提醒 HH:mm（可选）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 OutlinedTextField(note, { note = it }, label = { Text("备注（可选）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 Box {
                     OutlinedButton(onClick = { targetMenuExpanded = true }) {
@@ -1158,10 +1180,36 @@ private fun AgendaScreen(
                     val parsedStart = parseScheduleMinute(startTime)
                     val parsedEnd = parseScheduleMinute(endTime, allowEndOfDay = true)
                     val estimated = estimate.trim().takeIf(String::isNotEmpty)?.toIntOrNull()
-                    formError = validateScheduleForm(title, parsedDate, startTime, endTime, estimate, parsedStart, parsedEnd, estimated)
+                    val parsedReminder = parseScheduleMinute(reminderTime)
+                    formError = validateScheduleForm(
+                        ScheduleFormInput(
+                            title = title,
+                            date = parsedDate,
+                            startText = startTime,
+                            endText = endTime,
+                            estimateText = estimate,
+                            startMinute = parsedStart,
+                            endMinute = parsedEnd,
+                            estimateMinutes = estimated,
+                            reminderText = reminderTime,
+                            reminderMinute = parsedReminder,
+                        ),
+                    )
                     if (formError == null) {
-                        viewModel.addSchedule(ScheduleEntry(planningDate = parsedDate.toString(), title = title, startMinute = parsedStart, endMinute = parsedEnd, estimatedMinutes = estimated, note = note, targetId = targetId))
-                        title = ""; startTime = ""; endTime = ""; estimate = ""; note = ""; targetId = null
+                        viewModel.addSchedule(ScheduleEntry(
+                            planningDate = parsedDate.toString(),
+                            title = title,
+                            startMinute = parsedStart,
+                            endMinute = parsedEnd,
+                            estimatedMinutes = estimated,
+                            note = note,
+                            targetId = targetId,
+                            reminderEpochMillis = parsedReminder?.let { minute ->
+                                reminderEpochMillis(parsedDate!!, minute)
+                            },
+                        ))
+                        if (parsedReminder != null) requestReminderPermission(context)
+                        title = ""; startTime = ""; endTime = ""; estimate = ""; reminderTime = ""; note = ""; targetId = null
                     }
                 }) { Text("添加日程") }
             }
@@ -1191,7 +1239,6 @@ private fun AgendaScreen(
 
 @Composable
 private fun ScheduleRow(entry: ScheduleEntry, state: AttentionState, viewModel: AttentionViewModel, onEdit: (ScheduleEntry) -> Unit = {}) {
-    val context = LocalContext.current
     Card(Modifier.fillMaxWidth()) {
         Row(Modifier.padding(12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -1200,7 +1247,8 @@ private fun ScheduleRow(entry: ScheduleEntry, state: AttentionState, viewModel: 
                 val end = entry.endMinute
                 val time = if (start != null && end != null) " · ${formatScheduleMinute(start)}-${formatScheduleMinute(end)}" else ""
                 val target = entry.targetId?.let { id -> state.targets.firstOrNull { it.id == id }?.title }?.let { " · $it" } ?: ""
-                Text("${entry.planningDate}$time · ${entry.estimatedMinutes ?: 0} 分钟$target${if (entry.completed) " · 已完成" else ""}")
+                val reminder = entry.reminderEpochMillis?.let { " · 提醒 ${formatReminderEpoch(it)}" } ?: " · 无提醒"
+                Text("${entry.planningDate}$time · ${entry.estimatedMinutes ?: 0} 分钟$target$reminder${if (entry.completed) " · 已完成" else ""}")
                 if (entry.note.isNotBlank()) Text(entry.note)
             }
             TextButton(onClick = { onEdit(entry) }) { Text("编辑") }
@@ -1208,11 +1256,6 @@ private fun ScheduleRow(entry: ScheduleEntry, state: AttentionState, viewModel: 
                 onClick = { viewModel.toggleScheduleCompleted(entry.id) },
                 modifier = Modifier.testTag("schedule-completion-${entry.id}"),
             ) { Text(if (entry.completed) "取消完成" else "完成") }
-            TextButton(onClick = {
-                val updated = entry.copy(reminderEpochMillis = if (entry.reminderEpochMillis == null) System.currentTimeMillis() + 3_600_000 else null)
-                viewModel.updateSchedule(updated)
-                if (updated.reminderEpochMillis == null) ReminderScheduler(context).cancel(entry.id) else ReminderScheduler(context).schedule(updated)
-            }) { Text(if (entry.reminderEpochMillis == null) "提醒" else "取消提醒") }
         }
     }
 }
@@ -1230,6 +1273,8 @@ private fun ScheduleEditDialog(
     var endTime by remember(entry.id) { mutableStateOf(entry.endMinute?.let(::formatScheduleMinute) ?: "") }
     var estimate by remember(entry.id) { mutableStateOf(entry.estimatedMinutes?.toString() ?: "") }
     var note by remember(entry.id) { mutableStateOf(entry.note) }
+    val context = LocalContext.current
+    var reminderTime by remember(entry.id) { mutableStateOf(entry.reminderEpochMillis?.let(::formatReminderEpoch) ?: "") }
     var targetId by remember(entry.id) { mutableStateOf(entry.targetId) }
     var targetMenuExpanded by remember { mutableStateOf(false) }
     var error by remember(entry.id) { mutableStateOf<String?>(null) }
@@ -1245,6 +1290,7 @@ private fun ScheduleEditDialog(
                     OutlinedTextField(endTime, { endTime = it }, label = { Text("结束 HH:mm") }, modifier = Modifier.weight(1f), singleLine = true)
                 }
                 OutlinedTextField(estimate, { estimate = it }, label = { Text("预计分钟") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                OutlinedTextField(reminderTime, { reminderTime = it }, label = { Text("提醒 HH:mm（可选）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 OutlinedTextField(note, { note = it }, label = { Text("备注（可选）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 Box {
                     OutlinedButton(onClick = { targetMenuExpanded = true }) { Text(targets.firstOrNull { it.id == targetId }?.title ?: "关联计划（可选）") }
@@ -1262,8 +1308,33 @@ private fun ScheduleEditDialog(
                 val parsedStart = parseScheduleMinute(startTime)
                 val parsedEnd = parseScheduleMinute(endTime, allowEndOfDay = true)
                 val estimated = estimate.trim().takeIf(String::isNotEmpty)?.toIntOrNull()
-                error = validateScheduleForm(title, parsedDate, startTime, endTime, estimate, parsedStart, parsedEnd, estimated)
-                if (error == null) onSave(entry.copy(planningDate = parsedDate.toString(), title = title, startMinute = parsedStart, endMinute = parsedEnd, estimatedMinutes = estimated, note = note, targetId = targetId))
+                val parsedReminder = parseScheduleMinute(reminderTime)
+                error = validateScheduleForm(
+                    ScheduleFormInput(
+                        title = title,
+                        date = parsedDate,
+                        startText = startTime,
+                        endText = endTime,
+                        estimateText = estimate,
+                        startMinute = parsedStart,
+                        endMinute = parsedEnd,
+                        estimateMinutes = estimated,
+                        reminderText = reminderTime,
+                        reminderMinute = parsedReminder,
+                    ),
+                )
+                if (error == null) onSave(entry.copy(
+                    planningDate = parsedDate.toString(),
+                    title = title,
+                    startMinute = parsedStart,
+                    endMinute = parsedEnd,
+                    estimatedMinutes = estimated,
+                    note = note,
+                    targetId = targetId,
+                    reminderEpochMillis = parsedReminder?.let { minute ->
+                        reminderEpochMillis(parsedDate!!, minute)
+                    },
+                ).also { if (parsedReminder != null) requestReminderPermission(context) })
             }) { Text("保存") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
@@ -1280,6 +1351,26 @@ private fun parseScheduleMinute(value: String, allowEndOfDay: Boolean = false): 
 }
 
 private fun formatScheduleMinute(value: Int): String = "%02d:%02d".format(value / 60, value % 60)
+
+private fun formatReminderEpoch(epochMillis: Long): String =
+    Instant.ofEpochMilli(epochMillis).atZone(java.time.ZoneId.systemDefault()).let { formatScheduleMinute(it.hour * 60 + it.minute) }
+
+private fun requestReminderPermission(context: Context) {
+    if (Build.VERSION.SDK_INT < 33 ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+    ) return
+    context.findActivity()?.let {
+        ActivityCompat.requestPermissions(it, arrayOf(Manifest.permission.POST_NOTIFICATIONS), REMINDER_PERMISSION_REQUEST_CODE)
+    }
+}
+
+private fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
+private const val REMINDER_PERMISSION_REQUEST_CODE = 4101
 
 private fun weekdayLabel(day: Int): String = when (day) {
     1 -> "一"
@@ -1318,24 +1409,29 @@ private fun validateRecurrenceForm(
     else -> null
 }
 
-private fun validateScheduleForm(
-    title: String,
-    date: LocalDate?,
-    startText: String,
-    endText: String,
-    estimateText: String,
-    start: Int?,
-    end: Int?,
-    estimate: Int?,
-): String? = when {
-    date == null -> "请输入有效的规划日"
-    title.isBlank() -> "日程标题不能为空"
-    startText.isNotBlank() && start == null -> "请输入有效的开始时间 HH:mm"
-    endText.isNotBlank() && end == null -> "请输入有效的结束时间 HH:mm"
-    (start == null) != (end == null) -> "时间段必须同时填写开始和结束时间"
-    start != null && end != null && end <= start -> "结束时间必须晚于开始时间"
-    estimateText.isNotBlank() && estimate == null -> "请输入有效的预计分钟"
-    estimate != null && estimate <= 0 -> "预计时长必须为正数"
+private data class ScheduleFormInput(
+    val title: String,
+    val date: LocalDate?,
+    val startText: String,
+    val endText: String,
+    val estimateText: String,
+    val startMinute: Int?,
+    val endMinute: Int?,
+    val estimateMinutes: Int?,
+    val reminderText: String = "",
+    val reminderMinute: Int? = null,
+)
+
+private fun validateScheduleForm(input: ScheduleFormInput): String? = when {
+    input.date == null -> "请输入有效的规划日"
+    input.title.isBlank() -> "日程标题不能为空"
+    input.startText.isNotBlank() && input.startMinute == null -> "请输入有效的开始时间 HH:mm"
+    input.endText.isNotBlank() && input.endMinute == null -> "请输入有效的结束时间 HH:mm"
+    (input.startMinute == null) != (input.endMinute == null) -> "时间段必须同时填写开始和结束时间"
+    input.startMinute != null && input.endMinute != null && input.endMinute <= input.startMinute -> "结束时间必须晚于开始时间"
+    input.estimateText.isNotBlank() && input.estimateMinutes == null -> "请输入有效的预计分钟"
+    input.estimateMinutes != null && input.estimateMinutes <= 0 -> "预计时长必须为正数"
+    input.reminderText.isNotBlank() && input.reminderMinute == null -> "请输入有效的提醒时间 HH:mm"
     else -> null
 }
 

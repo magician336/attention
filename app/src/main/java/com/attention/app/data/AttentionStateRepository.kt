@@ -23,6 +23,9 @@ interface AttentionStateRepository {
     /** Explicit full-state replacement used by the backup coordinator. */
     suspend fun replace(state: AttentionState)
 
+    /** Rebuild future reminders after process or permission recovery. */
+    suspend fun restoreReminders()
+
     suspend fun exportJson(): String
     suspend fun importJson(encoded: String, clearExisting: Boolean): AttentionState
     suspend fun lastImportBackup(): String?
