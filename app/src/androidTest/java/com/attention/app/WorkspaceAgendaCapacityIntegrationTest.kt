@@ -42,6 +42,23 @@ class WorkspaceAgendaCapacityIntegrationTest {
         composeRule.onNodeWithTag("agenda-capacity-summary", useUnmergedTree = true)
             .performScrollTo()
             .assert(hasText("已安排 45 / 60 分钟", substring = true))
+
+        runBlocking {
+            ApplicationProvider.getApplicationContext<android.content.Context>()
+                .createSettingsStore()
+                .setSnapshot(SettingsSnapshot(dailyCapacityMinutes = null, onboardingCompleted = true))
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("agenda-capacity-summary", useUnmergedTree = true)
+            .performScrollTo()
+            .assert(hasText("已安排 45 分钟", substring = true))
+            .assert(hasText("未设置", substring = true))
+
+        runBlocking {
+            ApplicationProvider.getApplicationContext<android.content.Context>()
+                .createSettingsStore()
+                .setSnapshot(SettingsSnapshot(dailyCapacityMinutes = 60, onboardingCompleted = true))
+        }
     }
 
     private fun openAgenda() {

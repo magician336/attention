@@ -1253,7 +1253,7 @@ private fun ScheduleRow(entry: ScheduleEntry, state: AttentionState, viewModel: 
 }
 
 private fun capacitySummaryText(summary: CapacitySummary): String = when {
-    summary.capacityMinutes == null -> "未设置"
+    summary.capacityMinutes == null -> "已安排 ${summary.usedMinutes} 分钟（每日容量未设置）"
     summary.overloaded -> "已安排 ${summary.usedMinutes} / ${summary.capacityMinutes} 分钟（超载）"
     else -> "已安排 ${summary.usedMinutes} / ${summary.capacityMinutes} 分钟"
 }

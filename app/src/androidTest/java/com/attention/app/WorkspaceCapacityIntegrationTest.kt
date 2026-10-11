@@ -57,11 +57,15 @@ class WorkspaceCapacityIntegrationTest {
         capacityInput.performTextReplacement("")
         saveButton.performClick()
         composeRule.waitForIdle()
+        summary.assert(hasText("已安排 90 分钟", substring = true))
         summary.assert(hasText("未设置", substring = true))
 
         composeRule.activityRule.scenario.recreate()
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("daily-capacity-summary", useUnmergedTree = true).performScrollTo().assert(hasText("未设置", substring = true))
+        composeRule.onNodeWithTag("daily-capacity-summary", useUnmergedTree = true)
+            .performScrollTo()
+            .assert(hasText("已安排 90 分钟", substring = true))
+            .assert(hasText("未设置", substring = true))
     }
 
     companion object {
