@@ -821,6 +821,18 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun stopped_rule_rejects_generation_from_a_stale_rule_but_keeps_existing_occurrences() {
+        val rule = RecurrenceRule("stale", "复盘", date.toString(), ScheduleFrequency.DAILY)
+        val materialized = AttentionState().addRecurrenceAndMaterialize(rule, date.plusDays(1))
+        val stopped = materialized.stopRecurrence(rule.id)
+        val retried = stopped.materializeOccurrences(rule, date.plusDays(4))
+
+        assertFalse(retried.recurrenceRules.single().active)
+        assertEquals(listOf(date.toString(), date.plusDays(1).toString()), retried.schedules.map { it.planningDate })
+        assertEquals(stopped.schedules, retried.schedules)
+    }
+
+    @Test
     fun recurring_reminder_is_calculated_for_each_occurrence() {
         val rule = RecurrenceRule(
             title = "提醒",
@@ -830,6 +842,14 @@ class AttentionEngineTest {
         )
         val occurrence = AttentionState().occurrences(rule, date).single()
         assertTrue(occurrence.reminderEpochMillis != null)
+    }
+
+    @Test
+    fun recurring_reminder_uses_each_occurrence_planning_date() {
+        val rule = RecurrenceRule("reminders", "提醒", date.toString(), ScheduleFrequency.DAILY, reminderMinuteOfDay = 9 * 60)
+        val occurrences = AttentionState().occurrences(rule, date.plusDays(1))
+        assertEquals(2, occurrences.size)
+        assertEquals(24 * 60 * 60 * 1000L, occurrences[1].reminderEpochMillis!! - occurrences[0].reminderEpochMillis!!)
     }
 
     @Test
