@@ -170,7 +170,11 @@ class AttentionViewModel(
     }
     fun switchTimer(targetId: String?) = scope.launch {
         runCatching {
-            repository.updateBusiness { current -> current.switchTimer(targetId, Instant.now(), zone).state.recalculateExperience() }
+            repository.updateBusiness {
+                current -> current.switchTimer(targetId, Instant.now(), zone).state
+                    .recalculateExperience()
+                    .awardEligibleMilestones(LocalDate.now(zone))
+            }
         }.onFailure { _error.value = it.message ?: "无法切换计时目标" }
     }
     fun pauseTimer() = runCommand { it.pauseTimer(Instant.now()) }

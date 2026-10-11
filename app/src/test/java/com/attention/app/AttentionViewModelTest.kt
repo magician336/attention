@@ -1,6 +1,7 @@
 package com.attention.app
 
 import com.attention.app.data.AttentionStateRepository
+import com.attention.domain.ActiveTimer
 import com.attention.domain.AttentionState
 import com.attention.domain.GoalCadence
 import com.attention.domain.GoalStage
@@ -11,6 +12,7 @@ import com.attention.domain.Target
 import com.attention.domain.TimeEntry
 import com.attention.domain.toggleScheduleCompleted
 import java.time.LocalDate
+import java.time.Instant
 import java.time.ZoneOffset
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -47,6 +49,35 @@ class AttentionViewModelTest {
             val viewModel = AttentionViewModel(repository, ZoneOffset.UTC)
 
             viewModel.editTime("historical-entry", 10, target.id)
+            advanceUntilIdle()
+
+            assertEquals(1, repository.state.value.milestones.count { it.kind == "one_time_goal" })
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun switching_timer_awards_feedback_for_the_finished_segment() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val date = LocalDate.now(ZoneOffset.UTC)
+            val target = Target("switch-target", title = "阶段目标")
+            val repository = FakeRepository(
+                AttentionState(
+                    targets = listOf(target),
+                    goalStages = listOf(GoalStage("switch-stage", target.id, GoalCadence.ONE_TIME, 1, date.toString())),
+                    activeTimer = ActiveTimer(
+                        targetId = target.id,
+                        startedAtEpochMillis = Instant.now().minusSeconds(60).toEpochMilli(),
+                        lastPlanningDate = date.toString(),
+                    ),
+                ),
+            )
+            val viewModel = AttentionViewModel(repository, ZoneOffset.UTC)
+
+            viewModel.switchTimer(null)
             advanceUntilIdle()
 
             assertEquals(1, repository.state.value.milestones.count { it.kind == "one_time_goal" })

@@ -286,9 +286,17 @@ fun AttentionState.reorderTarget(targetId: String, newIndex: Int): AttentionStat
     return copy(targets = targets.map { item -> order[item.id]?.let { item.copy(sortOrder = it) } ?: item })
 }
 
-fun AttentionState.archiveTarget(targetId: String, archived: Boolean = true): AttentionState = copy(
-    targets = targets.map { if (it.id == targetId) it.copy(archived = archived) else it },
-)
+fun AttentionState.archiveTarget(targetId: String, archived: Boolean = true): AttentionState {
+    val nextTimer = if (archived && activeTimer?.targetId == targetId) {
+        activeTimer.copy(targetId = null)
+    } else {
+        activeTimer
+    }
+    return copy(
+        targets = targets.map { if (it.id == targetId) it.copy(archived = archived) else it },
+        activeTimer = nextTimer,
+    )
+}
 
 fun AttentionState.deleteTargetRelations(targetIds: Set<String>): AttentionState {
     val ids = targetIds.flatMap(::descendantIds).toSet()
@@ -302,6 +310,9 @@ fun AttentionState.deleteTargetRelations(targetIds: Set<String>): AttentionState
         targetMoves = targetMoves
             .filterNot { it.targetId in ids }
             .map { move -> if (move.parentId != null && move.parentId in ids) move.copy(parentId = null) else move },
+        activeTimer = activeTimer?.let { timer ->
+            if (timer.targetId in ids) timer.copy(targetId = null) else timer
+        },
     )
 }
 
@@ -822,6 +833,8 @@ fun AttentionState.startTimer(targetId: String?, now: Instant, zone: ZoneId = Zo
 }
 
 fun AttentionState.switchTimer(targetId: String?, now: Instant, zone: ZoneId = ZoneId.systemDefault()): TimerResult {
+    require(validRecordTarget(targetId)) { "计时只能归入未归档目标" }
+    if (activeTimer?.targetId == targetId) return TimerResult(this, emptyList())
     if (activeTimer == null) return TimerResult(startTimer(targetId, now, zone), emptyList())
     val stopped = stopTimer(now, zone)
     return TimerResult(stopped.state.startTimer(targetId, now, zone), stopped.entries)
