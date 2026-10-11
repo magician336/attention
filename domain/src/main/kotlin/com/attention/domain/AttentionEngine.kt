@@ -448,6 +448,15 @@ fun AttentionState.stopRecurrence(ruleId: String): AttentionState = copy(
     recurrenceRules = recurrenceRules.map { if (it.id == ruleId) it.copy(active = false) else it },
 )
 
+fun reminderEpochMillis(
+    planningDate: LocalDate,
+    minuteOfDay: Int,
+    zone: ZoneId = ZoneId.systemDefault(),
+): Long {
+    require(minuteOfDay in 0 until 1440) { "提醒时间必须在 00:00 到 23:59 之间" }
+    return planningDate.atStartOfDay(zone).plusMinutes(minuteOfDay.toLong()).toInstant().toEpochMilli()
+}
+
 fun AttentionState.occurrences(
     rule: RecurrenceRule,
     through: LocalDate,
@@ -474,7 +483,7 @@ fun AttentionState.occurrences(
                 note = rule.note,
                 recurrenceRuleId = rule.id,
                 reminderEpochMillis = rule.reminderMinuteOfDay?.let { minute ->
-                    date.atStartOfDay(zone).plusMinutes(minute.toLong()).toInstant().toEpochMilli()
+                    reminderEpochMillis(date, minute, zone)
                 },
             )
         }

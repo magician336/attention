@@ -12,6 +12,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             WorkspaceApp(
                 openScheduleDate = intent.getStringExtra(com.attention.app.reminder.ReminderReceiver.EXTRA_PLANNING_DATE),
+                openScheduleId = intent.getStringExtra(com.attention.app.reminder.ReminderReceiver.EXTRA_ID),
             )
         }
     }
