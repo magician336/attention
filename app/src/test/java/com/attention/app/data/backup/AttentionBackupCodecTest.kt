@@ -2,6 +2,7 @@ package com.attention.app.data.backup
 
 import com.attention.domain.ActiveTimer
 import com.attention.domain.AttentionState
+import com.attention.domain.CapacitySummary
 import com.attention.domain.GoalCadence
 import com.attention.domain.GoalStage
 import com.attention.domain.LaunchDestination
@@ -17,6 +18,7 @@ import com.attention.domain.TargetMove
 import com.attention.domain.TimeEntry
 import com.attention.domain.TimeEntrySource
 import com.attention.domain.TimerSegment
+import com.attention.domain.capacitySummary
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -52,6 +54,51 @@ class AttentionBackupCodecTest {
 
         assertTrue(encoded.contains("\"version\":1"))
         assertEquals(expected, restored)
+    }
+
+    @Test
+    fun backup_restore_recomputes_capacity_from_settings_and_saved_schedule_fields() {
+        val day = "2026-10-08"
+        val expected = AttentionState(
+            settings = StoredSettings(planningDayBoundaryMinutes = 120, dailyCapacityMinutes = 60),
+            schedules = listOf(
+                ScheduleEntry(
+                    id = "estimated",
+                    planningDate = day,
+                    title = "预计优先",
+                    startMinute = 60,
+                    endMinute = 180,
+                    estimatedMinutes = 20,
+                    completed = true,
+                    recurrenceRuleId = "rule",
+                ),
+                ScheduleEntry(
+                    id = "range",
+                    planningDate = day,
+                    title = "完整时间段",
+                    startMinute = 180,
+                    endMinute = 220,
+                ),
+            ),
+            recurrenceRules = listOf(
+                RecurrenceRule(
+                    id = "rule",
+                    title = "重复规则",
+                    startDate = day,
+                    frequency = ScheduleFrequency.DAILY,
+                    estimatedMinutes = 999,
+                ),
+            ),
+        )
+
+        val encoded = AttentionBackupCodec.encode(expected)
+        val restored = AttentionBackupCodec.decode(encoded)
+
+        assertFalse(encoded.contains("usedMinutes"))
+        assertFalse(encoded.contains("overloaded"))
+        assertEquals(expected, restored)
+        assertEquals(CapacitySummary(60, 60, false), restored.capacitySummary(day))
+        assertEquals(CapacitySummary(60, 0, false), restored.capacitySummary("2026-10-09"))
     }
 
     @Test
