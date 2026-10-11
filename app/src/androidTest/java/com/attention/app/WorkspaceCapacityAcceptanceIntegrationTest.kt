@@ -137,7 +137,12 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
     }
 
     private fun click(tag: String) {
-        composeRule.onNodeWithTag(tag, useUnmergedTree = true).performScrollTo().performClick()
+        val node = composeRule.onNodeWithTag(tag, useUnmergedTree = true)
+        if (tag.startsWith("schedule-edit-save-")) {
+            node.performClick()
+        } else {
+            node.performScrollTo().performClick()
+        }
     }
 
     companion object {
