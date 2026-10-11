@@ -1288,6 +1288,43 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun actual_time_commands_recalculate_experience_without_parent_duplication() {
+        val withRoot = AttentionState().addTarget("父目标")
+        val root = withRoot.targets.single()
+        val withChild = withRoot.addTarget("子目标", root.id)
+        val child = withChild.targets.single { it.parentId == root.id }
+
+        val recorded = withChild
+            .addTimeEntry(date.toString(), 10, child.id, TimeEntrySource.TIMER)
+            .addTimeEntry(date.toString(), 7, root.id, TimeEntrySource.IMPORT)
+
+        assertEquals(17L, recorded.experience)
+        assertEquals(17, recorded.subtreeMinutes(root.id))
+
+        val childEntry = recorded.timeEntries.single { it.targetId == child.id }
+        val edited = recorded.editTimeEntry(childEntry.id, 20, null)
+        assertEquals(7L, edited.experience)
+
+        val reassigned = edited.assignUnowned(setOf(childEntry.id), root.id)
+        assertEquals(27L, reassigned.experience)
+
+        val deleted = reassigned.deleteTimeEntry(childEntry.id)
+        assertEquals(7L, deleted.experience)
+    }
+
+    @Test
+    fun stopping_a_timer_recalculates_experience_from_its_actual_minutes() {
+        val state = AttentionState().addTarget("计时目标")
+        val target = state.targets.single()
+        val stopped = state
+            .startTimer(target.id, Instant.ofEpochMilli(0), utc)
+            .stopTimer(Instant.ofEpochMilli(121_000L), utc)
+
+        assertEquals(2, stopped.entries.single().durationMinutes)
+        assertEquals(2L, stopped.state.experience)
+    }
+
+    @Test
     fun editing_time_entry_preserves_planning_date_and_source() {
         val state = AttentionState().addTarget("学习")
         val target = state.targets.single()

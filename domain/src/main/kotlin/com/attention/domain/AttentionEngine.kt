@@ -379,15 +379,18 @@ fun AttentionState.addTimeEntry(
     require(durationMinutes > 0)
     require(validRecordTarget(targetId)) { "时间记录只能归入未归档目标" }
     return copy(timeEntries = timeEntries + TimeEntry(planningDate = planningDate, durationMinutes = durationMinutes, targetId = targetId, source = source, occurredAtEpochMillis = occurredAtEpochMillis, note = note))
+        .recalculateExperience()
 }
 
 fun AttentionState.editTimeEntry(entryId: String, durationMinutes: Int, targetId: String?, note: String = ""): AttentionState {
     require(durationMinutes > 0 && validRecordTarget(targetId)) { "时间记录只能归入未归档目标" }
     require(timeEntries.any { it.id == entryId }) { "时间记录不存在" }
     return copy(timeEntries = timeEntries.map { if (it.id == entryId) it.copy(durationMinutes = durationMinutes, targetId = targetId, note = note) else it })
+        .recalculateExperience()
 }
 
 fun AttentionState.deleteTimeEntry(entryId: String): AttentionState = copy(timeEntries = timeEntries.filterNot { it.id == entryId })
+    .recalculateExperience()
 
 fun AttentionState.assignUnowned(entryIds: Set<String>, targetId: String): AttentionState {
     if (entryIds.isEmpty()) return this
@@ -858,7 +861,7 @@ fun AttentionState.stopTimer(now: Instant, zone: ZoneId = ZoneId.systemDefault()
         segments += TimerSegment(timer.startedAtEpochMillis, endedAt)
     }
     val entries = splitTimerSegments(segments, timer.targetId, settings.planningDayBoundaryMinutes, zone)
-    return TimerResult(copy(activeTimer = null, timeEntries = timeEntries + entries), entries)
+    return TimerResult(copy(activeTimer = null, timeEntries = timeEntries + entries).recalculateExperience(), entries)
 }
 
 private fun splitTimerSegments(segments: List<TimerSegment>, targetId: String?, boundaryMinutes: Int, zone: ZoneId): List<TimeEntry> {
