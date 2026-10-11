@@ -72,6 +72,19 @@ class ReminderCoordinatorTest {
         assertEquals(listOf("cancel:schedule"), alarms.events)
     }
 
+    @Test
+    fun restore_rebuilds_future_reminders_without_catching_up_past_entries() {
+        val past = ScheduleEntry("past", "2026-10-10", "已过期", reminderEpochMillis = 1_000L)
+        val future = ScheduleEntry("future", "2026-10-11", "待提醒", reminderEpochMillis = 3_000L)
+        val alarms = RecordingAlarmPort()
+
+        AlarmReminderCoordinator(alarms, nowMillis = { 2_000L }).restore(
+            AttentionState(schedules = listOf(past, future)),
+        )
+
+        assertEquals(listOf("cancel:past", "cancel:future", "schedule:future:3000"), alarms.events)
+    }
+
     private class RecordingAlarmPort : ReminderAlarmPort {
         val events = mutableListOf<String>()
 

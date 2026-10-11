@@ -9,6 +9,9 @@ import com.attention.domain.ScheduleEntry
  */
 fun interface ReminderCoordinator {
     fun sync(previous: AttentionState, next: AttentionState)
+
+    /** Rebuilds alarms from persisted state without replaying expired reminders. */
+    fun restore(state: AttentionState) = sync(AttentionState(), state)
 }
 
 interface ReminderAlarmPort {

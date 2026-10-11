@@ -89,6 +89,10 @@ class RoomAttentionStateRepository(
         }
     }
 
+    override suspend fun restoreReminders() {
+        mutex.withLock { reminderCoordinator.restore(state.first()) }
+    }
+
     override suspend fun exportJson(): String = AttentionBackupCodec.encode(state.first())
 
     override suspend fun importJson(encoded: String, clearExisting: Boolean): AttentionState {
@@ -110,6 +114,8 @@ class RoomAttentionStateRepository(
             settings.setSnapshot(next.toSettingsSnapshot())
             reminderCoordinator.sync(current, next)
         } catch (error: Throwable) {
+            runCatching { reminderCoordinator.sync(next, current) }
+                .onFailure(error::addSuppressed)
             runCatching { settings.setSnapshot(current.toSettingsSnapshot()) }
                 .onFailure(error::addSuppressed)
             runCatching { business.replace(current) }

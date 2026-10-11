@@ -203,6 +203,11 @@ class AttentionViewModel(
             .onFailure { _error.value = it.message ?: "导入失败，现有数据未改变" }
     }
 
+    fun restoreReminders() = scope.launch {
+        runCatching { repository.restoreReminders() }
+            .onFailure { _error.value = it.message ?: "提醒恢复失败" }
+    }
+
     private fun runCommand(
         onSuccess: () -> Unit = {},
         transform: (AttentionState) -> AttentionState,
