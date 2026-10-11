@@ -862,7 +862,9 @@ fun AttentionState.stopTimer(now: Instant, zone: ZoneId = ZoneId.systemDefault()
 }
 
 private fun splitTimerSegments(segments: List<TimerSegment>, targetId: String?, boundaryMinutes: Int, zone: ZoneId): List<TimeEntry> {
-    val buckets = linkedMapOf<LocalDate, Long>()
+    data class TimerBucket(var durationMillis: Long, val occurredAtEpochMillis: Long)
+
+    val buckets = linkedMapOf<LocalDate, TimerBucket>()
     segments.sortedBy { it.startedAtEpochMillis }.forEach { segment ->
         var cursor = Instant.ofEpochMilli(segment.startedAtEpochMillis)
         val end = Instant.ofEpochMilli(maxOf(segment.startedAtEpochMillis, segment.endedAtEpochMillis))
@@ -874,20 +876,21 @@ private fun splitTimerSegments(segments: List<TimerSegment>, targetId: String?, 
             val nextBoundary = planningDate.plusDays(1).atStartOfDay(zone).plusMinutes(boundaryMinutes.toLong()).toInstant()
             val chunkEnd = minOf(end, nextBoundary)
             val duration = chunkEnd.toEpochMilli() - cursor.toEpochMilli()
-            buckets[planningDate] = (buckets[planningDate] ?: 0L) + duration
+            val bucket = buckets.getOrPut(planningDate) { TimerBucket(0L, cursor.toEpochMilli()) }
+            bucket.durationMillis += duration
             cursor = chunkEnd
         }
     }
-    return buckets.mapNotNull { (date, durationMillis) ->
+    return buckets.mapNotNull { (date, bucket) ->
         // A partial minute cannot be carried across planning-day boundaries:
         // each date is an independent ledger bucket.
-        val minutes = (durationMillis / 60_000L).toInt()
+        val minutes = (bucket.durationMillis / 60_000L).toInt()
         if (minutes == 0) null else TimeEntry(
             planningDate = date.toString(),
             durationMinutes = minutes,
             targetId = targetId,
             source = TimeEntrySource.TIMER,
-            occurredAtEpochMillis = date.atStartOfDay(zone).toInstant().toEpochMilli(),
+            occurredAtEpochMillis = bucket.occurredAtEpochMillis,
         )
     }
 }

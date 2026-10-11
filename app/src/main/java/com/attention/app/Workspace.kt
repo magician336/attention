@@ -323,7 +323,13 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
                             context.stopService(AttentionTimerService.intent(context))
                         }) { Text("结束并保存") }
                     }
-                    state.targets.filter { !it.archived && it.id != timer.targetId }.take(3).forEach { target ->
+                    if (timer.targetId != null) {
+                        OutlinedButton(
+                            modifier = Modifier.testTag("switch-timer-unowned"),
+                            onClick = { viewModel.switchTimer(null) },
+                        ) { Text("切换到未归属活动") }
+                    }
+                    state.targets.filter { !it.archived && it.id != timer.targetId }.forEach { target ->
                         OutlinedButton(onClick = { viewModel.switchTimer(target.id) }) { Text("切换到 ${target.title}") }
                     }
                 }
