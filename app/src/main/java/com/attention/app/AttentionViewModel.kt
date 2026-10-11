@@ -18,6 +18,7 @@ import com.attention.domain.addMigration
 import com.attention.domain.addFutureTargetMove
 import com.attention.domain.cancelFutureTargetMove
 import com.attention.domain.addRecurrence
+import com.attention.domain.addRecurrenceAndMaterialize
 import com.attention.domain.addSchedule
 import com.attention.domain.addTarget
 import com.attention.domain.addTimeEntry
@@ -145,6 +146,9 @@ class AttentionViewModel(
         }
     }
     fun addRecurrence(rule: RecurrenceRule) = runCommand { it.addRecurrence(rule) }
+    fun addRecurrenceAndMaterialize(rule: RecurrenceRule, through: LocalDate) = runCommand {
+        it.addRecurrenceAndMaterialize(rule, through)
+    }
     fun materializeRecurrence(rule: RecurrenceRule, through: LocalDate) = runCommand { it.materializeOccurrences(rule, through) }
     fun stopRecurrence(ruleId: String) = runCommand { it.stopRecurrence(ruleId) }
 

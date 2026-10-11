@@ -757,12 +757,19 @@ private fun AttentionState.parentAt(targetId: String, date: LocalDate, moves: Li
 fun AttentionState.parentAt(targetId: String, date: LocalDate): String? = parentAt(targetId, date, targetMoves)
 
 fun AttentionState.materializeOccurrences(rule: RecurrenceRule, through: LocalDate): AttentionState {
-    val generated = occurrences(rule, through)
+    // Resolve the persisted rule first. This keeps generation safe when a caller
+    // retries with a stale copy (for example after stopping a rule).
+    val persistedRule = recurrenceRules.firstOrNull { it.id == rule.id } ?: rule
+    val generated = occurrences(persistedRule, through)
     val existing = schedules.map { it.recurrenceRuleId to it.planningDate }.toSet()
     val additions = generated.filterNot { (it.recurrenceRuleId to it.planningDate) in existing }
         .map { it.copy(id = newId()) }
     return copy(schedules = schedules + additions)
 }
+
+/** Creates a rule and materializes its first window as one atomic domain command. */
+fun AttentionState.addRecurrenceAndMaterialize(rule: RecurrenceRule, through: LocalDate): AttentionState =
+    addRecurrence(rule).materializeOccurrences(rule, through)
 
 fun AttentionState.startTimer(targetId: String?, now: Instant, zone: ZoneId = ZoneId.systemDefault()): AttentionState {
     require(validRecordTarget(targetId)) { "计时只能归入未归档目标" }
