@@ -14,6 +14,43 @@ class AttentionEngineTest {
     private val date = LocalDate.of(2026, 10, 8)
 
     @Test
+    fun capacity_summary_uses_schedule_planning_minutes_only_and_marks_strict_overload() {
+        val state = AttentionState(
+            settings = StoredSettings(dailyCapacityMinutes = 60),
+            schedules = listOf(
+                ScheduleEntry(
+                    id = "estimated-first",
+                    planningDate = date.toString(),
+                    title = "预计优先",
+                    startMinute = 60,
+                    endMinute = 120,
+                    estimatedMinutes = 30,
+                ),
+                ScheduleEntry(
+                    id = "time-range",
+                    planningDate = date.toString(),
+                    title = "时间段",
+                    startMinute = 120,
+                    endMinute = 150,
+                ),
+                ScheduleEntry(id = "no-duration", planningDate = date.toString(), title = "无时长"),
+                ScheduleEntry(id = "other-day", planningDate = date.plusDays(1).toString(), title = "其他日", estimatedMinutes = 90),
+            ),
+            timeEntries = listOf(TimeEntry("actual", date.toString(), 300)),
+        )
+
+        assertEquals(CapacitySummary(60, 60, false), state.capacitySummary(date.toString()))
+        assertEquals(CapacitySummary(60, 60, false), state.copy(schedules = state.schedules.map { it.copy(completed = true) }).capacitySummary(date.toString()))
+        val overloaded = state.copy(settings = StoredSettings(dailyCapacityMinutes = 59))
+        assertEquals(CapacitySummary(59, 60, true), overloaded.capacitySummary(date.toString()))
+        val added = overloaded.addSchedule(ScheduleEntry(id = "added", planningDate = date.toString(), title = "继续安排", estimatedMinutes = 15))
+        val edited = added.updateSchedule(added.schedules.single { it.id == "added" }.copy(title = "继续编辑", estimatedMinutes = 20))
+        assertEquals("继续编辑", edited.schedules.single { it.id == "added" }.title)
+        assertTrue(edited.toggleScheduleCompleted("added").schedules.single { it.id == "added" }.completed)
+        assertEquals(CapacitySummary(null, 60, false), state.copy(settings = StoredSettings()).capacitySummary(date.toString()))
+    }
+
+    @Test
     fun agenda_entries_filter_by_planning_date_and_sort_all_dates_stably() {
         val state = AttentionState()
             .addSchedule(ScheduleEntry(id = "later", planningDate = "2026-10-09", title = "Later", startMinute = 5, endMinute = 15))

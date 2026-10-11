@@ -82,4 +82,18 @@ class SettingsStoreTest {
         file.delete()
         Unit
     }
+
+    @Test
+    fun invalid_capacity_update_keeps_the_previous_valid_value() = runBlocking {
+        val file = Files.createTempFile("attention-settings", ".preferences_pb").toFile()
+        val store = DataStoreSettingsStore(PreferenceDataStoreFactory.create { file })
+
+        store.setDailyCapacityMinutes(420)
+        runCatching { store.setDailyCapacityMinutes(0) }
+        runCatching { store.setDailyCapacityMinutes(-15) }
+
+        assertEquals(420, store.settings.first().dailyCapacityMinutes)
+        file.delete()
+        Unit
+    }
 }
