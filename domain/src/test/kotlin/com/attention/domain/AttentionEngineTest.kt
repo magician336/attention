@@ -912,6 +912,34 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun timer_keeps_planning_day_minute_remainders_separate() {
+        val state = AttentionState().addTarget("专注")
+        val target = state.targets.single()
+        val started = state.startTimer(target.id, Instant.parse("2026-10-08T02:59:30Z"), utc)
+        val paused = started.pauseTimer(Instant.parse("2026-10-08T03:00:00Z"))
+        val resumed = paused.resumeTimer(Instant.parse("2026-10-08T03:00:30Z"))
+        val result = resumed.stopTimer(Instant.parse("2026-10-08T03:01:00Z"), utc)
+
+        assertTrue(result.entries.isEmpty())
+        assertTrue(result.state.timeEntries.isEmpty())
+    }
+
+    @Test
+    fun starting_a_second_timer_is_rejected_with_a_user_facing_message() {
+        val state = AttentionState().addTarget("专注")
+        val target = state.targets.single()
+        val started = state.startTimer(target.id, Instant.parse("2026-10-08T00:00:00Z"), utc)
+
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            started.startTimer(null, Instant.parse("2026-10-08T00:01:00Z"), utc)
+        }
+
+        assertEquals("已有活动计时器，请先暂停或结束", error.message)
+        assertEquals(target.id, started.activeTimer?.targetId)
+        assertTrue(started.timeEntries.isEmpty())
+    }
+
+    @Test
     fun recurrence_generates_independent_occurrences_and_can_stop() {
         val state = AttentionState().addRecurrence(
             RecurrenceRule(

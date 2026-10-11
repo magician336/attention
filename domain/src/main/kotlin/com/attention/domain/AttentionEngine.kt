@@ -817,7 +817,7 @@ fun AttentionState.addRecurrenceAndMaterialize(
 
 fun AttentionState.startTimer(targetId: String?, now: Instant, zone: ZoneId = ZoneId.systemDefault()): AttentionState {
     require(validRecordTarget(targetId)) { "计时只能归入未归档目标" }
-    require(activeTimer == null)
+    require(activeTimer == null) { "已有活动计时器，请先暂停或结束" }
     return copy(activeTimer = ActiveTimer(targetId = targetId, startedAtEpochMillis = now.toEpochMilli(), lastPlanningDate = planningDate(now, zone).toString()))
 }
 
@@ -878,11 +878,10 @@ private fun splitTimerSegments(segments: List<TimerSegment>, targetId: String?, 
             cursor = chunkEnd
         }
     }
-    var carryMillis = 0L
     return buckets.mapNotNull { (date, durationMillis) ->
-        val total = carryMillis + durationMillis
-        val minutes = (total / 60_000L).toInt()
-        carryMillis = total % 60_000L
+        // A partial minute cannot be carried across planning-day boundaries:
+        // each date is an independent ledger bucket.
+        val minutes = (durationMillis / 60_000L).toInt()
         if (minutes == 0) null else TimeEntry(
             planningDate = date.toString(),
             durationMinutes = minutes,

@@ -173,6 +173,21 @@ class RoomAttentionStateRepositoryTest {
     }
 
     @Test
+    fun timer_does_not_carry_partial_minutes_between_planning_days() = runBlocking {
+        val repository = repository()
+        repository.updateBusiness { it.copy(targets = listOf(Target("target", title = "跨规划日"))) }
+
+        repository.updateBusiness {
+            it.startTimer("target", Instant.parse("2026-10-10T02:59:30Z"), ZoneId.of("UTC"))
+        }
+        repository.updateBusiness { it.pauseTimer(Instant.parse("2026-10-10T03:00:00Z")) }
+        repository.updateBusiness { it.resumeTimer(Instant.parse("2026-10-10T03:00:30Z")) }
+        repository.updateBusiness { it.stopTimer(Instant.parse("2026-10-10T03:01:00Z"), ZoneId.of("UTC")).state }
+
+        assertTrue(repository.state.first().timeEntries.isEmpty())
+    }
+
+    @Test
     fun concurrent_room_commands_are_serialized_without_losing_targets() = runBlocking {
         val first = repository()
         val second = RoomAttentionStateRepository(RoomBusinessDataRepository(database), settings)
