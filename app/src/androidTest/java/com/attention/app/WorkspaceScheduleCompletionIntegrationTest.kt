@@ -7,6 +7,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.attention.app.data.room.AttentionDatabase
@@ -29,7 +30,9 @@ class WorkspaceScheduleCompletionIntegrationTest {
     @Test
     fun completion_toggle_is_available_from_the_agenda_row() {
         openAgenda()
-        composeRule.onNodeWithTag("schedule-completion-$SCHEDULE_ID", useUnmergedTree = true).performClick()
+        composeRule.onNodeWithTag("schedule-completion-$SCHEDULE_ID", useUnmergedTree = true)
+            .performScrollTo()
+            .performClick()
         composeRule.waitForIdle()
 
         composeRule.waitUntil(timeoutMillis = 5_000) {
