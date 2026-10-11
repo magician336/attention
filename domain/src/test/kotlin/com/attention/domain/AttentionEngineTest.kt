@@ -2,6 +2,7 @@ package com.attention.domain
 
 import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 import java.time.ZoneOffset
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -850,6 +851,32 @@ class AttentionEngineTest {
         val occurrences = AttentionState().occurrences(rule, date.plusDays(1))
         assertEquals(2, occurrences.size)
         assertEquals(24 * 60 * 60 * 1000L, occurrences[1].reminderEpochMillis!! - occurrences[0].reminderEpochMillis!!)
+    }
+
+    @Test
+    fun recurring_reminder_uses_the_planning_zone_at_each_occurrence() {
+        val rule = RecurrenceRule(
+            id = "zone-rule",
+            title = "跨时区提醒",
+            startDate = "2026-10-11",
+            frequency = ScheduleFrequency.DAILY,
+            reminderMinuteOfDay = 90,
+        )
+
+        val occurrence = AttentionState().occurrences(
+            rule,
+            LocalDate.parse("2026-10-11"),
+            ZoneId.of("UTC+08:00"),
+        ).single()
+
+        assertEquals(
+            LocalDate.parse("2026-10-11")
+                .atStartOfDay(ZoneId.of("UTC+08:00"))
+                .plusMinutes(90)
+                .toInstant()
+                .toEpochMilli(),
+            occurrence.reminderEpochMillis,
+        )
     }
 
     @Test

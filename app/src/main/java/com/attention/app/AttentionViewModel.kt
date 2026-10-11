@@ -147,9 +147,9 @@ class AttentionViewModel(
     }
     fun addRecurrence(rule: RecurrenceRule) = runCommand { it.addRecurrence(rule) }
     fun addRecurrenceAndMaterialize(rule: RecurrenceRule, through: LocalDate) = runCommand {
-        it.addRecurrenceAndMaterialize(rule, through)
+        it.addRecurrenceAndMaterialize(rule, through, zone)
     }
-    fun materializeRecurrence(rule: RecurrenceRule, through: LocalDate) = runCommand { it.materializeOccurrences(rule, through) }
+    fun materializeRecurrence(rule: RecurrenceRule, through: LocalDate) = runCommand { it.materializeOccurrences(rule, through, zone) }
     fun stopRecurrence(ruleId: String) = runCommand { it.stopRecurrence(ruleId) }
 
     fun setSettings(settings: StoredSettings) = runSettingsCommand { repository.setPlannerSettings(settings) }
