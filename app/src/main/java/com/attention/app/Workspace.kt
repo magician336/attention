@@ -97,6 +97,7 @@ import com.attention.domain.periodStats
 import com.attention.domain.parentAt
 import com.attention.domain.progress
 import com.attention.domain.progressRange
+import com.attention.domain.recentMilestones
 import com.attention.domain.reminderEpochMillis
 import com.attention.domain.subtreeMinutes
 import com.attention.domain.targetChildren
@@ -1522,7 +1523,7 @@ private fun StatisticsScreen(
         }
         Text("投入经验：${state.experience} · 等级 ${levelForExperience(state.experience)}")
         Button(onClick = viewModel::awardMilestones) { Text("结算可达成里程碑") }
-        state.milestones.takeLast(8).forEach { milestone ->
+        state.recentMilestones().forEach { milestone ->
             Text("里程碑 ${milestone.kind}：+${milestone.reward}（${milestone.instanceKey}）")
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
