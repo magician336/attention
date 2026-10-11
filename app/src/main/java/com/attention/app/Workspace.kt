@@ -303,13 +303,14 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
                     Button(onClick = {
                         startTimer(null)
                     }) { Text("开始未归属计时") }
-                    state.targets.filter { !it.archived }.take(4).forEach { target ->
+                    state.targets.filter { !it.archived }.forEach { target ->
                         OutlinedButton(onClick = {
                             startTimer(target.id)
                         }) { Text("计时：${target.title}") }
                     }
                 } else {
                     Text(if (timer.paused) "计时已暂停" else "正在计时")
+                    Text("当前目标：${state.targets.firstOrNull { it.id == timer.targetId }?.title ?: "未归属活动"}")
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (timer.paused) Button(onClick = viewModel::resumeTimer) { Text("继续") }
                         else Button(onClick = viewModel::pauseTimer) { Text("暂停") }
