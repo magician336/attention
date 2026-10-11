@@ -941,6 +941,14 @@ private fun AgendaScreen(
     var editingEntry by remember { mutableStateOf<ScheduleEntry?>(null) }
     var recurrenceTitle by remember { mutableStateOf("") }
     var recurrenceFrequency by remember { mutableStateOf(ScheduleFrequency.DAILY) }
+    var recurrenceUntilDate by remember { mutableStateOf("") }
+    var recurrenceEstimatedMinutes by remember { mutableStateOf("") }
+    var recurrenceReminderTime by remember { mutableStateOf("") }
+    var recurrenceWeekdays by remember { mutableStateOf(setOf<Int>()) }
+    var recurrenceDayOfMonth by remember { mutableStateOf("") }
+    var recurrenceTargetId by remember { mutableStateOf<String?>(null) }
+    var recurrenceTargetMenuExpanded by remember { mutableStateOf(false) }
+    var recurrenceError by remember { mutableStateOf<String?>(null) }
     var dateMenuExpanded by remember { mutableStateOf(false) }
     var dateError by remember { mutableStateOf(false) }
     val availableDates = remember(state.schedules, today) {
@@ -988,24 +996,135 @@ private fun AgendaScreen(
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("重复日程", style = MaterialTheme.typography.titleSmall)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OutlinedTextField(recurrenceTitle, { recurrenceTitle = it }, label = { Text("重复标题") }, modifier = Modifier.weight(1f), singleLine = true)
+                    OutlinedTextField(recurrenceTitle, { recurrenceTitle = it; recurrenceError = null }, label = { Text("重复标题") }, modifier = Modifier.weight(1f), singleLine = true)
                     ScheduleFrequency.entries.forEach { value ->
                         if (recurrenceFrequency == value) Button(onClick = {}) { Text(value.label()) }
-                        else OutlinedButton(onClick = { recurrenceFrequency = value }) { Text(value.label()) }
+                        else OutlinedButton(onClick = {
+                            recurrenceFrequency = value
+                            recurrenceError = null
+                        }) { Text(value.label()) }
                     }
                 }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        recurrenceUntilDate,
+                        { recurrenceUntilDate = it; recurrenceError = null },
+                        label = { Text("结束规划日（可选）") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        recurrenceEstimatedMinutes,
+                        { recurrenceEstimatedMinutes = it; recurrenceError = null },
+                        label = { Text("预计分钟（可选）") },
+                        modifier = Modifier.width(140.dp),
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        recurrenceReminderTime,
+                        { recurrenceReminderTime = it; recurrenceError = null },
+                        label = { Text("提醒 HH:mm（可选）") },
+                        modifier = Modifier.width(150.dp),
+                        singleLine = true,
+                    )
+                }
+                when (recurrenceFrequency) {
+                    ScheduleFrequency.WEEKLY -> {
+                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            (1..7).forEach { weekday ->
+                                Row {
+                                    Checkbox(
+                                        checked = weekday in recurrenceWeekdays,
+                                        onCheckedChange = { checked ->
+                                            recurrenceWeekdays = if (checked) recurrenceWeekdays + weekday else recurrenceWeekdays - weekday
+                                            recurrenceError = null
+                                        },
+                                    )
+                                    Text(weekdayLabel(weekday), modifier = Modifier.padding(top = 12.dp))
+                                }
+                            }
+                        }
+                    }
+                    ScheduleFrequency.MONTHLY -> {
+                        OutlinedTextField(
+                            recurrenceDayOfMonth,
+                            { recurrenceDayOfMonth = it; recurrenceError = null },
+                            label = { Text("每月日期 1-31") },
+                            modifier = Modifier.width(160.dp),
+                            singleLine = true,
+                        )
+                    }
+                    ScheduleFrequency.DAILY -> Unit
+                }
+                Box {
+                    OutlinedButton(onClick = { recurrenceTargetMenuExpanded = true }) {
+                        Text(state.targets.firstOrNull { it.id == recurrenceTargetId }?.title ?: "关联计划（可选）")
+                    }
+                    DropdownMenu(expanded = recurrenceTargetMenuExpanded, onDismissRequest = { recurrenceTargetMenuExpanded = false }) {
+                        DropdownMenuItem(
+                            text = { Text("不关联计划") },
+                            onClick = { recurrenceTargetId = null; recurrenceTargetMenuExpanded = false },
+                        )
+                        state.targets.filterNot { it.archived }.forEach { target ->
+                            DropdownMenuItem(
+                                text = { Text(target.title) },
+                                onClick = { recurrenceTargetId = target.id; recurrenceTargetMenuExpanded = false },
+                            )
+                        }
+                    }
+                }
+                recurrenceError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 Button(onClick = {
                     val parsedDate = runCatching { LocalDate.parse(date) }.getOrNull()
-                    if (recurrenceTitle.isNotBlank() && parsedDate != null) {
-                        val rule = RecurrenceRule(title = recurrenceTitle, startDate = parsedDate.toString(), frequency = recurrenceFrequency, weekdays = if (recurrenceFrequency == ScheduleFrequency.WEEKLY) listOf(parsedDate.dayOfWeek.value) else emptyList())
-                        viewModel.addRecurrence(rule)
-                        viewModel.materializeRecurrence(rule, parsedDate.plusDays(30))
+                    val parsedUntilDate = recurrenceUntilDate.trim().takeIf(String::isNotEmpty)?.let { value ->
+                        runCatching { LocalDate.parse(value) }.getOrNull()
+                    }
+                    val parsedEstimatedMinutes = recurrenceEstimatedMinutes.trim().takeIf(String::isNotEmpty)?.toIntOrNull()
+                    val parsedReminderMinute = parseScheduleMinute(recurrenceReminderTime)
+                    val parsedDayOfMonth = recurrenceDayOfMonth.trim().takeIf(String::isNotEmpty)?.toIntOrNull()
+                    recurrenceError = validateRecurrenceForm(
+                        recurrenceTitle,
+                        parsedDate,
+                        recurrenceUntilDate,
+                        parsedUntilDate,
+                        recurrenceFrequency,
+                        recurrenceWeekdays,
+                        parsedDayOfMonth,
+                        recurrenceEstimatedMinutes,
+                        parsedEstimatedMinutes,
+                        recurrenceReminderTime,
+                        parsedReminderMinute,
+                    )
+                    if (recurrenceError == null) {
+                        val rule = RecurrenceRule(
+                            title = recurrenceTitle,
+                            startDate = parsedDate.toString(),
+                            frequency = recurrenceFrequency,
+                            weekdays = recurrenceWeekdays.toList().sorted(),
+                            dayOfMonth = parsedDayOfMonth,
+                            untilDate = parsedUntilDate?.toString(),
+                            estimatedMinutes = parsedEstimatedMinutes,
+                            targetId = recurrenceTargetId,
+                            reminderMinuteOfDay = parsedReminderMinute,
+                        )
+                        viewModel.addRecurrenceAndMaterialize(rule, LocalDate.parse(rule.startDate).plusDays(30))
                         recurrenceTitle = ""
-                    } else dateError = true
+                        recurrenceUntilDate = ""
+                        recurrenceEstimatedMinutes = ""
+                        recurrenceReminderTime = ""
+                        recurrenceWeekdays = emptySet()
+                        recurrenceDayOfMonth = ""
+                        recurrenceTargetId = null
+                    }
                 }) { Text("创建并生成未来 30 天") }
                 state.recurrenceRules.forEach { rule ->
                     Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                        Text("${rule.title} · ${rule.frequency.label()}", Modifier.weight(1f))
+                        val detail = when (rule.frequency) {
+                            ScheduleFrequency.DAILY -> "每日"
+                            ScheduleFrequency.WEEKLY -> "每周 ${rule.weekdays.joinToString(",") { weekdayLabel(it) }}"
+                            ScheduleFrequency.MONTHLY -> "每月 ${rule.dayOfMonth} 日"
+                        }
+                        Text("${rule.title} · $detail · ${rule.startDate}${rule.untilDate?.let { " 至 $it" } ?: ""}", Modifier.weight(1f))
                         if (rule.active) TextButton(onClick = { viewModel.stopRecurrence(rule.id) }) { Text("停止未来生成") }
                         else Text("已停止")
                     }
@@ -1161,6 +1280,43 @@ private fun parseScheduleMinute(value: String, allowEndOfDay: Boolean = false): 
 }
 
 private fun formatScheduleMinute(value: Int): String = "%02d:%02d".format(value / 60, value % 60)
+
+private fun weekdayLabel(day: Int): String = when (day) {
+    1 -> "一"
+    2 -> "二"
+    3 -> "三"
+    4 -> "四"
+    5 -> "五"
+    6 -> "六"
+    7 -> "日"
+    else -> day.toString()
+}
+
+private fun validateRecurrenceForm(
+    title: String,
+    startDate: LocalDate?,
+    untilDateText: String,
+    untilDate: LocalDate?,
+    frequency: ScheduleFrequency,
+    weekdays: Set<Int>,
+    dayOfMonth: Int?,
+    estimatedMinutesText: String,
+    estimatedMinutes: Int?,
+    reminderText: String,
+    reminderMinute: Int?,
+): String? = when {
+    startDate == null -> "请输入有效的开始规划日"
+    title.isBlank() -> "重复日程标题不能为空"
+    untilDateText.isNotBlank() && untilDate == null -> "请输入有效的结束规划日"
+    untilDate != null && untilDate.isBefore(startDate) -> "结束规划日不能早于开始规划日"
+    estimatedMinutesText.isNotBlank() && estimatedMinutes == null -> "请输入有效的预计分钟"
+    estimatedMinutes != null && estimatedMinutes <= 0 -> "预计时长必须为正数"
+    reminderText.isNotBlank() && reminderMinute == null -> "请输入有效的提醒时间 HH:mm"
+    frequency == ScheduleFrequency.WEEKLY && weekdays.isEmpty() -> "每周规则至少选择一个星期"
+    frequency == ScheduleFrequency.MONTHLY && dayOfMonth !in 1..31 -> "月内日期必须在 1 到 31 之间"
+    frequency != ScheduleFrequency.MONTHLY && dayOfMonth != null -> "只有每月规则可以设置月内日期"
+    else -> null
+}
 
 private fun validateScheduleForm(
     title: String,

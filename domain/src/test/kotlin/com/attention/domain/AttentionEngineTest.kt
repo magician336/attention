@@ -797,6 +797,42 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun recurrence_materialization_supports_daily_weekly_and_monthly_occurrences() {
+        val daily = AttentionState().addRecurrence(RecurrenceRule("d", "每日", date.toString(), ScheduleFrequency.DAILY))
+        assertEquals(3, daily.occurrences(daily.recurrenceRules.single(), date.plusDays(2)).size)
+        val weekly = AttentionState().addRecurrence(RecurrenceRule("w", "周一三", date.toString(), ScheduleFrequency.WEEKLY, weekdays = listOf(1, 3)))
+        assertEquals(listOf(1, 3), weekly.occurrences(weekly.recurrenceRules.single(), date.plusDays(7)).map { LocalDate.parse(it.planningDate).dayOfWeek.value })
+        val monthly = AttentionState().addRecurrence(RecurrenceRule("m", "月度", date.withDayOfMonth(1).toString(), ScheduleFrequency.MONTHLY, dayOfMonth = 8))
+        assertEquals(listOf("2026-10-08", "2026-11-08"), monthly.occurrences(monthly.recurrenceRules.single(), LocalDate.of(2026, 11, 30)).map { it.planningDate })
+    }
+
+    @Test
+    fun recurrence_materialization_is_idempotent_and_occurrences_edit_independently() {
+        val rule = RecurrenceRule("r", "复盘", date.toString(), ScheduleFrequency.DAILY)
+        val materialized = AttentionState().addRecurrenceAndMaterialize(rule, date.plusDays(2))
+        val retried = materialized.materializeOccurrences(rule, date.plusDays(2))
+        assertEquals(3, retried.schedules.size)
+        val first = retried.schedules.first()
+        val edited = retried.updateSchedule(first.copy(title = "已改", completed = true))
+        assertEquals("已改", edited.schedules.first { it.id == first.id }.title)
+        assertTrue(edited.schedules.first { it.id == first.id }.completed)
+        assertTrue(edited.schedules.drop(1).all { it.title == "复盘" && !it.completed })
+        assertEquals(3, edited.schedules.map { it.id }.toSet().size)
+    }
+
+    @Test
+    fun stopped_rule_rejects_generation_from_a_stale_rule_but_keeps_existing_occurrences() {
+        val rule = RecurrenceRule("stale", "复盘", date.toString(), ScheduleFrequency.DAILY)
+        val materialized = AttentionState().addRecurrenceAndMaterialize(rule, date.plusDays(1))
+        val stopped = materialized.stopRecurrence(rule.id)
+        val retried = stopped.materializeOccurrences(rule, date.plusDays(4))
+
+        assertFalse(retried.recurrenceRules.single().active)
+        assertEquals(listOf(date.toString(), date.plusDays(1).toString()), retried.schedules.map { it.planningDate })
+        assertEquals(stopped.schedules, retried.schedules)
+    }
+
+    @Test
     fun recurring_reminder_is_calculated_for_each_occurrence() {
         val rule = RecurrenceRule(
             title = "提醒",
@@ -806,6 +842,94 @@ class AttentionEngineTest {
         )
         val occurrence = AttentionState().occurrences(rule, date).single()
         assertTrue(occurrence.reminderEpochMillis != null)
+    }
+
+    @Test
+    fun recurring_reminder_uses_each_occurrence_planning_date() {
+        val rule = RecurrenceRule("reminders", "提醒", date.toString(), ScheduleFrequency.DAILY, reminderMinuteOfDay = 9 * 60)
+        val occurrences = AttentionState().occurrences(rule, date.plusDays(1))
+        assertEquals(2, occurrences.size)
+        assertEquals(24 * 60 * 60 * 1000L, occurrences[1].reminderEpochMillis!! - occurrences[0].reminderEpochMillis!!)
+    }
+
+    @Test
+    fun recurrence_rule_accepts_daily_weekly_and_monthly_parameters() {
+        val target = AttentionState().addTarget("学习").targets.single()
+
+        val daily = AttentionState(targets = listOf(target)).addRecurrence(
+            RecurrenceRule(
+                id = "daily-rule",
+                title = "每日复习",
+                startDate = date.toString(),
+                frequency = ScheduleFrequency.DAILY,
+                estimatedMinutes = 25,
+                targetId = target.id,
+                reminderMinuteOfDay = 9 * 60,
+            ),
+        ).recurrenceRules.single()
+        assertEquals("每日复习", daily.title)
+
+        val weekly = AttentionState(targets = listOf(target)).addRecurrence(
+            RecurrenceRule(
+                id = "weekly-rule",
+                title = "工作日复盘",
+                startDate = date.toString(),
+                frequency = ScheduleFrequency.WEEKLY,
+                weekdays = listOf(1, 3, 5),
+                untilDate = date.plusMonths(1).toString(),
+            ),
+        ).recurrenceRules.single()
+        assertEquals(listOf(1, 3, 5), weekly.weekdays)
+
+        val monthly = AttentionState(targets = listOf(target)).addRecurrence(
+            RecurrenceRule(
+                id = "monthly-rule",
+                title = "月度复盘",
+                startDate = date.toString(),
+                frequency = ScheduleFrequency.MONTHLY,
+                dayOfMonth = 31,
+            ),
+        ).recurrenceRules.single()
+        assertEquals(31, monthly.dayOfMonth)
+    }
+
+    @Test
+    fun recurrence_rule_rejects_invalid_parameters_and_archived_targets() {
+        val target = AttentionState().addTarget("学习").targets.single()
+        val archived = Target("archived-target", title = "已归档", archived = true)
+        val state = AttentionState(targets = listOf(target, archived))
+
+        fun assertInvalid(rule: RecurrenceRule) {
+            assertThrows(IllegalArgumentException::class.java) { state.addRecurrence(rule) }
+        }
+
+        assertInvalid(RecurrenceRule(title = "", startDate = date.toString(), frequency = ScheduleFrequency.DAILY))
+        assertInvalid(RecurrenceRule(title = "每日", startDate = date.toString(), frequency = ScheduleFrequency.DAILY, weekdays = listOf(1)))
+        assertInvalid(RecurrenceRule(title = "每周", startDate = date.toString(), frequency = ScheduleFrequency.WEEKLY, weekdays = emptyList()))
+        val duplicateWeekdays = state.addRecurrence(
+            RecurrenceRule(title = "每周", startDate = date.toString(), frequency = ScheduleFrequency.WEEKLY, weekdays = listOf(1, 1, 3)),
+        ).recurrenceRules.single()
+        assertEquals(listOf(1, 3), duplicateWeekdays.weekdays)
+        assertInvalid(RecurrenceRule(title = "每周", startDate = date.toString(), frequency = ScheduleFrequency.WEEKLY, weekdays = listOf(0)))
+        assertInvalid(RecurrenceRule(title = "每月", startDate = date.toString(), frequency = ScheduleFrequency.MONTHLY, dayOfMonth = null))
+        assertInvalid(RecurrenceRule(title = "每月", startDate = date.toString(), frequency = ScheduleFrequency.MONTHLY, dayOfMonth = 32))
+        assertInvalid(RecurrenceRule(title = "范围", startDate = date.toString(), frequency = ScheduleFrequency.DAILY, untilDate = date.minusDays(1).toString()))
+        assertInvalid(RecurrenceRule(title = "时长", startDate = date.toString(), frequency = ScheduleFrequency.DAILY, estimatedMinutes = 0))
+        assertInvalid(RecurrenceRule(title = "提醒", startDate = date.toString(), frequency = ScheduleFrequency.DAILY, reminderMinuteOfDay = 1440))
+        assertInvalid(RecurrenceRule(title = "计划", startDate = date.toString(), frequency = ScheduleFrequency.DAILY, targetId = archived.id))
+    }
+
+    @Test
+    fun recurrence_rule_ids_must_be_unique_and_dates_must_be_valid() {
+        val first = RecurrenceRule(id = "same-rule", title = "第一次", startDate = date.toString(), frequency = ScheduleFrequency.DAILY)
+        val state = AttentionState().addRecurrence(first)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            state.addRecurrence(first.copy(title = "第二次"))
+        }
+        assertThrows(java.time.format.DateTimeParseException::class.java) {
+            AttentionState().addRecurrence(first.copy(startDate = "2026-02-30"))
+        }
     }
 
     @Test
