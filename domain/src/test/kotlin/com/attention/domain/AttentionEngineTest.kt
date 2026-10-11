@@ -999,6 +999,20 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun recovering_a_rebuilt_running_timer_discards_unconfirmed_interruption() {
+        val state = AttentionState().addTarget("专注")
+        val target = state.targets.single()
+        val started = state.startTimer(target.id, Instant.parse("2026-10-08T00:00:00Z"), utc)
+
+        val recovered = started.recoverTimer(Instant.parse("2026-10-08T00:20:00Z"))
+        val result = recovered.stopTimer(Instant.parse("2026-10-08T00:30:00Z"), utc)
+
+        assertEquals(10, result.entries.single().durationMinutes)
+        assertEquals(TimeEntrySource.TIMER, result.entries.single().source)
+        assertTrue(result.state.activeTimer == null)
+    }
+
+    @Test
     fun timer_keeps_planning_day_minute_remainders_separate() {
         val state = AttentionState().addTarget("专注")
         val target = state.targets.single()
