@@ -82,6 +82,23 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun capacity_summary_falls_back_from_invalid_estimates_without_reducing_used_minutes() {
+        val day = date.toString()
+        val state = AttentionState(
+            settings = StoredSettings(dailyCapacityMinutes = 115),
+            schedules = listOf(
+                ScheduleEntry("negative-estimate", day, "负数预计", startMinute = 60, endMinute = 120, estimatedMinutes = -15),
+                ScheduleEntry("zero-estimate", day, "零预计", startMinute = 120, endMinute = 150, estimatedMinutes = 0),
+                ScheduleEntry("negative-no-duration", day, "负数无时长", estimatedMinutes = -20),
+                ScheduleEntry("negative-invalid-range", day, "负数逆序", startMinute = 500, endMinute = 400, estimatedMinutes = -20),
+                ScheduleEntry("valid-estimate", day, "有效预计", startMinute = 150, endMinute = 240, estimatedMinutes = 25),
+            ),
+        )
+
+        assertEquals(CapacitySummary(115, 115, false), state.capacitySummary(day))
+    }
+
+    @Test
     fun recurring_occurrences_are_counted_once_on_their_own_planning_days() {
         val rule = RecurrenceRule(
             id = "daily-capacity-rule",

@@ -198,14 +198,22 @@ fun AttentionState.capacitySummary(date: String): CapacitySummary {
 /**
  * Returns the minutes reserved by one saved schedule entry.
  *
- * An explicit estimate is the user's planning value and therefore takes
- * precedence over the optional time range. A partial range has no reliable
- * duration and contributes zero minutes. The lower bound also keeps malformed
- * imported entries from reducing a day's used capacity below zero.
+ * A positive estimate is the user's planning value and therefore takes
+ * precedence over the optional time range. Invalid imported estimates fall
+ * back to a valid complete range, while a partial or invalid range contributes
+ * zero minutes. This keeps malformed imported entries from reducing a day's
+ * used capacity below zero.
  */
 private fun ScheduleEntry.capacityMinutes(): Int = estimatedMinutes
-    ?: if (startMinute != null && endMinute != null) {
-        (endMinute - startMinute).coerceAtLeast(0)
+    ?.takeIf { it > 0 }
+    ?: if (
+        startMinute != null &&
+        endMinute != null &&
+        startMinute in 0 until 1440 &&
+        endMinute in 1..1440 &&
+        endMinute > startMinute
+    ) {
+        endMinute - startMinute
     } else {
         0
     }
