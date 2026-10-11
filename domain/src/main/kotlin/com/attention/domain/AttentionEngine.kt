@@ -15,6 +15,22 @@ fun AttentionState.planningDate(
     }
 }
 
+/**
+ * Returns the agenda entries for a planning day, or every entry when no day is selected.
+ * Entries are ordered by planning day, start time, end time, and stable id so that the
+ * all-dates view does not change order when Room emits the same rows again.
+ */
+fun AttentionState.agendaEntries(planningDate: LocalDate? = null): List<ScheduleEntry> = schedules
+    .asSequence()
+    .filter { planningDate == null || it.planningDate == planningDate.toString() }
+    .sortedWith(
+        compareBy<ScheduleEntry> { it.planningDate }
+            .thenBy { it.startMinute ?: Int.MAX_VALUE }
+            .thenBy { it.endMinute ?: Int.MAX_VALUE }
+            .thenBy { it.id },
+    )
+    .toList()
+
 fun AttentionState.targetChildren(parentId: String?, onDate: LocalDate? = null): List<Target> = targets
     .filter { target ->
         !target.archived && (onDate?.let { parentAt(target.id, it) == parentId } ?: (target.parentId == parentId))
@@ -361,18 +377,36 @@ fun AttentionState.assignUnowned(entryIds: Set<String>, targetId: String): Atten
 }
 
 fun AttentionState.addSchedule(entry: ScheduleEntry): AttentionState {
-    require(entry.title.isNotBlank())
-    LocalDate.parse(entry.planningDate)
-    require(entry.startMinute == null || entry.startMinute in 0 until 1440)
-    require(entry.endMinute == null || entry.endMinute in 1..1440)
-    require(entry.estimatedMinutes == null || entry.estimatedMinutes > 0)
-    require(validTarget(entry.targetId))
+    validateScheduleEntry(entry)
     return copy(schedules = schedules + entry.copy(title = entry.title.trim()))
 }
 
-fun AttentionState.updateSchedule(entry: ScheduleEntry): AttentionState = copy(
-    schedules = schedules.map { if (it.id == entry.id) entry else it },
-)
+fun AttentionState.updateSchedule(entry: ScheduleEntry): AttentionState {
+    require(schedules.any { it.id == entry.id }) { "日程条目不存在" }
+    validateScheduleEntry(entry)
+    return copy(schedules = schedules.map { if (it.id == entry.id) entry.copy(title = entry.title.trim()) else it })
+}
+
+/** Toggles only a schedule entry's completion state. Completion is not actual time invested. */
+fun AttentionState.toggleScheduleCompleted(entryId: String): AttentionState {
+    require(schedules.any { it.id == entryId }) { "日程条目不存在" }
+    return copy(schedules = schedules.map { entry ->
+        if (entry.id == entryId) entry.copy(completed = !entry.completed) else entry
+    })
+}
+
+private fun AttentionState.validateScheduleEntry(entry: ScheduleEntry) {
+    require(entry.title.isNotBlank()) { "日程标题不能为空" }
+    LocalDate.parse(entry.planningDate)
+    require(entry.startMinute == null || entry.startMinute in 0 until 1440) { "开始时间必须在 00:00 到 23:59 之间" }
+    require(entry.endMinute == null || entry.endMinute in 1..1440) { "结束时间必须在 00:01 到次日 00:00 之间" }
+    require((entry.startMinute == null) == (entry.endMinute == null)) { "时间段必须同时填写开始和结束时间" }
+    if (entry.startMinute != null && entry.endMinute != null) {
+        require(entry.endMinute > entry.startMinute) { "结束时间必须晚于开始时间" }
+    }
+    require(entry.estimatedMinutes == null || entry.estimatedMinutes > 0) { "预计时长必须为正数" }
+    require(validTarget(entry.targetId)) { "日程只能关联存在的计划" }
+}
 
 fun AttentionState.addRecurrence(rule: RecurrenceRule): AttentionState {
     require(rule.title.isNotBlank())

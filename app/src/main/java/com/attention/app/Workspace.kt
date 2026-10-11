@@ -9,6 +9,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -24,6 +25,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -71,6 +74,7 @@ import com.attention.domain.Target
 import com.attention.domain.TargetMove
 import com.attention.domain.TimeEntry
 import com.attention.domain.capacitySummary
+import com.attention.domain.agendaEntries
 import com.attention.domain.directMinutes
 import com.attention.domain.descendantIds
 import com.attention.domain.effectiveStage
@@ -119,6 +123,7 @@ fun WorkspaceApp() {
     var destination by remember {
         mutableStateOf(resolveLaunchDestination(state.launchDestination, state.lastOpenedDestination))
     }
+    var selectedAgendaDate by remember { mutableStateOf<String?>(null) }
     var jsonPreview by remember { mutableStateOf<String?>(null) }
     var csvPreview by remember { mutableStateOf<String?>(null) }
     var pendingImport by remember { mutableStateOf<String?>(null) }
@@ -158,7 +163,12 @@ fun WorkspaceApp() {
             when (destination) {
                 LaunchDestination.TODAY, LaunchDestination.LAST_OPENED -> WorkspaceTodayScreen(state, viewModel)
                 LaunchDestination.TARGETS -> TargetsScreen(state, viewModel)
-                LaunchDestination.ALL_DATES -> AgendaScreen(state, viewModel)
+                LaunchDestination.ALL_DATES -> AgendaScreen(
+                    state = state,
+                    viewModel = viewModel,
+                    selectedDate = selectedAgendaDate,
+                    onSelectedDateChange = { selectedAgendaDate = it },
+                )
                 LaunchDestination.STATISTICS -> StatisticsScreen(
                     state = state,
                     viewModel = viewModel,
@@ -216,6 +226,7 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
         mutableStateOf(state.settings.dailyCapacityMinutes?.toString() ?: "")
     }
     var editingEntry by remember { mutableStateOf<TimeEntry?>(null) }
+    var editingSchedule by remember { mutableStateOf<ScheduleEntry?>(null) }
     var editMinutes by remember { mutableStateOf("") }
     var editNote by remember { mutableStateOf("") }
     var editTargetId by remember { mutableStateOf<String?>(null) }
@@ -373,8 +384,16 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
             }
         }
         state.schedules.filter { it.planningDate == date }.forEach { entry ->
-            ScheduleRow(entry, viewModel)
+            ScheduleRow(entry, state, viewModel, onEdit = { editingSchedule = it })
         }
+    }
+    editingSchedule?.let { entry ->
+        ScheduleEditDialog(
+            entry = entry,
+            targets = state.targets.filterNot { it.archived },
+            onDismiss = { editingSchedule = null },
+            onSave = { updated -> viewModel.updateSchedule(updated); editingSchedule = null },
+        )
     }
 }
 
@@ -903,18 +922,67 @@ private fun TargetTree(
 }
 
 @Composable
-private fun AgendaScreen(state: AttentionState, viewModel: AttentionViewModel) {
-    var date by remember { mutableStateOf(state.planningDate(Instant.now()).toString()) }
+private fun AgendaScreen(
+    state: AttentionState,
+    viewModel: AttentionViewModel,
+    selectedDate: String?,
+    onSelectedDateChange: (String?) -> Unit,
+) {
+    val today = state.planningDate(Instant.now())
+    var date by remember(selectedDate) { mutableStateOf(selectedDate ?: today.toString()) }
     var title by remember { mutableStateOf("") }
     var estimate by remember { mutableStateOf("") }
+    var startTime by remember { mutableStateOf("") }
+    var endTime by remember { mutableStateOf("") }
+    var note by remember { mutableStateOf("") }
+    var targetId by remember { mutableStateOf<String?>(null) }
+    var targetMenuExpanded by remember { mutableStateOf(false) }
+    var formError by remember { mutableStateOf<String?>(null) }
+    var editingEntry by remember { mutableStateOf<ScheduleEntry?>(null) }
     var recurrenceTitle by remember { mutableStateOf("") }
     var recurrenceFrequency by remember { mutableStateOf(ScheduleFrequency.DAILY) }
+    var dateMenuExpanded by remember { mutableStateOf(false) }
+    var dateError by remember { mutableStateOf(false) }
+    val availableDates = remember(state.schedules, today) {
+        (state.schedules.mapNotNull { runCatching { LocalDate.parse(it.planningDate) }.getOrNull() } + today)
+            .distinct()
+            .sorted()
+    }
+    val filteredDate = selectedDate?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+    val agendaEntries = state.agendaEntries(filteredDate)
+    fun selectDate(value: String?) {
+        onSelectedDateChange(value)
+        date = value ?: today.toString()
+        dateError = false
+    }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("所有日期", style = MaterialTheme.typography.headlineMedium)
+        Text(if (selectedDate == null) "所有日期" else "规划日 $selectedDate", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.testTag("agenda-filter"))
         Text("日程条目可带预计时长；它不会自动变成实际投入。")
+        Box {
+            OutlinedButton(onClick = { dateMenuExpanded = true }, modifier = Modifier.testTag("agenda-date-menu")) {
+                Text(if (selectedDate == null) "筛选：所有日期" else "筛选：规划日 $selectedDate")
+            }
+            DropdownMenu(expanded = dateMenuExpanded, onDismissRequest = { dateMenuExpanded = false }) {
+                DropdownMenuItem(
+                    text = { Text("所有日期") },
+                    onClick = { selectDate(null); dateMenuExpanded = false },
+                    modifier = Modifier.testTag("agenda-all-dates"),
+                )
+                availableDates.forEach { availableDate ->
+                    DropdownMenuItem(
+                        text = { Text("规划日 $availableDate") },
+                        onClick = { selectDate(availableDate.toString()); dateMenuExpanded = false },
+                        modifier = Modifier.testTag("agenda-date-$availableDate"),
+                    )
+                }
+            }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(date, { date = it }, label = { Text("规划日 YYYY-MM-DD") }, modifier = Modifier.weight(1f), singleLine = true)
-            OutlinedTextField(estimate, { estimate = it.filter(Char::isDigit) }, label = { Text("预计分钟") }, modifier = Modifier.width(110.dp), singleLine = true)
+            OutlinedTextField(date, { date = it; dateError = false }, label = { Text("新增日程规划日 YYYY-MM-DD") }, modifier = Modifier.weight(1f), singleLine = true, isError = dateError, supportingText = if (dateError) ({ Text("请输入有效的规划日") }) else null)
+            OutlinedButton(onClick = {
+                val parsed = runCatching { LocalDate.parse(date) }.getOrNull()
+                if (parsed == null) dateError = true else selectDate(parsed.toString())
+            }) { Text("打开规划日") }
         }
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -927,12 +995,13 @@ private fun AgendaScreen(state: AttentionState, viewModel: AttentionViewModel) {
                     }
                 }
                 Button(onClick = {
-                    if (recurrenceTitle.isNotBlank()) {
-                        val rule = RecurrenceRule(title = recurrenceTitle, startDate = date, frequency = recurrenceFrequency, weekdays = if (recurrenceFrequency == ScheduleFrequency.WEEKLY) listOf(LocalDate.parse(date).dayOfWeek.value) else emptyList())
+                    val parsedDate = runCatching { LocalDate.parse(date) }.getOrNull()
+                    if (recurrenceTitle.isNotBlank() && parsedDate != null) {
+                        val rule = RecurrenceRule(title = recurrenceTitle, startDate = parsedDate.toString(), frequency = recurrenceFrequency, weekdays = if (recurrenceFrequency == ScheduleFrequency.WEEKLY) listOf(parsedDate.dayOfWeek.value) else emptyList())
                         viewModel.addRecurrence(rule)
-                        viewModel.materializeRecurrence(rule, LocalDate.parse(date).plusDays(30))
+                        viewModel.materializeRecurrence(rule, parsedDate.plusDays(30))
                         recurrenceTitle = ""
-                    }
+                    } else dateError = true
                 }) { Text("创建并生成未来 30 天") }
                 state.recurrenceRules.forEach { rule ->
                     Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
@@ -943,30 +1012,83 @@ private fun AgendaScreen(state: AttentionState, viewModel: AttentionViewModel) {
                 }
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(title, { title = it }, label = { Text("日程标题") }, modifier = Modifier.weight(1f), singleLine = true)
-            Button(onClick = {
-                if (title.isNotBlank()) {
-                    viewModel.addSchedule(ScheduleEntry(planningDate = date, title = title, estimatedMinutes = estimate.toIntOrNull()))
-                    title = ""; estimate = ""
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("新增日程", style = MaterialTheme.typography.titleSmall)
+                OutlinedTextField(title, { title = it; formError = null }, label = { Text("日程标题") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(startTime, { startTime = it; formError = null }, label = { Text("开始时间 HH:mm（可选）") }, modifier = Modifier.weight(1f), singleLine = true)
+                    OutlinedTextField(endTime, { endTime = it; formError = null }, label = { Text("结束时间 HH:mm（可选）") }, modifier = Modifier.weight(1f), singleLine = true)
+                    OutlinedTextField(estimate, { estimate = it; formError = null }, label = { Text("预计分钟") }, modifier = Modifier.width(110.dp), singleLine = true)
                 }
-            }) { Text("添加日程") }
+                OutlinedTextField(note, { note = it }, label = { Text("备注（可选）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                Box {
+                    OutlinedButton(onClick = { targetMenuExpanded = true }) {
+                        Text(state.targets.firstOrNull { it.id == targetId }?.title ?: "关联计划（可选）")
+                    }
+                    DropdownMenu(expanded = targetMenuExpanded, onDismissRequest = { targetMenuExpanded = false }) {
+                        DropdownMenuItem(text = { Text("不关联计划") }, onClick = { targetId = null; targetMenuExpanded = false })
+                        state.targets.filterNot { it.archived }.forEach { target ->
+                            DropdownMenuItem(text = { Text(target.title) }, onClick = { targetId = target.id; targetMenuExpanded = false })
+                        }
+                    }
+                }
+                formError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                Button(onClick = {
+                    val parsedDate = runCatching { LocalDate.parse(date) }.getOrNull()
+                    val parsedStart = parseScheduleMinute(startTime)
+                    val parsedEnd = parseScheduleMinute(endTime, allowEndOfDay = true)
+                    val estimated = estimate.trim().takeIf(String::isNotEmpty)?.toIntOrNull()
+                    formError = validateScheduleForm(title, parsedDate, startTime, endTime, estimate, parsedStart, parsedEnd, estimated)
+                    if (formError == null) {
+                        viewModel.addSchedule(ScheduleEntry(planningDate = parsedDate.toString(), title = title, startMinute = parsedStart, endMinute = parsedEnd, estimatedMinutes = estimated, note = note, targetId = targetId))
+                        title = ""; startTime = ""; endTime = ""; estimate = ""; note = ""; targetId = null
+                    }
+                }) { Text("添加日程") }
+            }
         }
-        state.schedules.sortedBy { it.planningDate }.forEach { ScheduleRow(it, viewModel) }
-        if (state.schedules.isEmpty()) Text("还没有日程条目。")
+        if (agendaEntries.isEmpty()) {
+            Text(if (selectedDate == null) "所有日期暂无日程条目。" else "规划日 $selectedDate 暂无日程条目。", modifier = Modifier.testTag("agenda-empty"))
+        } else {
+            var lastPlanningDate: String? = null
+            agendaEntries.forEach { entry ->
+                if (selectedDate == null && entry.planningDate != lastPlanningDate) {
+                    Text("规划日 ${entry.planningDate}", style = MaterialTheme.typography.titleMedium)
+                    lastPlanningDate = entry.planningDate
+                }
+                ScheduleRow(entry, state, viewModel, onEdit = { editingEntry = it })
+            }
+        }
+    }
+    editingEntry?.let { entry ->
+        ScheduleEditDialog(
+            entry = entry,
+            targets = state.targets.filterNot { it.archived },
+            onDismiss = { editingEntry = null },
+            onSave = { updated -> viewModel.updateSchedule(updated); editingEntry = null },
+        )
     }
 }
 
 @Composable
-private fun ScheduleRow(entry: ScheduleEntry, viewModel: AttentionViewModel) {
+private fun ScheduleRow(entry: ScheduleEntry, state: AttentionState, viewModel: AttentionViewModel, onEdit: (ScheduleEntry) -> Unit = {}) {
     val context = LocalContext.current
     Card(Modifier.fillMaxWidth()) {
         Row(Modifier.padding(12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(entry.title, style = MaterialTheme.typography.titleSmall)
-                Text("${entry.planningDate} · ${entry.estimatedMinutes ?: 0} 分钟${if (entry.completed) " · 已完成" else ""}")
+                val start = entry.startMinute
+                val end = entry.endMinute
+                val time = if (start != null && end != null) " · ${formatScheduleMinute(start)}-${formatScheduleMinute(end)}" else ""
+                val target = entry.targetId?.let { id -> state.targets.firstOrNull { it.id == id }?.title }?.let { " · $it" } ?: ""
+                Text("${entry.planningDate}$time · ${entry.estimatedMinutes ?: 0} 分钟$target${if (entry.completed) " · 已完成" else ""}")
+                if (entry.note.isNotBlank()) Text(entry.note)
             }
-            TextButton(onClick = { viewModel.updateSchedule(entry.copy(completed = !entry.completed)) }) { Text(if (entry.completed) "取消完成" else "完成") }
+            TextButton(onClick = { onEdit(entry) }) { Text("编辑") }
+            TextButton(
+                onClick = { viewModel.toggleScheduleCompleted(entry.id) },
+                modifier = Modifier.testTag("schedule-completion-${entry.id}"),
+            ) { Text(if (entry.completed) "取消完成" else "完成") }
             TextButton(onClick = {
                 val updated = entry.copy(reminderEpochMillis = if (entry.reminderEpochMillis == null) System.currentTimeMillis() + 3_600_000 else null)
                 viewModel.updateSchedule(updated)
@@ -974,6 +1096,91 @@ private fun ScheduleRow(entry: ScheduleEntry, viewModel: AttentionViewModel) {
             }) { Text(if (entry.reminderEpochMillis == null) "提醒" else "取消提醒") }
         }
     }
+}
+
+@Composable
+private fun ScheduleEditDialog(
+    entry: ScheduleEntry,
+    targets: List<Target>,
+    onDismiss: () -> Unit,
+    onSave: (ScheduleEntry) -> Unit,
+) {
+    var date by remember(entry.id) { mutableStateOf(entry.planningDate) }
+    var title by remember(entry.id) { mutableStateOf(entry.title) }
+    var startTime by remember(entry.id) { mutableStateOf(entry.startMinute?.let(::formatScheduleMinute) ?: "") }
+    var endTime by remember(entry.id) { mutableStateOf(entry.endMinute?.let(::formatScheduleMinute) ?: "") }
+    var estimate by remember(entry.id) { mutableStateOf(entry.estimatedMinutes?.toString() ?: "") }
+    var note by remember(entry.id) { mutableStateOf(entry.note) }
+    var targetId by remember(entry.id) { mutableStateOf(entry.targetId) }
+    var targetMenuExpanded by remember { mutableStateOf(false) }
+    var error by remember(entry.id) { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("编辑日程") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(date, { date = it }, label = { Text("规划日 YYYY-MM-DD") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                OutlinedTextField(title, { title = it }, label = { Text("日程标题") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(startTime, { startTime = it }, label = { Text("开始 HH:mm") }, modifier = Modifier.weight(1f), singleLine = true)
+                    OutlinedTextField(endTime, { endTime = it }, label = { Text("结束 HH:mm") }, modifier = Modifier.weight(1f), singleLine = true)
+                }
+                OutlinedTextField(estimate, { estimate = it }, label = { Text("预计分钟") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                OutlinedTextField(note, { note = it }, label = { Text("备注（可选）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                Box {
+                    OutlinedButton(onClick = { targetMenuExpanded = true }) { Text(targets.firstOrNull { it.id == targetId }?.title ?: "关联计划（可选）") }
+                    DropdownMenu(expanded = targetMenuExpanded, onDismissRequest = { targetMenuExpanded = false }) {
+                        DropdownMenuItem(text = { Text("不关联计划") }, onClick = { targetId = null; targetMenuExpanded = false })
+                        targets.forEach { target -> DropdownMenuItem(text = { Text(target.title) }, onClick = { targetId = target.id; targetMenuExpanded = false }) }
+                    }
+                }
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val parsedDate = runCatching { LocalDate.parse(date) }.getOrNull()
+                val parsedStart = parseScheduleMinute(startTime)
+                val parsedEnd = parseScheduleMinute(endTime, allowEndOfDay = true)
+                val estimated = estimate.trim().takeIf(String::isNotEmpty)?.toIntOrNull()
+                error = validateScheduleForm(title, parsedDate, startTime, endTime, estimate, parsedStart, parsedEnd, estimated)
+                if (error == null) onSave(entry.copy(planningDate = parsedDate.toString(), title = title, startMinute = parsedStart, endMinute = parsedEnd, estimatedMinutes = estimated, note = note, targetId = targetId))
+            }) { Text("保存") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
+private fun parseScheduleMinute(value: String, allowEndOfDay: Boolean = false): Int? {
+    if (value.isBlank()) return null
+    val parts = value.trim().split(":")
+    if (parts.size != 2) return null
+    val hour = parts[0].toIntOrNull() ?: return null
+    val minute = parts[1].toIntOrNull() ?: return null
+    return if ((hour in 0..23 && minute in 0..59) || (allowEndOfDay && hour == 24 && minute == 0)) hour * 60 + minute else null
+}
+
+private fun formatScheduleMinute(value: Int): String = "%02d:%02d".format(value / 60, value % 60)
+
+private fun validateScheduleForm(
+    title: String,
+    date: LocalDate?,
+    startText: String,
+    endText: String,
+    estimateText: String,
+    start: Int?,
+    end: Int?,
+    estimate: Int?,
+): String? = when {
+    date == null -> "请输入有效的规划日"
+    title.isBlank() -> "日程标题不能为空"
+    startText.isNotBlank() && start == null -> "请输入有效的开始时间 HH:mm"
+    endText.isNotBlank() && end == null -> "请输入有效的结束时间 HH:mm"
+    (start == null) != (end == null) -> "时间段必须同时填写开始和结束时间"
+    start != null && end != null && end <= start -> "结束时间必须晚于开始时间"
+    estimateText.isNotBlank() && estimate == null -> "请输入有效的预计分钟"
+    estimate != null && estimate <= 0 -> "预计时长必须为正数"
+    else -> null
 }
 
 @Composable

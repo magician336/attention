@@ -10,6 +10,7 @@ interface AttentionStateRepository {
     val state: Flow<AttentionState>
 
     suspend fun updateBusiness(transform: (AttentionState) -> AttentionState)
+    suspend fun toggleScheduleCompleted(entryId: String)
     suspend fun setPlannerSettings(settings: StoredSettings)
     suspend fun setPlanningDayBoundaryMinutes(minutes: Int)
     suspend fun setWeekStartDay(day: Int)

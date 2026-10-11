@@ -6,8 +6,10 @@ import com.attention.domain.GoalCadence
 import com.attention.domain.GoalStage
 import com.attention.domain.LaunchDestination
 import com.attention.domain.StoredSettings
+import com.attention.domain.ScheduleEntry
 import com.attention.domain.Target
 import com.attention.domain.TimeEntry
+import com.attention.domain.toggleScheduleCompleted
 import java.time.LocalDate
 import java.time.ZoneOffset
 import kotlinx.coroutines.Dispatchers
@@ -20,6 +22,7 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -52,12 +55,40 @@ class AttentionViewModelTest {
         }
     }
 
+    @Test
+    fun schedule_edit_persists_all_fields_and_reports_invalid_input() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val original = ScheduleEntry(id = "schedule-1", planningDate = "2026-10-08", title = "阅读", estimatedMinutes = 30)
+            val repository = FakeRepository(AttentionState(schedules = listOf(original)))
+            val viewModel = AttentionViewModel(repository, ZoneOffset.UTC)
+
+            viewModel.updateSchedule(original.copy(planningDate = "2026-10-09", title = "复习", note = "章节 2", startMinute = 60, endMinute = 90, estimatedMinutes = 30))
+            advanceUntilIdle()
+            assertEquals("schedule-1", repository.state.value.schedules.single().id)
+            assertEquals("章节 2", repository.state.value.schedules.single().note)
+            assertEquals(60, repository.state.value.schedules.single().startMinute)
+
+            viewModel.updateSchedule(original.copy(planningDate = "bad-date"))
+            advanceUntilIdle()
+            assertEquals("2026-10-09", repository.state.value.schedules.single().planningDate)
+            assertTrue(!viewModel.error.value.isNullOrBlank())
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
     private class FakeRepository(initial: AttentionState) : AttentionStateRepository {
         private val values = MutableStateFlow(initial)
         override val state: StateFlow<AttentionState> = values
 
         override suspend fun updateBusiness(transform: (AttentionState) -> AttentionState) {
             values.value = transform(values.value)
+        }
+
+        override suspend fun toggleScheduleCompleted(entryId: String) {
+            values.value = values.value.toggleScheduleCompleted(entryId)
         }
 
         override suspend fun setPlannerSettings(settings: StoredSettings) = Unit

@@ -14,6 +14,100 @@ class AttentionEngineTest {
     private val date = LocalDate.of(2026, 10, 8)
 
     @Test
+    fun agenda_entries_filter_by_planning_date_and_sort_all_dates_stably() {
+        val state = AttentionState()
+            .addSchedule(ScheduleEntry(id = "later", planningDate = "2026-10-09", title = "Later", startMinute = 5, endMinute = 15))
+            .addSchedule(ScheduleEntry(id = "same-b", planningDate = "2026-10-08", title = "Same B", startMinute = 30, endMinute = 40))
+            .addSchedule(ScheduleEntry(id = "same-a", planningDate = "2026-10-08", title = "Same A", startMinute = 30, endMinute = 40))
+            .addSchedule(ScheduleEntry(id = "earlier", planningDate = "2026-10-07", title = "Earlier"))
+
+        assertEquals(listOf("earlier", "same-a", "same-b", "later"), state.agendaEntries().map { it.id })
+        assertEquals(listOf("same-a", "same-b"), state.agendaEntries(LocalDate.of(2026, 10, 8)).map { it.id })
+        assertTrue(state.agendaEntries(LocalDate.of(2026, 10, 6)).isEmpty())
+    }
+
+    @Test
+    fun schedule_entry_edits_validate_every_field_and_keep_stable_id() {
+        val target = AttentionState().addTarget("学习").targets.single()
+        val original = ScheduleEntry(
+            id = "schedule-1",
+            planningDate = "2026-10-08",
+            title = "阅读",
+            startMinute = 60,
+            endMinute = 90,
+            estimatedMinutes = 30,
+            note = "原备注",
+            targetId = target.id,
+        )
+        val state = AttentionState(targets = listOf(target)).addSchedule(original)
+        val edited = state.updateSchedule(
+            original.copy(
+                planningDate = "2026-10-09",
+                title = "复习",
+                startMinute = 120,
+                endMinute = 180,
+                estimatedMinutes = 60,
+                note = "新备注",
+            ),
+        )
+
+        assertEquals("schedule-1", edited.schedules.single().id)
+        assertEquals("2026-10-09", edited.schedules.single().planningDate)
+        assertEquals("新备注", edited.schedules.single().note)
+        assertThrows(java.time.format.DateTimeParseException::class.java) {
+            state.updateSchedule(original.copy(planningDate = "2026-02-30"))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            state.updateSchedule(original.copy(startMinute = 100, endMinute = 90))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            state.updateSchedule(original.copy(startMinute = 100, endMinute = null))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            state.updateSchedule(original.copy(startMinute = null, endMinute = 90))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            state.updateSchedule(original.copy(estimatedMinutes = 0))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            state.updateSchedule(original.copy(title = "   "))
+        }
+    }
+
+    @Test
+    fun toggling_schedule_completion_changes_only_completion_state() {
+        val target = AttentionState().addTarget("学习").targets.single()
+        val schedule = ScheduleEntry(
+            id = "completion-schedule",
+            planningDate = "2026-10-08",
+            title = "阅读",
+            startMinute = 60,
+            endMinute = 90,
+            estimatedMinutes = 30,
+            note = "章节 2",
+            targetId = target.id,
+            reminderEpochMillis = 123L,
+            recurrenceRuleId = "rule",
+        )
+        val timeEntry = TimeEntry("actual-entry", "2026-10-08", 20, target.id)
+        val state = AttentionState(
+            targets = listOf(target),
+            schedules = listOf(schedule),
+            timeEntries = listOf(timeEntry),
+            experience = 500L,
+            milestones = listOf(Milestone("milestone", "goal_period", "period", 500L, 1L)),
+        )
+
+        val completed = state.toggleScheduleCompleted(schedule.id)
+
+        assertEquals(schedule.copy(completed = true), completed.schedules.single())
+        assertEquals(state.timeEntries, completed.timeEntries)
+        assertEquals(state.experience, completed.experience)
+        assertEquals(state.milestones, completed.milestones)
+        assertFalse(completed.toggleScheduleCompleted(schedule.id).schedules.single().completed)
+    }
+
+    @Test
     fun target_tree_supports_arbitrary_depth_and_subtree_rollup() {
         val state = AttentionState()
             .addTarget("阅读")

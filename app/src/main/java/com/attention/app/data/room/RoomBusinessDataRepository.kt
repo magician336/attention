@@ -25,6 +25,13 @@ class RoomBusinessDataRepository(
         next
     }
 
+    suspend fun toggleScheduleCompleted(entryId: String): AttentionState = database.withTransaction {
+        val current = database.scheduleEntryDao().findById(entryId)
+            ?: error("日程条目不存在")
+        database.scheduleEntryDao().upsert(current.copy(completed = !current.completed))
+        readInTransaction()
+    }
+
     private suspend fun replaceInTransaction(state: AttentionState) {
         clearAll()
         database.targetDao().upsertAll(state.targets.map { it.toEntity() })
