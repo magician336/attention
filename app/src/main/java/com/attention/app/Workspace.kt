@@ -225,6 +225,7 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
     var dailyCapacity by remember(state.settings.dailyCapacityMinutes) {
         mutableStateOf(state.settings.dailyCapacityMinutes?.toString() ?: "")
     }
+    var dailyCapacityError by remember { mutableStateOf<String?>(null) }
     var editingEntry by remember { mutableStateOf<TimeEntry?>(null) }
     var editingSchedule by remember { mutableStateOf<ScheduleEntry?>(null) }
     var editMinutes by remember { mutableStateOf("") }
@@ -321,15 +322,35 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("每日容量", style = MaterialTheme.typography.titleMedium)
-                Text(if (capacity.capacityMinutes == null) "未设置" else "已安排 ${capacity.usedMinutes} / ${capacity.capacityMinutes} 分钟${if (capacity.overloaded) "（超载）" else ""}")
+                Text(
+                    if (capacity.capacityMinutes == null) "未设置"
+                    else "已安排 ${capacity.usedMinutes} / ${capacity.capacityMinutes} 分钟${if (capacity.overloaded) "（超载）" else ""}",
+                    modifier = Modifier.testTag("daily-capacity-summary"),
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(boundary, { boundary = it.filter(Char::isDigit) }, label = { Text("界线分钟") }, modifier = Modifier.width(150.dp), singleLine = true)
-                    OutlinedTextField(dailyCapacity, { dailyCapacity = it.filter(Char::isDigit) }, label = { Text("容量分钟") }, modifier = Modifier.width(150.dp), singleLine = true)
+                    OutlinedTextField(
+                        dailyCapacity,
+                        { dailyCapacity = it; dailyCapacityError = null },
+                        label = { Text("容量分钟") },
+                        modifier = Modifier.width(150.dp).testTag("daily-capacity-input"),
+                        singleLine = true,
+                        isError = dailyCapacityError != null,
+                    )
                 }
-                Button(onClick = {
+                dailyCapacityError?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("daily-capacity-error"))
+                }
+                Button(modifier = Modifier.testTag("daily-capacity-save"), onClick = {
                     val b = boundary.toIntOrNull()?.takeIf { it in 0 until 1440 } ?: state.settings.planningDayBoundaryMinutes
-                    val c = dailyCapacity.toIntOrNull()?.takeIf { it > 0 }
-                    viewModel.setSettings(StoredSettings(b, state.settings.weekStartDay, c))
+                    val input = dailyCapacity.trim()
+                    val c = input.toIntOrNull()?.takeIf { it > 0 }
+                    if (input.isNotEmpty() && c == null) {
+                        dailyCapacityError = "每日容量必须是正整数，或留空清除"
+                    } else {
+                        dailyCapacityError = null
+                        viewModel.setSettings(StoredSettings(b, state.settings.weekStartDay, c))
+                    }
                 }) { Text("保存设置") }
             }
         }
