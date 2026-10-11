@@ -140,6 +140,7 @@ fun WorkspaceApp(openScheduleDate: String? = null) {
         }
     }
     androidx.compose.runtime.LaunchedEffect(destination) { viewModel.saveLastOpened(destination) }
+    androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.restoreReminders() }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Attention") }) },
