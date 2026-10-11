@@ -11,6 +11,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -218,11 +219,12 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
 private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionViewModel) {
     val context = LocalContext.current
     fun startTimer(targetId: String?) {
-        viewModel.startTimer(targetId)
-        if (Build.VERSION.SDK_INT >= 33 && androidx.core.content.ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            Toast.makeText(context, "通知权限未开启，计时仍会保存；锁屏控制需要开启通知权限。", Toast.LENGTH_LONG).show()
+        viewModel.startTimer(targetId) {
+            if (!notificationsEnabled(context)) {
+                Toast.makeText(context, "通知权限未开启，计时仍会保存；通知栏控制不可用。", Toast.LENGTH_LONG).show()
+            }
+            ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
         }
-        ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
     }
     val date = state.planningDate(Instant.now()).toString()
     val capacity = state.capacitySummary(date)
@@ -311,16 +313,25 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
                 } else {
                     Text(if (timer.paused) "计时已暂停" else "正在计时")
                     Text("当前目标：${state.targets.firstOrNull { it.id == timer.targetId }?.title ?: "未归属活动"}")
+                    if (!notificationsEnabled(context)) {
+                        Text(
+                            "通知权限未开启，计时数据仍会保存；通知栏暂停、继续和结束控制不可用。",
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.testTag("timer-notification-permission-warning"),
+                        )
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (timer.paused) Button(onClick = viewModel::resumeTimer) { Text("继续") }
                         else Button(onClick = viewModel::pauseTimer) { Text("暂停") }
                         OutlinedButton(onClick = {
-                            viewModel.recoverTimer()
-                            ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
+                            viewModel.recoverTimer {
+                                ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
+                            }
                         }) { Text("从此刻继续") }
                         OutlinedButton(onClick = {
-                            viewModel.stopTimer()
-                            context.stopService(AttentionTimerService.intent(context))
+                            viewModel.stopTimer {
+                                context.stopService(AttentionTimerService.intent(context))
+                            }
                         }) { Text("结束并保存") }
                     }
                     if (timer.targetId != null) {
@@ -1411,6 +1422,9 @@ private fun requestReminderPermission(context: Context) {
         ActivityCompat.requestPermissions(it, arrayOf(Manifest.permission.POST_NOTIFICATIONS), REMINDER_PERMISSION_REQUEST_CODE)
     }
 }
+
+private fun notificationsEnabled(context: Context): Boolean =
+    NotificationManagerCompat.from(context).areNotificationsEnabled()
 
 private fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
