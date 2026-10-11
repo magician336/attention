@@ -58,6 +58,7 @@ import com.attention.app.data.settings.createSettingsStore
 import com.attention.app.timer.AttentionTimerService
 import com.attention.app.reminder.ReminderScheduler
 import com.attention.domain.AttentionState
+import com.attention.domain.CapacitySummary
 import com.attention.domain.availableMigrationMinutes
 import com.attention.domain.GoalCadence
 import com.attention.domain.FutureGoalRule
@@ -322,11 +323,7 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("每日容量", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    if (capacity.capacityMinutes == null) "未设置"
-                    else "已安排 ${capacity.usedMinutes} / ${capacity.capacityMinutes} 分钟${if (capacity.overloaded) "（超载）" else ""}",
-                    modifier = Modifier.testTag("daily-capacity-summary"),
-                )
+                Text(capacitySummaryText(capacity), modifier = Modifier.testTag("daily-capacity-summary"))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(boundary, { boundary = it.filter(Char::isDigit) }, label = { Text("界线分钟") }, modifier = Modifier.width(150.dp), singleLine = true)
                     OutlinedTextField(
@@ -1013,6 +1010,17 @@ private fun AgendaScreen(
                 if (parsed == null) dateError = true else selectDate(parsed.toString())
             }) { Text("打开规划日") }
         }
+        if (selectedDate != null) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("每日容量", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        capacitySummaryText(state.capacitySummary(selectedDate)),
+                        modifier = Modifier.testTag("agenda-capacity-summary"),
+                    )
+                }
+            }
+        }
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("重复日程", style = MaterialTheme.typography.titleSmall)
@@ -1189,13 +1197,19 @@ private fun AgendaScreen(
         }
         if (agendaEntries.isEmpty()) {
             Text(if (selectedDate == null) "所有日期暂无日程条目。" else "规划日 $selectedDate 暂无日程条目。", modifier = Modifier.testTag("agenda-empty"))
-        } else {
-            var lastPlanningDate: String? = null
-            agendaEntries.forEach { entry ->
-                if (selectedDate == null && entry.planningDate != lastPlanningDate) {
-                    Text("规划日 ${entry.planningDate}", style = MaterialTheme.typography.titleMedium)
-                    lastPlanningDate = entry.planningDate
+        } else if (selectedDate == null) {
+            agendaEntries.groupBy { it.planningDate }.forEach { (planningDate, entries) ->
+                Text("规划日 $planningDate", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    capacitySummaryText(state.capacitySummary(planningDate)),
+                    modifier = Modifier.testTag("agenda-capacity-summary-$planningDate"),
+                )
+                entries.forEach { entry ->
+                    ScheduleRow(entry, state, viewModel, onEdit = { editingEntry = it })
                 }
+            }
+        } else {
+            agendaEntries.forEach { entry ->
                 ScheduleRow(entry, state, viewModel, onEdit = { editingEntry = it })
             }
         }
@@ -1236,6 +1250,12 @@ private fun ScheduleRow(entry: ScheduleEntry, state: AttentionState, viewModel: 
             }) { Text(if (entry.reminderEpochMillis == null) "提醒" else "取消提醒") }
         }
     }
+}
+
+private fun capacitySummaryText(summary: CapacitySummary): String = when {
+    summary.capacityMinutes == null -> "未设置"
+    summary.overloaded -> "已安排 ${summary.usedMinutes} / ${summary.capacityMinutes} 分钟（超载）"
+    else -> "已安排 ${summary.usedMinutes} / ${summary.capacityMinutes} 分钟"
 }
 
 @Composable
