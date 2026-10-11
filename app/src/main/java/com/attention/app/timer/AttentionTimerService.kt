@@ -201,7 +201,7 @@ class AttentionTimerService : Service() {
             val status = if (timer.paused) "已暂停" else "正在计时"
             return TimerNotificationContent(
                 title = "Attention $status",
-                text = "目标：$target · $status",
+                text = "目标 $target · $status",
                 active = true,
                 paused = timer.paused,
             )

@@ -23,7 +23,7 @@ class AttentionTimerNotificationTest {
         )
 
         assertEquals("Attention 正在计时", content.title)
-        assertEquals("目标：写设计 · 正在计时", content.text)
+        assertEquals("目标 写设计 · 正在计时", content.text)
         assertTrue(content.active)
         assertFalse(content.paused)
     }
@@ -42,7 +42,7 @@ class AttentionTimerNotificationTest {
         )
 
         assertEquals("Attention 已暂停", content.title)
-        assertEquals("目标：未归属活动 · 已暂停", content.text)
+        assertEquals("目标 未归属活动 · 已暂停", content.text)
         assertTrue(content.active)
         assertTrue(content.paused)
     }
