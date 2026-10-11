@@ -188,11 +188,27 @@ fun AttentionState.effectiveStage(stage: GoalStage, onDate: LocalDate): GoalStag
 
 fun AttentionState.capacitySummary(date: String): CapacitySummary {
     val capacity = settings.dailyCapacityMinutes
-    val used = schedules.filter { it.planningDate == date }.sumOf { schedule ->
-        schedule.estimatedMinutes ?: schedule.startMinute?.let { start -> schedule.endMinute?.minus(start) } ?: 0
-    }
+    val used = schedules
+        .asSequence()
+        .filter { it.planningDate == date }
+        .sumOf(ScheduleEntry::capacityMinutes)
     return CapacitySummary(capacity, used, capacity != null && used > capacity)
 }
+
+/**
+ * Returns the minutes reserved by one saved schedule entry.
+ *
+ * An explicit estimate is the user's planning value and therefore takes
+ * precedence over the optional time range. A partial range has no reliable
+ * duration and contributes zero minutes. The lower bound also keeps malformed
+ * imported entries from reducing a day's used capacity below zero.
+ */
+private fun ScheduleEntry.capacityMinutes(): Int = estimatedMinutes
+    ?: if (startMinute != null && endMinute != null) {
+        (endMinute - startMinute).coerceAtLeast(0)
+    } else {
+        0
+    }
 
 fun AttentionState.periodStats(date: LocalDate, cadence: GoalCadence): PeriodStats {
     val range = periodRange(date, cadence)
