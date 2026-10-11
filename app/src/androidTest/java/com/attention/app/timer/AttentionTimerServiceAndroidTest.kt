@@ -1,10 +1,12 @@
 package com.attention.app.timer
 
+import android.Manifest
 import android.app.ActivityManager
 import android.content.Context
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.test.core.app.ApplicationProvider
+import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.attention.app.data.room.AttentionDatabase
 import com.attention.app.data.room.RoomBusinessDataRepository
@@ -97,6 +99,49 @@ class AttentionTimerServiceAndroidTest {
                 .activeNotifications
                 .firstOrNull { it.id == AttentionTimerService.NOTIFICATION_ID },
         )
+    }
+
+    @Test
+    fun notification_permission_denied_still_persists_explicit_timer_stop() = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val permissionGranted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.POST_NOTIFICATIONS,
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (permissionGranted) {
+            instrumentation.uiAutomation.executeShellCommand("pm revoke ${context.packageName} ${Manifest.permission.POST_NOTIFICATIONS}").close()
+        }
+        try {
+            assertFalse(
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS,
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED,
+            )
+            RoomBusinessDataRepository(database).replace(
+                AttentionState(
+                    targets = listOf(Target(id = "permission-target", title = "权限测试")),
+                    activeTimer = ActiveTimer(
+                        targetId = "permission-target",
+                        startedAtEpochMillis = System.currentTimeMillis() - 120_000L,
+                        lastPlanningDate = "2026-10-12",
+                    ),
+                ),
+            )
+
+            startService()
+            waitForRoom { it.activeTimer != null }
+            context.startService(AttentionTimerService.intent(context).setAction(AttentionTimerService.ACTION_STOP))
+            waitForRoom { it.activeTimer == null && it.timeEntries.isNotEmpty() }
+
+            val stopped = RoomBusinessDataRepository(database).read()
+            assertNull(stopped.activeTimer)
+            assertEquals(2, stopped.timeEntries.single().durationMinutes)
+        } finally {
+            if (permissionGranted) {
+                instrumentation.uiAutomation.executeShellCommand("pm grant ${context.packageName} ${Manifest.permission.POST_NOTIFICATIONS}").close()
+            }
+        }
     }
 
     private fun startService() {

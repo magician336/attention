@@ -10,6 +10,7 @@ import com.attention.app.reminder.ReminderCoordinator
 import com.attention.domain.AttentionState
 import com.attention.domain.LaunchDestination
 import com.attention.domain.StoredSettings
+import com.attention.domain.validateActiveTimerTarget
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
@@ -101,7 +102,7 @@ class RoomAttentionStateRepository(
             val current = state.first()
             backupStore.write(AttentionBackupCodec.encode(current))
             val result = if (clearExisting) incoming else AttentionBackupCodec.merge(current, incoming)
-            validateImportState(result)
+            result.validateActiveTimerTarget()
             replaceWithRollback(current, result)
             result
         }
@@ -123,19 +124,6 @@ class RoomAttentionStateRepository(
                 .onFailure(error::addSuppressed)
             throw error
         }
-    }
-
-    /**
-     * Room enforces the foreign key, but an active timer has an additional
-     * domain constraint: it can only point at a live target. Validate the
-     * complete import before replacing any Room rows so an invalid backup
-     * cannot clear the current timer first and fail halfway through restore.
-     */
-    private fun validateImportState(state: AttentionState) {
-        val timerTargetId = state.activeTimer?.targetId ?: return
-        val target = state.targets.singleOrNull { it.id == timerTargetId }
-            ?: error("活动计时器目标不存在")
-        require(!target.archived) { "活动计时器不能归入归档目标" }
     }
 
     private fun AttentionState.toSettingsSnapshot(): SettingsSnapshot = SettingsSnapshot(

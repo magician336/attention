@@ -103,6 +103,8 @@ import com.attention.domain.reminderEpochMillis
 import com.attention.domain.subtreeMinutes
 import com.attention.domain.targetChildren
 import com.attention.domain.oneTimeStageMilestones
+import com.attention.domain.timerSettlementPreview
+import com.attention.domain.timerTargetLabel
 import java.time.Instant
 import java.time.LocalDate
 
@@ -314,10 +316,22 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
                     }
                 } else {
                     Text(if (timer.paused) "计时已暂停" else "正在计时")
-                    Text("当前目标：${state.targets.firstOrNull { it.id == timer.targetId }?.title ?: "未归属活动"}")
+                    Text("当前目标：${state.timerTargetLabel(timer.targetId)}")
                     if (timer.completedSegments.isNotEmpty()) {
                         Text("已完成片段：${timer.completedSegments.size}")
                     }
+                    val settlementPreview = state.timerSettlementPreview(Instant.now())
+                    val settlementScope = settlementPreview.entries.joinToString("；") {
+                        "${it.planningDate} ${it.durationMinutes} 分钟"
+                    }
+                    Text(
+                        if (settlementPreview.hasCompleteMinutes) {
+                            "结束范围预览：$settlementScope；共 ${settlementPreview.totalMinutes} 分钟"
+                        } else {
+                            "结束范围预览：当前片段不足 1 分钟，不会生成时间记录"
+                        },
+                        modifier = Modifier.testTag("timer-settlement-preview"),
+                    )
                     if (!notificationsEnabled(context)) {
                         Text(
                             "通知权限未开启，计时数据仍会保存；通知栏暂停、继续和结束控制不可用。",

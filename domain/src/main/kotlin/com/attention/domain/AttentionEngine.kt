@@ -248,6 +248,24 @@ fun AttentionState.validTarget(targetId: String?): Boolean = targetId == null ||
 private fun AttentionState.validRecordTarget(targetId: String?): Boolean =
     targetId == null || targets.any { it.id == targetId && !it.archived }
 
+/**
+ * Validates the domain invariant shared by imported and persisted timer state.
+ * Adapters call this pure function before replacing their storage rows.
+ */
+fun AttentionState.validateActiveTimerTarget() {
+    val timerTargetId = activeTimer?.targetId ?: return
+    val target = targets.singleOrNull { it.id == timerTargetId }
+        ?: error("活动计时器目标不存在")
+    require(!target.archived) { "活动计时器不能归入归档目标" }
+}
+
+/** Stable label used by every timer projection, including unowned activity. */
+fun AttentionState.timerTargetLabel(targetId: String?): String =
+    targetId
+        ?.let { id -> targets.firstOrNull { it.id == id }?.title }
+        ?.takeIf(String::isNotBlank)
+        ?: "未归属活动"
+
 fun AttentionState.addTarget(title: String, parentId: String? = null): AttentionState {
     require(title.isNotBlank())
     require(parentId == null || targets.any { it.id == parentId })
@@ -834,8 +852,8 @@ fun AttentionState.startTimer(targetId: String?, now: Instant, zone: ZoneId = Zo
 
 fun AttentionState.switchTimer(targetId: String?, now: Instant, zone: ZoneId = ZoneId.systemDefault()): TimerResult {
     require(validRecordTarget(targetId)) { "计时只能归入未归档目标" }
-    if (activeTimer?.targetId == targetId) return TimerResult(this, emptyList())
     if (activeTimer == null) return TimerResult(startTimer(targetId, now, zone), emptyList())
+    if (activeTimer.targetId == targetId) return TimerResult(this, emptyList())
     val stopped = stopTimer(now, zone)
     return TimerResult(stopped.state.startTimer(targetId, now, zone), stopped.entries)
 }
@@ -855,13 +873,19 @@ fun AttentionState.pauseTimer(now: Instant): AttentionState {
 fun AttentionState.resumeTimer(now: Instant): AttentionState {
     val timer = activeTimer ?: return this
     if (!timer.paused) return this
-    return copy(activeTimer = timer.copy(startedAtEpochMillis = now.toEpochMilli(), paused = false))
+    return copy(activeTimer = timer.copy(startedAtEpochMillis = timer.nonDecreasingBaseline(now.toEpochMilli()), paused = false))
 }
 
 fun AttentionState.recoverTimer(now: Instant): AttentionState {
     val timer = activeTimer ?: return this
-    return copy(activeTimer = timer.copy(startedAtEpochMillis = now.toEpochMilli(), paused = false))
+    return copy(activeTimer = timer.copy(startedAtEpochMillis = timer.nonDecreasingBaseline(now.toEpochMilli()), paused = false))
 }
+
+private fun ActiveTimer.nonDecreasingBaseline(nowEpochMillis: Long): Long = maxOf(
+    nowEpochMillis,
+    startedAtEpochMillis,
+    completedSegments.maxOfOrNull { it.endedAtEpochMillis } ?: startedAtEpochMillis,
+)
 
 fun AttentionState.stopTimer(now: Instant, zone: ZoneId = ZoneId.systemDefault()): TimerResult {
     val timer = activeTimer ?: return TimerResult(this, emptyList())
@@ -873,6 +897,15 @@ fun AttentionState.stopTimer(now: Instant, zone: ZoneId = ZoneId.systemDefault()
     val entries = splitTimerSegments(segments, timer.targetId, settings.planningDayBoundaryMinutes, zone)
     return TimerResult(copy(activeTimer = null, timeEntries = timeEntries + entries), entries)
 }
+
+/**
+ * Calculates the records an explicit stop would produce without changing state.
+ * Callers supply the confirmation time so the preview remains deterministic.
+ */
+fun AttentionState.timerSettlementPreview(
+    now: Instant,
+    zone: ZoneId = ZoneId.systemDefault(),
+): TimerSettlementPreview = TimerSettlementPreview(activeTimer?.let { stopTimer(now, zone).entries } ?: emptyList())
 
 private fun splitTimerSegments(segments: List<TimerSegment>, targetId: String?, boundaryMinutes: Int, zone: ZoneId): List<TimeEntry> {
     data class TimerBucket(var durationMillis: Long, val occurredAtEpochMillis: Long)

@@ -6,6 +6,7 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -957,6 +958,18 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun switching_without_an_active_timer_starts_an_unowned_timer() {
+        val state = AttentionState()
+        val now = Instant.parse("2026-10-08T00:15:00Z")
+
+        val result = state.switchTimer(null, now, utc)
+
+        assertEquals(now.toEpochMilli(), result.state.activeTimer?.startedAtEpochMillis)
+        assertEquals(null, result.state.activeTimer?.targetId)
+        assertTrue(result.entries.isEmpty())
+    }
+
+    @Test
     fun archiving_or_deleting_a_running_target_finishes_as_unowned_activity() {
         val state = AttentionState().addTarget("专注")
         val target = state.targets.single()
@@ -999,6 +1012,20 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun resuming_before_the_previous_segment_end_does_not_overlap_segments() {
+        val target = AttentionState().addTarget("专注").targets.single()
+        val paused = AttentionState(targets = listOf(target))
+            .startTimer(target.id, Instant.parse("2026-10-08T00:00:00Z"), utc)
+            .pauseTimer(Instant.parse("2026-10-08T00:10:00Z"))
+
+        val result = paused
+            .resumeTimer(Instant.parse("2026-10-08T00:05:00Z"))
+            .stopTimer(Instant.parse("2026-10-08T00:20:00Z"), utc)
+
+        assertEquals(20, result.entries.single().durationMinutes)
+    }
+
+    @Test
     fun recovering_a_rebuilt_running_timer_discards_unconfirmed_interruption() {
         val state = AttentionState().addTarget("专注")
         val target = state.targets.single()
@@ -1013,6 +1040,20 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun recovering_before_the_previous_segment_end_does_not_overlap_segments() {
+        val target = AttentionState().addTarget("专注").targets.single()
+        val paused = AttentionState(targets = listOf(target))
+            .startTimer(target.id, Instant.parse("2026-10-08T00:00:00Z"), utc)
+            .pauseTimer(Instant.parse("2026-10-08T00:10:00Z"))
+
+        val result = paused
+            .recoverTimer(Instant.parse("2026-10-08T00:05:00Z"))
+            .stopTimer(Instant.parse("2026-10-08T00:20:00Z"), utc)
+
+        assertEquals(20, result.entries.single().durationMinutes)
+    }
+
+    @Test
     fun timer_keeps_planning_day_minute_remainders_separate() {
         val state = AttentionState().addTarget("专注")
         val target = state.targets.single()
@@ -1023,6 +1064,60 @@ class AttentionEngineTest {
 
         assertTrue(result.entries.isEmpty())
         assertTrue(result.state.timeEntries.isEmpty())
+    }
+
+    @Test
+    fun timer_settlement_preview_reports_planning_day_buckets_without_mutating_state() {
+        val target = AttentionState().addTarget("专注").targets.single()
+        val state = AttentionState(targets = listOf(target))
+            .startTimer(target.id, Instant.parse("2026-10-08T02:50:00Z"), utc)
+
+        val preview = state.timerSettlementPreview(Instant.parse("2026-10-08T03:10:00Z"), utc)
+
+        assertEquals(listOf("2026-10-07", "2026-10-08"), preview.entries.map { it.planningDate })
+        assertEquals(listOf(10, 10), preview.entries.map { it.durationMinutes })
+        assertEquals(20, preview.totalMinutes)
+        assertTrue(preview.hasCompleteMinutes)
+        assertNotNull(state.activeTimer)
+        assertTrue(state.timeEntries.isEmpty())
+    }
+
+    @Test
+    fun timer_settlement_preview_reports_when_no_complete_minute_will_be_saved() {
+        val target = AttentionState().addTarget("专注").targets.single()
+        val state = AttentionState(targets = listOf(target))
+            .startTimer(target.id, Instant.parse("2026-10-08T00:00:30Z"), utc)
+
+        val preview = state.timerSettlementPreview(Instant.parse("2026-10-08T00:01:00Z"), utc)
+
+        assertTrue(preview.entries.isEmpty())
+        assertEquals(0, preview.totalMinutes)
+        assertTrue(!preview.hasCompleteMinutes)
+    }
+
+    @Test
+    fun active_timer_domain_validation_rejects_missing_or_archived_targets() {
+        val target = Target("timer-validation-target", title = "专注")
+        val timer = ActiveTimer(target.id, 0L, lastPlanningDate = date.toString())
+
+        AttentionState(targets = listOf(target), activeTimer = timer).validateActiveTimerTarget()
+        assertThrows(IllegalStateException::class.java) {
+            AttentionState(activeTimer = timer).validateActiveTimerTarget()
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            AttentionState(targets = listOf(target.copy(archived = true)), activeTimer = timer).validateActiveTimerTarget()
+        }
+    }
+
+    @Test
+    fun timer_target_label_uses_the_shared_unowned_fallback() {
+        val target = Target("timer-label-target", title = "专注")
+        val state = AttentionState(targets = listOf(target))
+
+        assertEquals("专注", state.timerTargetLabel(target.id))
+        assertEquals("未归属活动", state.timerTargetLabel(null))
+        assertEquals("未归属活动", state.timerTargetLabel("missing"))
+        assertEquals("未归属活动", state.copy(targets = listOf(target.copy(title = "  "))).timerTargetLabel(target.id))
     }
 
     @Test
