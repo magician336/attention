@@ -6,6 +6,7 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -900,6 +901,28 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun timer_records_match_manual_records_for_rollups_experience_and_milestones() {
+        val target = Target("timer-equivalence-target", title = "计时等价")
+        val stage = GoalStage("timer-equivalence-stage", target.id, GoalCadence.DAILY, 30, date.toString())
+        val manual = AttentionState(targets = listOf(target), goalStages = listOf(stage))
+            .addTimeEntry(date.toString(), 30, target.id, TimeEntrySource.MANUAL)
+            .recalculateExperience()
+            .awardEligibleMilestones(date)
+        val timer = AttentionState(targets = listOf(target), goalStages = listOf(stage))
+            .startTimer(target.id, date.atStartOfDay(utc).plusHours(3).toInstant(), utc)
+            .stopTimer(date.atStartOfDay(utc).plusHours(3).plusMinutes(30).toInstant(), utc)
+            .state
+            .recalculateExperience()
+            .awardEligibleMilestones(date)
+
+        assertEquals(manual.progress(stage, date), timer.progress(stage, date))
+        assertEquals(manual.subtreeMinutes(target.id), timer.subtreeMinutes(target.id))
+        assertEquals(manual.periodStats(date, GoalCadence.DAILY), timer.periodStats(date, GoalCadence.DAILY))
+        assertEquals(manual.experience, timer.experience)
+        assertEquals(manual.milestones.map { it.instanceKey }, timer.milestones.map { it.instanceKey })
+    }
+
+    @Test
     fun switching_timer_to_unowned_saves_the_previous_target_with_its_occurrence_time() {
         val withTargets = AttentionState()
             .addTarget("专注")
@@ -919,6 +942,33 @@ class AttentionEngineTest {
         assertEquals(startedAt.toEpochMilli(), saved.occurredAtEpochMillis)
         assertEquals(null, result.state.activeTimer?.targetId)
         assertEquals(switchedAt.toEpochMilli(), result.state.activeTimer?.startedAtEpochMillis)
+    }
+
+    @Test
+    fun switching_to_the_current_timer_target_is_idempotent() {
+        val state = AttentionState().addTarget("专注")
+        val target = state.targets.single()
+        val started = state.startTimer(target.id, Instant.parse("2026-10-08T00:00:00Z"), utc)
+
+        val result = started.switchTimer(target.id, Instant.parse("2026-10-08T00:15:00Z"), utc)
+
+        assertEquals(started, result.state)
+        assertTrue(result.entries.isEmpty())
+    }
+
+    @Test
+    fun archiving_or_deleting_a_running_target_finishes_as_unowned_activity() {
+        val state = AttentionState().addTarget("专注")
+        val target = state.targets.single()
+        val started = state.startTimer(target.id, Instant.parse("2026-10-08T00:00:00Z"), utc)
+
+        val archived = started.archiveTarget(target.id)
+        assertNull(archived.activeTimer?.targetId)
+        assertNull(archived.stopTimer(Instant.parse("2026-10-08T00:15:00Z"), utc).entries.single().targetId)
+
+        val deleted = started.deleteTargetRelations(setOf(target.id))
+        assertNull(deleted.activeTimer?.targetId)
+        assertNull(deleted.stopTimer(Instant.parse("2026-10-08T00:15:00Z"), utc).entries.single().targetId)
     }
 
     @Test
