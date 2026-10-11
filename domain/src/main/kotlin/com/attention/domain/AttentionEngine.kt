@@ -409,12 +409,39 @@ private fun AttentionState.validateScheduleEntry(entry: ScheduleEntry) {
 }
 
 fun AttentionState.addRecurrence(rule: RecurrenceRule): AttentionState {
-    require(rule.title.isNotBlank())
-    LocalDate.parse(rule.startDate)
-    rule.untilDate?.let(LocalDate::parse)
-    require(rule.reminderMinuteOfDay == null || rule.reminderMinuteOfDay in 0 until 1440)
-    require(validTarget(rule.targetId))
-    return copy(recurrenceRules = recurrenceRules + rule.copy(title = rule.title.trim()))
+    require(rule.title.isNotBlank()) { "重复日程标题不能为空" }
+    val startDate = LocalDate.parse(rule.startDate)
+    val untilDate = rule.untilDate?.let(LocalDate::parse)
+    require(untilDate == null || !untilDate.isBefore(startDate)) { "结束规划日不能早于开始规划日" }
+    require(rule.estimatedMinutes == null || rule.estimatedMinutes > 0) { "预计时长必须为正数" }
+    require(rule.reminderMinuteOfDay == null || rule.reminderMinuteOfDay in 0 until 1440) {
+        "提醒时间必须在 00:00 到 23:59 之间"
+    }
+    require(validRecordTarget(rule.targetId)) { "重复日程只能关联未归档计划" }
+    require(recurrenceRules.none { it.id == rule.id }) { "重复规则 ID 已存在" }
+
+    val normalizedWeekdays = rule.weekdays.distinct().sorted()
+    when (rule.frequency) {
+        ScheduleFrequency.DAILY -> {
+            require(rule.weekdays.isEmpty()) { "每日规则不能设置星期集合" }
+            require(rule.dayOfMonth == null) { "每日规则不能设置月内日期" }
+        }
+        ScheduleFrequency.WEEKLY -> {
+            require(normalizedWeekdays.isNotEmpty()) { "每周规则至少选择一个星期" }
+            require(normalizedWeekdays.all { it in 1..7 }) { "星期必须在 1 到 7 之间" }
+            require(rule.dayOfMonth == null) { "每周规则不能设置月内日期" }
+        }
+        ScheduleFrequency.MONTHLY -> {
+            require(rule.weekdays.isEmpty()) { "每月规则不能设置星期集合" }
+            require(rule.dayOfMonth in 1..31) { "月内日期必须在 1 到 31 之间" }
+        }
+    }
+    return copy(
+        recurrenceRules = recurrenceRules + rule.copy(
+            title = rule.title.trim(),
+            weekdays = normalizedWeekdays,
+        ),
+    )
 }
 
 fun AttentionState.stopRecurrence(ruleId: String): AttentionState = copy(

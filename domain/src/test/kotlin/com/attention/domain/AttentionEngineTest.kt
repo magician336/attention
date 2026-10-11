@@ -809,6 +809,86 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun recurrence_rule_accepts_daily_weekly_and_monthly_parameters() {
+        val target = AttentionState().addTarget("学习").targets.single()
+
+        val daily = AttentionState(targets = listOf(target)).addRecurrence(
+            RecurrenceRule(
+                id = "daily-rule",
+                title = "每日复习",
+                startDate = date.toString(),
+                frequency = ScheduleFrequency.DAILY,
+                estimatedMinutes = 25,
+                targetId = target.id,
+                reminderMinuteOfDay = 9 * 60,
+            ),
+        ).recurrenceRules.single()
+        assertEquals("每日复习", daily.title)
+
+        val weekly = AttentionState(targets = listOf(target)).addRecurrence(
+            RecurrenceRule(
+                id = "weekly-rule",
+                title = "工作日复盘",
+                startDate = date.toString(),
+                frequency = ScheduleFrequency.WEEKLY,
+                weekdays = listOf(1, 3, 5),
+                untilDate = date.plusMonths(1).toString(),
+            ),
+        ).recurrenceRules.single()
+        assertEquals(listOf(1, 3, 5), weekly.weekdays)
+
+        val monthly = AttentionState(targets = listOf(target)).addRecurrence(
+            RecurrenceRule(
+                id = "monthly-rule",
+                title = "月度复盘",
+                startDate = date.toString(),
+                frequency = ScheduleFrequency.MONTHLY,
+                dayOfMonth = 31,
+            ),
+        ).recurrenceRules.single()
+        assertEquals(31, monthly.dayOfMonth)
+    }
+
+    @Test
+    fun recurrence_rule_rejects_invalid_parameters_and_archived_targets() {
+        val target = AttentionState().addTarget("学习").targets.single()
+        val archived = Target("archived-target", title = "已归档", archived = true)
+        val state = AttentionState(targets = listOf(target, archived))
+
+        fun assertInvalid(rule: RecurrenceRule) {
+            assertThrows(IllegalArgumentException::class.java) { state.addRecurrence(rule) }
+        }
+
+        assertInvalid(RecurrenceRule(title = "", startDate = date.toString(), frequency = ScheduleFrequency.DAILY))
+        assertInvalid(RecurrenceRule(title = "每日", startDate = date.toString(), frequency = ScheduleFrequency.DAILY, weekdays = listOf(1)))
+        assertInvalid(RecurrenceRule(title = "每周", startDate = date.toString(), frequency = ScheduleFrequency.WEEKLY, weekdays = emptyList()))
+        val duplicateWeekdays = state.addRecurrence(
+            RecurrenceRule(title = "每周", startDate = date.toString(), frequency = ScheduleFrequency.WEEKLY, weekdays = listOf(1, 1, 3)),
+        ).recurrenceRules.single()
+        assertEquals(listOf(1, 3), duplicateWeekdays.weekdays)
+        assertInvalid(RecurrenceRule(title = "每周", startDate = date.toString(), frequency = ScheduleFrequency.WEEKLY, weekdays = listOf(0)))
+        assertInvalid(RecurrenceRule(title = "每月", startDate = date.toString(), frequency = ScheduleFrequency.MONTHLY, dayOfMonth = null))
+        assertInvalid(RecurrenceRule(title = "每月", startDate = date.toString(), frequency = ScheduleFrequency.MONTHLY, dayOfMonth = 32))
+        assertInvalid(RecurrenceRule(title = "范围", startDate = date.toString(), frequency = ScheduleFrequency.DAILY, untilDate = date.minusDays(1).toString()))
+        assertInvalid(RecurrenceRule(title = "时长", startDate = date.toString(), frequency = ScheduleFrequency.DAILY, estimatedMinutes = 0))
+        assertInvalid(RecurrenceRule(title = "提醒", startDate = date.toString(), frequency = ScheduleFrequency.DAILY, reminderMinuteOfDay = 1440))
+        assertInvalid(RecurrenceRule(title = "计划", startDate = date.toString(), frequency = ScheduleFrequency.DAILY, targetId = archived.id))
+    }
+
+    @Test
+    fun recurrence_rule_ids_must_be_unique_and_dates_must_be_valid() {
+        val first = RecurrenceRule(id = "same-rule", title = "第一次", startDate = date.toString(), frequency = ScheduleFrequency.DAILY)
+        val state = AttentionState().addRecurrence(first)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            state.addRecurrence(first.copy(title = "第二次"))
+        }
+        assertThrows(java.time.format.DateTimeParseException::class.java) {
+            AttentionState().addRecurrence(first.copy(startDate = "2026-02-30"))
+        }
+    }
+
+    @Test
     fun experience_and_cumulative_rewards_follow_spec() {
         assertEquals(1, levelForExperience(0))
         assertEquals(2, levelForExperience(1000))
