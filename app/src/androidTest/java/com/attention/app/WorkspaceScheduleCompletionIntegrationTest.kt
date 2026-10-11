@@ -5,6 +5,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -28,15 +29,16 @@ class WorkspaceScheduleCompletionIntegrationTest {
     @Test
     fun completion_toggle_is_available_from_the_agenda_row() {
         openAgenda()
-        composeRule.onNodeWithTag("schedule-completion-$SCHEDULE_ID").performClick()
+        composeRule.onNodeWithTag("schedule-completion-$SCHEDULE_ID", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
+
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithText("已完成", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
 
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val database = AttentionDatabase.create(context)
         try {
-            composeRule.waitUntil(timeoutMillis = 5_000) {
-                runBlocking { RoomBusinessDataRepository(database).read().schedules.single { it.id == SCHEDULE_ID }.completed }
-            }
             val loaded = runBlocking { RoomBusinessDataRepository(database).read() }
             assertEquals(true, loaded.schedules.single { it.id == SCHEDULE_ID }.completed)
         } finally {

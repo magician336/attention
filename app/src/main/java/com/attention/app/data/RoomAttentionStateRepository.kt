@@ -39,6 +39,10 @@ class RoomAttentionStateRepository(
         }
     }
 
+    override suspend fun toggleScheduleCompleted(entryId: String) {
+        mutex.withLock { business.toggleScheduleCompleted(entryId) }
+    }
+
     override suspend fun setPlannerSettings(settings: StoredSettings) {
         this.settings.setPlannerSettings(settings)
     }

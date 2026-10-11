@@ -9,6 +9,7 @@ import com.attention.domain.StoredSettings
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.Target
 import com.attention.domain.TimeEntry
+import com.attention.domain.toggleScheduleCompleted
 import java.time.LocalDate
 import java.time.ZoneOffset
 import kotlinx.coroutines.Dispatchers
@@ -84,6 +85,10 @@ class AttentionViewModelTest {
 
         override suspend fun updateBusiness(transform: (AttentionState) -> AttentionState) {
             values.value = transform(values.value)
+        }
+
+        override suspend fun toggleScheduleCompleted(entryId: String) {
+            values.value = values.value.toggleScheduleCompleted(entryId)
         }
 
         override suspend fun setPlannerSettings(settings: StoredSettings) = Unit

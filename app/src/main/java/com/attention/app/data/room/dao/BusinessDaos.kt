@@ -89,6 +89,9 @@ interface TimeEntryDao {
 
 @Dao
 interface ScheduleEntryDao {
+    @Query("SELECT * FROM schedule_entries WHERE id = :id")
+    suspend fun findById(id: String): ScheduleEntryEntity?
+
     @Query("SELECT * FROM schedule_entries ORDER BY planningDate, startMinute, id")
     suspend fun getAll(): List<ScheduleEntryEntity>
 

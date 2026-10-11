@@ -122,7 +122,12 @@ class AttentionViewModel(
 
     fun addSchedule(entry: ScheduleEntry) = runCommand { it.addSchedule(entry) }
     fun updateSchedule(entry: ScheduleEntry) = runCommand { it.updateSchedule(entry) }
-    fun toggleScheduleCompleted(entryId: String) = runCommand { it.toggleScheduleCompleted(entryId) }
+    fun toggleScheduleCompleted(entryId: String) {
+        scope.launch(Dispatchers.IO) {
+            runCatching { repository.toggleScheduleCompleted(entryId) }
+                .onFailure { _error.value = it.message ?: "操作未保存" }
+        }
+    }
     fun addRecurrence(rule: RecurrenceRule) = runCommand { it.addRecurrence(rule) }
     fun materializeRecurrence(rule: RecurrenceRule, through: LocalDate) = runCommand { it.materializeOccurrences(rule, through) }
     fun stopRecurrence(ruleId: String) = runCommand { it.stopRecurrence(ruleId) }
