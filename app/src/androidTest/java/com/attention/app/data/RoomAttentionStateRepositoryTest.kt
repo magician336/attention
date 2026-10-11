@@ -123,6 +123,37 @@ class RoomAttentionStateRepositoryTest {
     }
 
     @Test
+    fun paused_timer_and_completed_segments_survive_process_rebuild() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val databaseName = "attention-room-repository-paused-restart.db"
+        context.deleteDatabase(databaseName)
+        val startedAt = Instant.ofEpochMilli(1_000L)
+        val pausedAt = Instant.ofEpochMilli(61_000L)
+        val firstDatabase = Room.databaseBuilder(context, AttentionDatabase::class.java, databaseName).build()
+        try {
+            val first = RoomAttentionStateRepository(RoomBusinessDataRepository(firstDatabase), settings)
+            first.updateBusiness { it.copy(targets = listOf(Target("target", title = "学习"))) }
+            first.updateBusiness { it.startTimer("target", startedAt, ZoneId.of("UTC")) }
+            first.updateBusiness { it.pauseTimer(pausedAt) }
+        } finally {
+            firstDatabase.close()
+        }
+
+        val secondDatabase = Room.databaseBuilder(context, AttentionDatabase::class.java, databaseName).build()
+        try {
+            val second = RoomAttentionStateRepository(RoomBusinessDataRepository(secondDatabase), settings)
+            val rebuilt = second.state.first()
+            assertEquals(true, rebuilt.activeTimer?.paused)
+            assertEquals(startedAt.toEpochMilli(), rebuilt.activeTimer?.completedSegments?.single()?.startedAtEpochMillis)
+            assertEquals(pausedAt.toEpochMilli(), rebuilt.activeTimer?.completedSegments?.single()?.endedAtEpochMillis)
+            assertTrue(rebuilt.timeEntries.isEmpty())
+        } finally {
+            secondDatabase.close()
+            context.deleteDatabase(databaseName)
+        }
+    }
+
+    @Test
     fun business_update_does_not_reset_existing_settings() = runBlocking {
         val repository = repository()
         repository.setPlannerSettings(repository.state.first().settings.copy(planningDayBoundaryMinutes = 75))
