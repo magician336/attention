@@ -6,6 +6,7 @@ import com.attention.app.data.backup.ImportBackupStore
 import com.attention.app.data.backup.InMemoryImportBackupStore
 import com.attention.app.data.settings.SettingsSnapshot
 import com.attention.app.data.settings.SettingsStore
+import com.attention.app.reminder.ReminderCoordinator
 import com.attention.domain.AttentionState
 import com.attention.domain.LaunchDestination
 import com.attention.domain.StoredSettings
@@ -25,6 +26,7 @@ class RoomAttentionStateRepository(
     private val business: RoomBusinessDataRepository,
     private val settings: SettingsStore,
     private val backupStore: ImportBackupStore = InMemoryImportBackupStore(),
+    private val reminderCoordinator: ReminderCoordinator = ReminderCoordinator { _, _ -> },
 ) : AttentionStateRepository {
     private val mutex = Mutex()
 
@@ -32,15 +34,21 @@ class RoomAttentionStateRepository(
 
     override suspend fun updateBusiness(transform: (AttentionState) -> AttentionState) {
         mutex.withLock {
+            val previous = state.first()
             val plannerSettings = settings.settings.first().toStoredSettings()
-            business.update { current ->
+            val next = business.update { current ->
                 transform(current.copy(settings = plannerSettings))
             }
+            reminderCoordinator.sync(previous, next)
         }
     }
 
     override suspend fun toggleScheduleCompleted(entryId: String) {
-        mutex.withLock { business.toggleScheduleCompleted(entryId) }
+        mutex.withLock {
+            val previous = state.first()
+            val next = business.toggleScheduleCompleted(entryId)
+            reminderCoordinator.sync(previous, next)
+        }
     }
 
     override suspend fun setPlannerSettings(settings: StoredSettings) {
@@ -100,6 +108,7 @@ class RoomAttentionStateRepository(
         try {
             business.replace(next)
             settings.setSnapshot(next.toSettingsSnapshot())
+            reminderCoordinator.sync(current, next)
         } catch (error: Throwable) {
             runCatching { settings.setSnapshot(current.toSettingsSnapshot()) }
                 .onFailure(error::addSuppressed)

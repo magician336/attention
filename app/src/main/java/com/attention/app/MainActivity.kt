@@ -9,6 +9,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent { WorkspaceApp() }
+        setContent {
+            WorkspaceApp(
+                openScheduleDate = intent.getStringExtra(com.attention.app.reminder.ReminderReceiver.EXTRA_PLANNING_DATE),
+            )
+        }
     }
 }
