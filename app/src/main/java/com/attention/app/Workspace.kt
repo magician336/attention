@@ -60,6 +60,7 @@ import com.attention.app.data.room.AttentionDatabase
 import com.attention.app.data.room.RoomBusinessDataRepository
 import com.attention.app.data.settings.createSettingsStore
 import com.attention.app.timer.AttentionTimerService
+import com.attention.app.timer.AttentionBootReceiver
 import com.attention.app.reminder.AlarmReminderCoordinator
 import com.attention.app.reminder.ReminderScheduler
 import com.attention.domain.AttentionState
@@ -220,6 +221,7 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
     val context = LocalContext.current
     fun startTimer(targetId: String?) {
         viewModel.startTimer(targetId) {
+            AttentionBootReceiver.cancelRecoveryPrompt(context)
             if (!notificationsEnabled(context)) {
                 Toast.makeText(context, "通知权限未开启，计时仍会保存；通知栏控制不可用。", Toast.LENGTH_LONG).show()
             }
@@ -313,6 +315,9 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
                 } else {
                     Text(if (timer.paused) "计时已暂停" else "正在计时")
                     Text("当前目标：${state.targets.firstOrNull { it.id == timer.targetId }?.title ?: "未归属活动"}")
+                    if (timer.completedSegments.isNotEmpty()) {
+                        Text("已完成片段：${timer.completedSegments.size}")
+                    }
                     if (!notificationsEnabled(context)) {
                         Text(
                             "通知权限未开启，计时数据仍会保存；通知栏暂停、继续和结束控制不可用。",
@@ -325,11 +330,13 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
                         else Button(onClick = viewModel::pauseTimer) { Text("暂停") }
                         OutlinedButton(onClick = {
                             viewModel.recoverTimer {
+                                AttentionBootReceiver.cancelRecoveryPrompt(context)
                                 ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
                             }
                         }) { Text("从此刻继续") }
                         OutlinedButton(onClick = {
                             viewModel.stopTimer {
+                                AttentionBootReceiver.cancelRecoveryPrompt(context)
                                 context.stopService(AttentionTimerService.intent(context))
                             }
                         }) { Text("结束并保存") }

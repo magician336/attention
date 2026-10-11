@@ -80,6 +80,8 @@ class AttentionTimerService : Service() {
                     }
                 }
 
+                if (intent?.action == ACTION_STOP) AttentionBootReceiver.cancelRecoveryPrompt(this@AttentionTimerService)
+
                 // The observer normally handles this transition. Reading once
                 // here makes auto-stop deterministic during process teardown.
                 val state = repository.state.first()
