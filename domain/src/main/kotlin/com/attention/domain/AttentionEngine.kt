@@ -448,7 +448,11 @@ fun AttentionState.stopRecurrence(ruleId: String): AttentionState = copy(
     recurrenceRules = recurrenceRules.map { if (it.id == ruleId) it.copy(active = false) else it },
 )
 
-fun AttentionState.occurrences(rule: RecurrenceRule, through: LocalDate): List<ScheduleEntry> {
+fun AttentionState.occurrences(
+    rule: RecurrenceRule,
+    through: LocalDate,
+    zone: ZoneId = ZoneId.systemDefault(),
+): List<ScheduleEntry> {
     val start = LocalDate.parse(rule.startDate)
     val end = minOf(through, rule.untilDate?.let(LocalDate::parse) ?: through)
     if (!rule.active || start.isAfter(end)) return emptyList()
@@ -470,7 +474,7 @@ fun AttentionState.occurrences(rule: RecurrenceRule, through: LocalDate): List<S
                 note = rule.note,
                 recurrenceRuleId = rule.id,
                 reminderEpochMillis = rule.reminderMinuteOfDay?.let { minute ->
-                    date.atStartOfDay(ZoneId.systemDefault()).plusMinutes(minute.toLong()).toInstant().toEpochMilli()
+                    date.atStartOfDay(zone).plusMinutes(minute.toLong()).toInstant().toEpochMilli()
                 },
             )
         }
@@ -756,11 +760,15 @@ private fun AttentionState.parentAt(targetId: String, date: LocalDate, moves: Li
 
 fun AttentionState.parentAt(targetId: String, date: LocalDate): String? = parentAt(targetId, date, targetMoves)
 
-fun AttentionState.materializeOccurrences(rule: RecurrenceRule, through: LocalDate): AttentionState {
+fun AttentionState.materializeOccurrences(
+    rule: RecurrenceRule,
+    through: LocalDate,
+    zone: ZoneId = ZoneId.systemDefault(),
+): AttentionState {
     // Resolve the persisted rule first. This keeps generation safe when a caller
     // retries with a stale copy (for example after stopping a rule).
     val persistedRule = recurrenceRules.firstOrNull { it.id == rule.id } ?: rule
-    val generated = occurrences(persistedRule, through)
+    val generated = occurrences(persistedRule, through, zone)
     val existing = schedules.map { it.recurrenceRuleId to it.planningDate }.toSet()
     val additions = generated.filterNot { (it.recurrenceRuleId to it.planningDate) in existing }
         .map { it.copy(id = newId()) }
@@ -768,8 +776,11 @@ fun AttentionState.materializeOccurrences(rule: RecurrenceRule, through: LocalDa
 }
 
 /** Creates a rule and materializes its first window as one atomic domain command. */
-fun AttentionState.addRecurrenceAndMaterialize(rule: RecurrenceRule, through: LocalDate): AttentionState =
-    addRecurrence(rule).materializeOccurrences(rule, through)
+fun AttentionState.addRecurrenceAndMaterialize(
+    rule: RecurrenceRule,
+    through: LocalDate,
+    zone: ZoneId = ZoneId.systemDefault(),
+): AttentionState = addRecurrence(rule).materializeOccurrences(rule, through, zone)
 
 fun AttentionState.startTimer(targetId: String?, now: Instant, zone: ZoneId = ZoneId.systemDefault()): AttentionState {
     require(validRecordTarget(targetId)) { "计时只能归入未归档目标" }
