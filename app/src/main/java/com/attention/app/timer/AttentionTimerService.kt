@@ -22,6 +22,7 @@ import com.attention.domain.pauseTimer
 import com.attention.domain.recalculateExperience
 import com.attention.domain.resumeTimer
 import com.attention.domain.stopTimer
+import com.attention.domain.timerTargetLabel
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -196,10 +197,7 @@ class AttentionTimerService : Service() {
                 active = false,
                 paused = false,
             )
-            val target = timer.targetId
-                ?.let { id -> state.targets.firstOrNull { it.id == id }?.title }
-                ?.takeIf(String::isNotBlank)
-                ?: "未归属活动"
+            val target = state.timerTargetLabel(timer.targetId)
             val status = if (timer.paused) "已暂停" else "正在计时"
             return TimerNotificationContent(
                 title = "Attention $status",

@@ -11,6 +11,10 @@ import com.attention.app.data.room.RoomBusinessDataRepository
 import com.attention.domain.ActiveTimer
 import com.attention.domain.AttentionState
 import com.attention.domain.Target
+import com.attention.domain.recoverTimer
+import com.attention.domain.stopTimer
+import java.time.Instant
+import java.time.ZoneOffset
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -102,6 +106,47 @@ class AttentionBootReceiverAndroidTest {
                 .any { it.id == AttentionBootReceiver.RECOVERY_NOTIFICATION_ID },
         )
         assertFalse(isServiceRunning())
+    }
+
+    @Test
+    fun recovery_continue_is_only_applied_after_the_user_action() = runBlocking {
+        val before = RoomBusinessDataRepository(database).read()
+        database.close()
+
+        AttentionBootReceiver().onReceive(context, Intent(Intent.ACTION_BOOT_COMPLETED))
+        delay(300)
+
+        database = AttentionDatabase.create(context)
+        val afterBoot = RoomBusinessDataRepository(database).read()
+        assertEquals(before.activeTimer, afterBoot.activeTimer)
+        assertTrue(afterBoot.timeEntries.isEmpty())
+
+        val continued = RoomBusinessDataRepository(database).update {
+            it.recoverTimer(Instant.ofEpochMilli(20_000L))
+        }
+        assertFalse(continued.activeTimer!!.paused)
+        assertEquals(20_000L, continued.activeTimer!!.startedAtEpochMillis)
+        assertTrue(continued.timeEntries.isEmpty())
+    }
+
+    @Test
+    fun recovery_end_is_only_settled_after_the_user_action() = runBlocking {
+        database.close()
+        AttentionBootReceiver().onReceive(context, Intent(Intent.ACTION_BOOT_COMPLETED))
+        delay(300)
+
+        database = AttentionDatabase.create(context)
+        val beforeEnd = RoomBusinessDataRepository(database).read()
+        assertNotNull(beforeEnd.activeTimer)
+        assertTrue(beforeEnd.timeEntries.isEmpty())
+
+        val ended = RoomBusinessDataRepository(database).update {
+            it.recoverTimer(Instant.ofEpochMilli(20_000L))
+                .stopTimer(Instant.ofEpochMilli(80_000L), ZoneOffset.UTC)
+                .state
+        }
+        assertEquals(null, ended.activeTimer)
+        assertEquals(1, ended.timeEntries.single().durationMinutes)
     }
 
     private fun notificationsEnabled(): Boolean = NotificationManagerCompat.from(context).areNotificationsEnabled()

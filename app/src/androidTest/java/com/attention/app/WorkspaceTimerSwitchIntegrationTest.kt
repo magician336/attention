@@ -30,6 +30,7 @@ class WorkspaceTimerSwitchIntegrationTest {
     fun active_timer_can_switch_to_unowned_activity_from_workbench() {
         composeRule.onNode(hasText("今天") and hasClickAction()).performClick()
         composeRule.onNodeWithText("当前目标：计时目标").assertExists()
+        composeRule.onNodeWithTag("timer-settlement-preview").assertExists()
         composeRule.onNodeWithTag("switch-timer-unowned").assertExists()
         composeRule.onNodeWithText("切换到未归属活动").assertExists()
     }
