@@ -1,7 +1,9 @@
 package com.attention.app.data.room
 
 import android.content.Context
+import androidx.room.testing.MigrationTestHelper
 import androidx.test.core.app.ApplicationProvider
+import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.attention.app.data.room.entity.RoomMetadataEntity
 import kotlinx.coroutines.flow.first
@@ -9,11 +11,19 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class AttentionDatabaseTest {
+    @get:Rule
+    val migrationHelper = MigrationTestHelper(
+        InstrumentationRegistry.getInstrumentation(),
+        AttentionDatabase::class.java,
+    )
+
     @Test
     fun new_database_opens_empty_and_persists_versioned_metadata() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
@@ -45,6 +55,34 @@ class AttentionDatabaseTest {
         createLegacyDatabase(context, version = 2, identityHash = "5038600f45cff26737644acf4d6cced")
 
         assertKnownLegacySchemaIsReset(context)
+    }
+
+    @Test
+    fun schema_v3_migrates_period_snapshots_with_legacy_stage_default() {
+        val databaseName = "attention-migration-v3.db"
+        val legacy = migrationHelper.createDatabase(databaseName, 3)
+        legacy.execSQL(
+            "INSERT INTO period_snapshots " +
+                "(id, targetId, cadence, periodStart, periodEnd, targetMinutes, actualMinutes, gapMinutes, excessMinutes, completed) " +
+                "VALUES ('snapshot', 'deleted-target', 'WEEKLY', '2026-10-01', '2026-10-07', 120, 90, 30, 0, 0)",
+        )
+        legacy.close()
+
+        val migrated = migrationHelper.runMigrationsAndValidate(
+            databaseName,
+            4,
+            true,
+            AttentionDatabase.MIGRATION_3_4,
+        )
+        try {
+            migrated.query("SELECT stageId FROM period_snapshots WHERE id = 'snapshot'").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("", cursor.getString(0))
+            }
+        } finally {
+            migrated.close()
+            ApplicationProvider.getApplicationContext<Context>().deleteDatabase(databaseName)
+        }
     }
 
     private fun createLegacyDatabase(context: Context, version: Int, identityHash: String) {

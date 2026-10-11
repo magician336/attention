@@ -217,6 +217,7 @@ data class PeriodSnapshotEntity(
     val gapMinutes: Int,
     val excessMinutes: Int,
     val completed: Boolean,
+    val stageId: String = "",
 )
 
 @Entity(

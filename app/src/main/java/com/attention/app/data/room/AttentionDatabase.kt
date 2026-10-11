@@ -1,6 +1,8 @@
 package com.attention.app.data.room
 
 import android.content.Context
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
@@ -47,7 +49,7 @@ import com.attention.app.data.room.entity.TimeEntryEntity
         ExperienceEntity::class,
         ActiveTimerEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class AttentionDatabase : RoomDatabase() {
@@ -67,7 +69,13 @@ abstract class AttentionDatabase : RoomDatabase() {
 
     companion object {
         const val DATABASE_NAME = "attention.db"
-        const val DATABASE_VERSION = 3
+        const val DATABASE_VERSION = 4
+
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE period_snapshots ADD COLUMN stageId TEXT NOT NULL DEFAULT ''")
+            }
+        }
 
         fun create(context: Context): AttentionDatabase = Room.databaseBuilder(
             context.applicationContext,
@@ -77,6 +85,8 @@ abstract class AttentionDatabase : RoomDatabase() {
         // contract. Restrict the destructive fallback to the schema versions
         // created by the pre-release Room foundation instead of silently applying
         // it to an unknown future version.
-        ).fallbackToDestructiveMigrationFrom(true, 1, 2).build()
+        ).addMigrations(MIGRATION_3_4)
+            .fallbackToDestructiveMigrationFrom(true, 1, 2)
+            .build()
     }
 }

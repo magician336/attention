@@ -88,9 +88,33 @@ fun FutureGoalRule.toEntity() = FutureGoalRuleEntity(id, targetId, stageId.ifBla
 
 fun FutureGoalRuleEntity.toDomain() = FutureGoalRule(id, targetId, stageId.orEmpty(), GoalCadence.valueOf(cadence), targetMinutes, effectiveFrom, dueDate)
 
-fun PeriodSnapshot.toEntity() = PeriodSnapshotEntity(id, targetId, cadence.name, periodStart, periodEnd, targetMinutes, actualMinutes, gapMinutes, excessMinutes, completed)
+fun PeriodSnapshot.toEntity() = PeriodSnapshotEntity(
+    id = id,
+    targetId = targetId,
+    cadence = cadence.name,
+    periodStart = periodStart,
+    periodEnd = periodEnd,
+    targetMinutes = targetMinutes,
+    actualMinutes = actualMinutes,
+    gapMinutes = gapMinutes,
+    excessMinutes = excessMinutes,
+    completed = completed,
+    stageId = stageId,
+)
 
-fun PeriodSnapshotEntity.toDomain() = PeriodSnapshot(id, targetId, GoalCadence.valueOf(cadence), periodStart, periodEnd, targetMinutes, actualMinutes, gapMinutes, excessMinutes, completed)
+fun PeriodSnapshotEntity.toDomain() = PeriodSnapshot(
+    id = id,
+    targetId = targetId,
+    cadence = GoalCadence.valueOf(cadence),
+    periodStart = periodStart,
+    periodEnd = periodEnd,
+    targetMinutes = targetMinutes,
+    actualMinutes = actualMinutes,
+    gapMinutes = gapMinutes,
+    excessMinutes = excessMinutes,
+    completed = completed,
+    stageId = stageId,
+)
 
 fun TargetMove.toEntity() = TargetMoveEntity(id, targetId, parentId, effectiveFrom)
 
