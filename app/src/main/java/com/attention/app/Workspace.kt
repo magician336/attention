@@ -1107,10 +1107,7 @@ private fun AgendaScreen(
                             targetId = recurrenceTargetId,
                             reminderMinuteOfDay = parsedReminderMinute,
                         )
-                        viewModel.addRecurrence(rule)
-                        // Existing materialization remains the command boundary used by
-                        // the pre-T09 agenda flow; occurrence semantics are covered by T09.2.
-                        viewModel.materializeRecurrence(rule, LocalDate.parse(rule.startDate).plusDays(30))
+                        viewModel.addRecurrenceAndMaterialize(rule, LocalDate.parse(rule.startDate).plusDays(30))
                         recurrenceTitle = ""
                         recurrenceUntilDate = ""
                         recurrenceEstimatedMinutes = ""
