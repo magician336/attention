@@ -797,6 +797,30 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun recurrence_materialization_supports_daily_weekly_and_monthly_occurrences() {
+        val daily = AttentionState().addRecurrence(RecurrenceRule("d", "每日", date.toString(), ScheduleFrequency.DAILY))
+        assertEquals(3, daily.occurrences(daily.recurrenceRules.single(), date.plusDays(2)).size)
+        val weekly = AttentionState().addRecurrence(RecurrenceRule("w", "周一三", date.toString(), ScheduleFrequency.WEEKLY, weekdays = listOf(1, 3)))
+        assertEquals(listOf(1, 3), weekly.occurrences(weekly.recurrenceRules.single(), date.plusDays(7)).map { LocalDate.parse(it.planningDate).dayOfWeek.value })
+        val monthly = AttentionState().addRecurrence(RecurrenceRule("m", "月度", date.withDayOfMonth(1).toString(), ScheduleFrequency.MONTHLY, dayOfMonth = 8))
+        assertEquals(listOf("2026-10-08", "2026-11-08"), monthly.occurrences(monthly.recurrenceRules.single(), LocalDate.of(2026, 11, 30)).map { it.planningDate })
+    }
+
+    @Test
+    fun recurrence_materialization_is_idempotent_and_occurrences_edit_independently() {
+        val rule = RecurrenceRule("r", "复盘", date.toString(), ScheduleFrequency.DAILY)
+        val materialized = AttentionState().addRecurrenceAndMaterialize(rule, date.plusDays(2))
+        val retried = materialized.materializeOccurrences(rule, date.plusDays(2))
+        assertEquals(3, retried.schedules.size)
+        val first = retried.schedules.first()
+        val edited = retried.updateSchedule(first.copy(title = "已改", completed = true))
+        assertEquals("已改", edited.schedules.first { it.id == first.id }.title)
+        assertTrue(edited.schedules.first { it.id == first.id }.completed)
+        assertTrue(edited.schedules.drop(1).all { it.title == "复盘" && !it.completed })
+        assertEquals(3, edited.schedules.map { it.id }.toSet().size)
+    }
+
+    @Test
     fun recurring_reminder_is_calculated_for_each_occurrence() {
         val rule = RecurrenceRule(
             title = "提醒",
