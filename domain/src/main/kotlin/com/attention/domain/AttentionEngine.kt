@@ -372,6 +372,7 @@ fun AttentionState.deleteTargetRelations(targetIds: Set<String>): AttentionState
     return copy(
         targets = targets.filterNot { it.id in ids },
         goalStages = goalStages.filterNot { it.targetId in ids },
+        recurrenceRules = recurrenceRules.map { if (it.targetId in ids) it.copy(targetId = null) else it },
         timeEntries = timeEntries.map { if (it.targetId in ids) it.copy(targetId = null) else it },
         schedules = schedules.map { if (it.targetId in ids) it.copy(targetId = null) else it },
         migrations = migrations.filterNot { it.targetId in ids || it.sourceStageId in deletedStageIds },

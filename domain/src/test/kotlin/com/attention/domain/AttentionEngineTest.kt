@@ -2202,4 +2202,44 @@ class AttentionEngineTest {
             scheduled.updateFutureTargetMove(move.copy(effectiveFrom = date.plusDays(2).toString()), date.plusDays(1))
         }
     }
+    @Test
+    fun batch_deletion_deduplicates_parent_and_child_and_cleans_all_target_relations() {
+        val parent = Target("batch-parent", title = "批量父目标")
+        val child = Target("batch-child", parentId = parent.id, title = "批量子目标")
+        val survivor = Target("batch-survivor", title = "保留目标")
+        val stage = GoalStage("batch-stage", child.id, GoalCadence.ONE_TIME, 10, date.toString())
+        val state = AttentionState(
+            targets = listOf(parent, child, survivor),
+            goalStages = listOf(stage),
+            timeEntries = listOf(
+                TimeEntry("batch-time", date.toString(), 10, child.id),
+                TimeEntry("survivor-time", date.toString(), 5, survivor.id),
+            ),
+            schedules = listOf(
+                ScheduleEntry("batch-schedule", date.toString(), "批量日程", targetId = child.id),
+                ScheduleEntry("survivor-schedule", date.toString(), "保留日程", targetId = survivor.id),
+            ),
+            recurrenceRules = listOf(
+                RecurrenceRule("batch-rule", "批量重复", date.toString(), ScheduleFrequency.DAILY, targetId = child.id),
+                RecurrenceRule("survivor-rule", "保留重复", date.toString(), ScheduleFrequency.DAILY, targetId = survivor.id),
+            ),
+            activeTimer = ActiveTimer(child.id, 0L, lastPlanningDate = date.toString()),
+        ).awardEligibleMilestones(date)
+
+        val deleted = state.deleteTargetRelations(setOf(parent.id, child.id))
+
+        assertEquals(listOf(survivor), deleted.targets)
+        assertEquals(listOf("batch-time", "survivor-time"), deleted.timeEntries.map { it.id })
+        assertNull(deleted.timeEntries.first().targetId)
+        assertEquals(survivor.id, deleted.timeEntries.last().targetId)
+        assertEquals(listOf("batch-schedule", "survivor-schedule"), deleted.schedules.map { it.id })
+        assertNull(deleted.schedules.first().targetId)
+        assertEquals(listOf("batch-rule", "survivor-rule"), deleted.recurrenceRules.map { it.id })
+        assertNull(deleted.recurrenceRules.first().targetId)
+        assertTrue(deleted.goalStages.isEmpty())
+        assertNull(deleted.activeTimer?.targetId)
+        assertEquals(state.milestones, deleted.milestones)
+        assertTrue(deleted.experience >= deleted.milestones.sumOf { it.reward })
+    }
+
 }
