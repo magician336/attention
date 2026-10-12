@@ -1,5 +1,6 @@
 package com.attention.app.timer
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,9 +8,12 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import com.attention.app.MainActivity
 import com.attention.app.data.RoomAttentionStateRepository
 import com.attention.app.data.backup.FileImportBackupStore
@@ -107,6 +111,12 @@ class AttentionTimerService : Service() {
     }
 
     private fun notifyState(state: AttentionState) {
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
         runCatching {
             NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, notification(state))
         }
