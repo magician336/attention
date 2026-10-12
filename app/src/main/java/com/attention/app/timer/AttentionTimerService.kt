@@ -195,7 +195,10 @@ class AttentionTimerService : Service() {
         fun intent(context: Context): Intent = Intent(context, AttentionTimerService::class.java)
 
         /** Stable, testable projection used by the Android notification adapter. */
-        internal fun notificationContent(state: AttentionState?): TimerNotificationContent {
+        internal fun notificationContent(
+            state: AttentionState?,
+            now: Instant = Instant.now(),
+        ): TimerNotificationContent {
             val timer = state?.activeTimer ?: return TimerNotificationContent(
                 title = "Attention 计时器",
                 text = "等待计时器状态",
@@ -204,12 +207,22 @@ class AttentionTimerService : Service() {
             )
             val target = state.timerTargetLabel(timer.targetId)
             val status = if (timer.paused) "已暂停" else "正在计时"
+            val elapsedMillis = if (timer.paused) {
+                timer.accumulatedMillis
+            } else {
+                timer.accumulatedMillis + (now.toEpochMilli() - timer.startedAtEpochMillis).coerceAtLeast(0)
+            }
             return TimerNotificationContent(
                 title = "Attention $status",
-                text = "目标 $target · $status",
+                text = "目标 $target · $status · 时长 ${formatElapsed(elapsedMillis)}",
                 active = true,
                 paused = timer.paused,
             )
+        }
+
+        private fun formatElapsed(elapsedMillis: Long): String {
+            val totalMinutes = (elapsedMillis.coerceAtLeast(0) / 60_000L).toInt()
+            return "%02d:%02d".format(totalMinutes / 60, totalMinutes % 60)
         }
     }
 }
