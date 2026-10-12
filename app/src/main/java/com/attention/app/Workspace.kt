@@ -918,7 +918,7 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                             },
                         )
                         Text(target.title, Modifier.weight(1f))
-                        TextButton(onClick = { viewModel.restoreTarget(target.id) }) { Text("恢复") }
+                        TextButton(onClick = { viewModel.restoreTargets(setOf(target.id)) }) { Text("恢复") }
                         TextButton(onClick = { pendingDelete = target }) { Text("安全删除") }
                     }
                     Text("层级：${state.targetPath(target.id)}", modifier = Modifier.padding(start = 16.dp))
