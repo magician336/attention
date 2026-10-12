@@ -7,16 +7,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.attention.app.data.room.AttentionDatabase
-import com.attention.app.data.room.RoomBusinessDataRepository
-import com.attention.domain.AttentionState
-import com.attention.domain.addTarget
-import com.attention.domain.addTimeEntry
-import com.attention.domain.planningDate
-import java.time.Instant
-import kotlinx.coroutines.runBlocking
 import org.junit.BeforeClass
 import org.junit.Rule
 import org.junit.Test
@@ -34,21 +25,7 @@ class WorkspaceExperienceIntegrationTest {
         @JvmStatic
         @BeforeClass
         fun seedExperienceBeforeActivityStarts() {
-            val planningDate = AttentionState().planningDate(Instant.now())
-            val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-            val database = AttentionDatabase.create(context)
-            try {
-                runBlocking {
-                    val withTarget = AttentionState().addTarget(TARGET_TITLE)
-                    val target = withTarget.targets.single()
-                    val state = withTarget
-                        .copy(targets = listOf(target.copy(id = TARGET_ID)))
-                        .addTimeEntry(planningDate.toString(), 15, TARGET_ID)
-                    RoomBusinessDataRepository(database).replace(state)
-                }
-            } finally {
-                database.close()
-            }
+            WorkspaceExperienceFixture.seed(TARGET_ID, TARGET_TITLE, 15)
         }
     }
 

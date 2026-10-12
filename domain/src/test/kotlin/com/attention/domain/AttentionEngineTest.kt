@@ -1345,6 +1345,27 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun stopping_a_timer_uses_the_same_milestone_award_path_as_ui_and_notification_stops() {
+        val target = Target("stop-award-target", title = "计时目标")
+        val state = AttentionState(
+            targets = listOf(target),
+            goalStages = listOf(GoalStage("stop-award-stage", target.id, GoalCadence.ONE_TIME, 30, date.toString())),
+            timeEntries = listOf(TimeEntry("stop-award-entry", date.toString(), 30, target.id)),
+            activeTimer = ActiveTimer(
+                targetId = target.id,
+                startedAtEpochMillis = 0,
+                paused = true,
+                lastPlanningDate = date.toString(),
+            ),
+        )
+
+        val stopped = state.stopTimerAndAwardEligibleMilestones(date.atStartOfDay(utc).toInstant(), utc)
+
+        assertEquals(1, stopped.state.milestones.count { it.kind == "one_time_goal" })
+        assertEquals(10_030L, stopped.state.experience)
+    }
+
+    @Test
     fun editing_time_entry_preserves_planning_date_and_source() {
         val state = AttentionState().addTarget("学习")
         val target = state.targets.single()
