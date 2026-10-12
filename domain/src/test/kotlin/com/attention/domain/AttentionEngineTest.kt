@@ -1709,6 +1709,21 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun restoring_archived_descendant_also_restores_archived_ancestors() {
+        val initial = AttentionState().addTarget("父目标")
+        val parent = initial.targets.single()
+        val withChild = initial.addTarget("子目标", parent.id)
+        val child = withChild.targets.single { it.parentId == parent.id }
+        val archived = withChild.archiveTarget(parent.id).archiveTarget(child.id)
+
+        val restored = archived.restoreTargets(setOf(child.id))
+
+        assertFalse(restored.targets.single { it.id == child.id }.archived)
+        assertFalse(restored.targets.single { it.id == parent.id }.archived)
+        assertEquals(listOf(child.id), restored.targetChildren(parent.id).map { it.id })
+    }
+
+    @Test
     fun batch_assignment_is_atomic_for_stale_or_already_owned_ids() {
         val state = AttentionState().addTarget("学习")
         val target = state.targets.single()

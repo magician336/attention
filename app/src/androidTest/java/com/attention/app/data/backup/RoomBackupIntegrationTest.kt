@@ -497,6 +497,47 @@ class RoomBackupIntegrationTest {
     }
 
     @Test
+    fun deleted_target_relations_survive_backup_restore_after_room_reopen() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val sourceName = "attention-delete-backup-source-${System.nanoTime()}.db"
+        val restoredName = "attention-delete-backup-restored-${System.nanoTime()}.db"
+        val target = Target("deleted-reopen-target", title = "待删除目标", archived = true)
+        val sourceState = AttentionState(
+            targets = listOf(target),
+            timeEntries = listOf(TimeEntry("deleted-reopen-time", "2026-10-12", 45, target.id)),
+            schedules = listOf(ScheduleEntry("deleted-reopen-schedule", "2026-10-12", "保留日程", targetId = target.id, recurrenceRuleId = "deleted-reopen-rule")),
+            recurrenceRules = listOf(RecurrenceRule("deleted-reopen-rule", "保留重复日程", "2026-10-12", ScheduleFrequency.DAILY, targetId = target.id)),
+            milestones = listOf(Milestone("deleted-reopen-milestone", "cumulative", "total:1", 35L, 12L)),
+        )
+        try {
+            val sourceDatabase = Room.databaseBuilder(context, AttentionDatabase::class.java, sourceName).build()
+            val sourceRepository = RoomAttentionStateRepository(RoomBusinessDataRepository(sourceDatabase), settingsStore())
+            sourceRepository.replace(sourceState)
+            RoomBusinessDataRepository(sourceDatabase).deleteTargetRelations(setOf(target.id))
+            val backup = sourceRepository.exportJson()
+            sourceDatabase.close()
+
+            val restoreDatabase = Room.databaseBuilder(context, AttentionDatabase::class.java, restoredName).build()
+            val restoreRepository = RoomAttentionStateRepository(RoomBusinessDataRepository(restoreDatabase), settingsStore())
+            val restored = restoreRepository.importJson(backup, clearExisting = true)
+            restoreDatabase.close()
+
+            val reopenedDatabase = Room.databaseBuilder(context, AttentionDatabase::class.java, restoredName).build()
+            val afterReopen = RoomBusinessDataRepository(reopenedDatabase).read()
+            assertTrue(afterReopen.targets.isEmpty())
+            assertEquals(null, afterReopen.timeEntries.single().targetId)
+            assertEquals(null, afterReopen.schedules.single().targetId)
+            assertEquals(null, afterReopen.recurrenceRules.single().targetId)
+            assertEquals(restored.milestones, afterReopen.milestones)
+            assertEquals(restored.experience, afterReopen.experience)
+            reopenedDatabase.close()
+        } finally {
+            context.deleteDatabase(sourceName)
+            context.deleteDatabase(restoredName)
+        }
+    }
+
+    @Test
     fun archived_history_and_rewards_survive_room_restart_after_backup_restore() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val databaseName = "attention-backup-restart-${System.nanoTime()}.db"

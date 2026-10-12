@@ -345,8 +345,21 @@ fun AttentionState.archiveTarget(targetId: String, archived: Boolean = true): At
 fun AttentionState.restoreTargets(targetIds: Set<String>): AttentionState {
     if (targetIds.isEmpty()) return this
     require(targetIds.all { id -> targets.any { it.id == id } }) { "目标不存在" }
+    // A restored descendant must remain reachable from the default tree. Restore
+    // any archived ancestors along its parent chain as part of the same action.
+    val idsToRestore = targetIds.toMutableSet()
+    var changed = true
+    while (changed) {
+        changed = false
+        targets.filter { it.id in idsToRestore }.forEach { target ->
+            val parentId = target.parentId
+            if (parentId != null && targets.any { it.id == parentId && it.archived }) {
+                changed = idsToRestore.add(parentId) || changed
+            }
+        }
+    }
     return copy(targets = targets.map { target ->
-        if (target.id in targetIds) target.copy(archived = false) else target
+        if (target.id in idsToRestore) target.copy(archived = false) else target
     })
 }
 
