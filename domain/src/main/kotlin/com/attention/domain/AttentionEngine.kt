@@ -864,6 +864,15 @@ fun AttentionState.stopTimer(now: Instant, zone: ZoneId = ZoneId.systemDefault()
     return TimerResult(copy(activeTimer = null, timeEntries = timeEntries + entries).recalculateExperience(), entries)
 }
 
+/** Stops the active timer and evaluates milestone eligibility at the stop instant. */
+fun AttentionState.stopTimerAndAwardEligibleMilestones(
+    now: Instant,
+    zone: ZoneId = ZoneId.systemDefault(),
+): TimerResult {
+    val stopped = stopTimer(now, zone)
+    return stopped.copy(state = stopped.state.awardEligibleMilestones(now.atZone(zone).toLocalDate()))
+}
+
 private fun splitTimerSegments(segments: List<TimerSegment>, targetId: String?, boundaryMinutes: Int, zone: ZoneId): List<TimeEntry> {
     val buckets = linkedMapOf<LocalDate, Long>()
     segments.sortedBy { it.startedAtEpochMillis }.forEach { segment ->

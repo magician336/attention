@@ -28,19 +28,47 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class AttentionViewModelTest {
     @Test
-    fun editing_a_historical_entry_awards_newly_eligible_stage_feedback() = runTest {
+    fun editing_a_historical_entry_does_not_award_a_future_stage_milestone() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         Dispatchers.setMain(dispatcher)
         try {
-            val date = LocalDate.now(ZoneOffset.UTC)
+            val date = LocalDate.of(2026, 10, 8)
             val target = Target("view-model-target", title = "阶段目标")
             val repository = FakeRepository(
                 AttentionState(
                     targets = listOf(target),
-                    goalStages = listOf(GoalStage("view-model-stage", target.id, GoalCadence.ONE_TIME, 30, date.minusDays(2).toString())),
+                    goalStages = listOf(GoalStage("view-model-stage", target.id, GoalCadence.ONE_TIME, 30, date.toString())),
                     timeEntries = listOf(
-                        TimeEntry("historical-entry", date.minusDays(2).toString(), 10),
-                        TimeEntry("later-entry", date.minusDays(1).toString(), 20, target.id),
+                        TimeEntry("historical-entry", date.toString(), 10),
+                        TimeEntry("later-entry", date.plusDays(1).toString(), 20, target.id),
+                    ),
+                ),
+            )
+            val viewModel = AttentionViewModel(repository, ZoneOffset.UTC)
+
+            viewModel.editTime("historical-entry", 10, target.id)
+            advanceUntilIdle()
+
+            assertEquals(0, repository.state.value.milestones.count { it.kind == "one_time_goal" })
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun editing_historical_entry_awards_stage_feedback_on_the_entry_date() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val date = LocalDate.of(2026, 10, 8)
+            val target = Target("view-model-same-day-target", title = "阶段目标")
+            val repository = FakeRepository(
+                AttentionState(
+                    targets = listOf(target),
+                    goalStages = listOf(GoalStage("view-model-same-day-stage", target.id, GoalCadence.ONE_TIME, 30, date.toString())),
+                    timeEntries = listOf(
+                        TimeEntry("historical-entry", date.toString(), 10),
+                        TimeEntry("same-day-entry", date.toString(), 20, target.id),
                     ),
                 ),
             )

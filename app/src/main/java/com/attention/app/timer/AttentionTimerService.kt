@@ -19,7 +19,7 @@ import com.attention.app.data.settings.createSettingsStore
 import com.attention.domain.AttentionState
 import com.attention.domain.pauseTimer
 import com.attention.domain.resumeTimer
-import com.attention.domain.stopTimer
+import com.attention.domain.stopTimerAndAwardEligibleMilestones
 import java.time.Instant
 import java.time.ZoneId
 import kotlinx.coroutines.CoroutineScope
@@ -52,7 +52,7 @@ class AttentionTimerService : Service() {
                 ACTION_PAUSE -> repository.updateBusiness { it.pauseTimer(Instant.now()) }
                 ACTION_RESUME -> repository.updateBusiness { it.resumeTimer(Instant.now()) }
                 ACTION_STOP -> {
-                    repository.updateBusiness { it.stopTimer(Instant.now(), ZoneId.systemDefault()).state }
+                    repository.updateBusiness { it.stopTimerAndAwardEligibleMilestones(Instant.now(), ZoneId.systemDefault()).state }
                     stopSelfResult(startId)
                 }
             }

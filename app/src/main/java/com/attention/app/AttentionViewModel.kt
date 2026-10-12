@@ -32,7 +32,7 @@ import com.attention.domain.renameTarget
 import com.attention.domain.recoverTimer
 import com.attention.domain.resumeTimer
 import com.attention.domain.startTimer
-import com.attention.domain.stopTimer
+import com.attention.domain.stopTimerAndAwardEligibleMilestones
 import com.attention.domain.stopRecurrence
 import com.attention.domain.updateSchedule
 import com.attention.domain.toggleScheduleCompleted
@@ -105,7 +105,8 @@ class AttentionViewModel(
     fun editTime(id: String, minutes: Int, targetId: String?, note: String = "") =
         runCommand {
             val edited = it.editTimeEntry(id, minutes, targetId, note)
-            edited.awardEligibleMilestones(LocalDate.now(zone))
+            val planningDate = edited.timeEntries.single { entry -> entry.id == id }.planningDate
+            edited.awardEligibleMilestones(LocalDate.parse(planningDate))
         }
 
     fun deleteTime(id: String) = runCommand { it.deleteTimeEntry(id) }
@@ -174,7 +175,7 @@ class AttentionViewModel(
     fun recoverTimer() = runCommand { it.recoverTimer(Instant.now()) }
     fun stopTimer() = scope.launch {
         runCatching {
-            repository.updateBusiness { current -> current.stopTimer(Instant.now(), zone).state.awardEligibleMilestones(LocalDate.now(zone)) }
+            repository.updateBusiness { current -> current.stopTimerAndAwardEligibleMilestones(Instant.now(), zone).state }
         }.onFailure { _error.value = it.message ?: "无法结束计时" }
     }
 
