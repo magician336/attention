@@ -211,7 +211,7 @@ object AttentionBackupCodec {
         state.timeEntries.forEach { entry ->
             date(entry.planningDate)
             require(entry.durationMinutes > 0) { "时间记录时长必须为正数" }
-            require(entry.targetId == null || state.targets.any { it.id == entry.targetId && !it.archived }) { "时间记录目标不存在或已归档" }
+            require(entry.targetId == null || entry.targetId in targets) { "时间记录目标不存在" }
         }
         val rules = state.recurrenceRules.map { it.id }.toSet()
         state.schedules.forEach { entry ->
@@ -234,7 +234,7 @@ object AttentionBackupCodec {
             val estimate = rule.estimatedMinutes
             require(estimate == null || estimate > 0) { "重复规则预计时长必须为正数" }
             require(rule.reminderMinuteOfDay == null || rule.reminderMinuteOfDay in 0 until 1440) { "重复规则提醒时间无效" }
-            require(rule.targetId == null || state.targets.any { it.id == rule.targetId && !it.archived }) { "重复规则目标不存在或已归档" }
+            require(rule.targetId == null || rule.targetId in targets) { "重复规则目标不存在" }
             when (rule.frequency) {
                 com.attention.domain.ScheduleFrequency.DAILY -> require(rule.weekdays.isEmpty() && rule.dayOfMonth == null) { "每日规则参数无效" }
                 com.attention.domain.ScheduleFrequency.WEEKLY -> require(rule.weekdays.isNotEmpty() && rule.weekdays.all { it in 1..7 } && rule.dayOfMonth == null) { "每周规则参数无效" }
@@ -260,6 +260,9 @@ object AttentionBackupCodec {
         state.periodSnapshots.forEach { snapshot ->
             require(snapshot.targetId in targets) { "周期快照目标不存在" }
             require(snapshot.stageId.isBlank() || snapshot.stageId in stages) { "周期快照阶段不存在" }
+            require(snapshot.stageId.isBlank() || state.goalStages.first { it.id == snapshot.stageId }.targetId == snapshot.targetId) {
+                "周期快照阶段与目标不匹配"
+            }
             require(!date(snapshot.periodEnd).isBefore(date(snapshot.periodStart))) { "周期快照日期无效" }
         }
         state.targetMoves.forEach { move ->
@@ -268,10 +271,9 @@ object AttentionBackupCodec {
             require(move.parentId != move.targetId) { "目标移动不能指向自身" }
             date(move.effectiveFrom)
         }
-        // Older backups may contain timer context captured before its target
-        // row was materialized; retain that round-trip when the backup has no
-        // targets at all, while rejecting references in a populated graph.
-        if (state.targets.isNotEmpty()) state.validateActiveTimerTarget()
+        val timerTargetId = state.activeTimer?.targetId
+        require(timerTargetId == null || state.targets.any { it.id == timerTargetId }) { "活动计时器目标不存在" }
+        state.validateActiveTimerTarget()
     }
 
     /**

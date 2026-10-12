@@ -72,6 +72,38 @@ class AttentionBackupCodecTest {
     }
 
     @Test
+    fun decoder_rejects_active_timer_target_when_target_row_is_missing() {
+        val invalid = AttentionState(activeTimer = ActiveTimer("missing", 1L, lastPlanningDate = "2026-10-01"))
+        assertThrows(IllegalArgumentException::class.java) {
+            AttentionBackupCodec.decode(AttentionBackupCodec.encode(invalid))
+        }
+    }
+
+    @Test
+    fun decoder_rejects_period_snapshot_stage_owned_by_another_target() {
+        val encoded = AttentionBackupCodec.encode(
+            AttentionState(
+                targets = listOf(Target("a", title = "A"), Target("b", title = "B")),
+                goalStages = listOf(GoalStage("stage", "a", GoalCadence.WEEKLY, 10, "2026-10-01")),
+                periodSnapshots = listOf(PeriodSnapshot("snapshot", "b", GoalCadence.WEEKLY, "2026-10-01", "2026-10-07", 10, 0, 10, 0, false, stageId = "stage")),
+            ),
+        )
+        assertThrows(IllegalArgumentException::class.java) { AttentionBackupCodec.decode(encoded) }
+    }
+
+    @Test
+    fun archived_target_history_round_trips_without_dropping_references() {
+        val archived = Target("archived", title = "已归档", archived = true)
+        val expected = AttentionState(
+            targets = listOf(archived),
+            timeEntries = listOf(TimeEntry("entry", "2026-10-01", 15, archived.id)),
+            recurrenceRules = listOf(RecurrenceRule("rule", "历史规则", "2026-10-01", ScheduleFrequency.DAILY, targetId = archived.id)),
+            experience = 15L,
+        )
+        assertEquals(expected, AttentionBackupCodec.decode(AttentionBackupCodec.encode(expected)))
+    }
+
+    @Test
     fun preview_reports_missing_settings_field() {
         val encoded = """{"version":1,"targets":[],"goalStages":[],"timeEntries":[],"schedules":[],"recurrenceRules":[],"migrations":[],"futureGoalRules":[],"periodSnapshots":[],"targetMoves":[],"milestones":[],"experience":0,"activeTimer":null,"onboardingCompleted":false,"launchDestination":"TODAY","lastOpenedDestination":"TODAY","notificationsEnabled":true}"""
         assertFalse(AttentionBackupCodec.preview(encoded).hasSettings)
@@ -372,9 +404,11 @@ class AttentionBackupCodecTest {
 
     @Test
     fun backup_round_trip_preserves_running_timer_context() {
+        val target = Target("target", title = "计时目标")
         val expected = AttentionState(
+            targets = listOf(target),
             activeTimer = ActiveTimer(
-                targetId = "target",
+                targetId = target.id,
                 startedAtEpochMillis = 2_000L,
                 accumulatedMillis = 60_000L,
                 paused = false,
