@@ -139,6 +139,34 @@ class AttentionViewModelTest {
         }
     }
 
+    @Test
+    fun time_entry_csv_export_uses_one_state_snapshot_and_reports_csv() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val target = Target("csv-target", title = "学习")
+            val repository = FakeRepository(
+                AttentionState(
+                    targets = listOf(target),
+                    timeEntries = listOf(TimeEntry("csv-entry", "2026-10-08", 45, target.id, note = "带,逗号")),
+                ),
+            )
+            val viewModel = AttentionViewModel(repository, ZoneOffset.UTC)
+            var exported: String? = null
+
+            viewModel.exportTimeEntriesCsv { exported = it }
+            advanceUntilIdle()
+
+            assertEquals(
+                "\uFEFFplanning_date,duration_minutes,target_id,target_title,source,note\n" +
+                    "2026-10-08,45,csv-target,学习,MANUAL,\"带,逗号\"\n",
+                exported,
+            )
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
     private class FakeRepository(initial: AttentionState) : AttentionStateRepository {
         private val values = MutableStateFlow(initial)
         override val state: StateFlow<AttentionState> = values
