@@ -78,6 +78,7 @@ import com.attention.domain.ScheduleFrequency
 import com.attention.domain.RecurrenceRule
 import com.attention.domain.StoredSettings
 import com.attention.domain.Target
+import com.attention.domain.targetDeletionImpact
 import com.attention.domain.TargetMove
 import com.attention.domain.TimeEntry
 import com.attention.domain.capacitySummary
@@ -942,12 +943,18 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
         }
     }
     pendingDelete?.let { target ->
-        val affectedTime = state.timeEntries.count { it.targetId in state.descendantIds(target.id) }
-        val affectedSchedules = state.schedules.count { it.targetId in state.descendantIds(target.id) }
+        val impact = state.targetDeletionImpact(setOf(target.id))
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { pendingDelete = null },
             title = { Text("删除目标关系？") },
-            text = { Text("将移除目标树关系，保留 $affectedTime 条时间记录并解除 $affectedSchedules 条日程的目标关联。历史经验和里程碑保留。") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("将删除所选目标及其后代，共 ${impact.targetCount} 个目标。")
+                    Text("影响：时间记录 ${impact.timeEntryCount} 条，日程 ${impact.scheduleEntryCount} 条，重复日程 ${impact.recurrenceRuleCount} 条。")
+                    Text("目标阶段 ${impact.goalStageCount} 个，未来规则 ${impact.futureGoalRuleCount} 条，迁移 ${impact.migrationCount} 条，未来移动 ${impact.targetMoveCount} 条。")
+                    Text("活动计时器 ${impact.activeTimerCount} 个。时间记录会转为未归属活动，日程保留但解除目标关联。投入经验和里程碑保留。")
+                }
+            },
             confirmButton = { TextButton(onClick = { viewModel.deleteTargetRelations(setOf(target.id)); pendingDelete = null }) { Text("确认删除") } },
             dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } },
         )

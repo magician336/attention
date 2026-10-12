@@ -186,6 +186,19 @@ data class AttentionState(
     val notificationsEnabled: Boolean = true,
 )
 
+/** Counts the records affected by removing a target subtree. */
+data class TargetDeletionImpact(
+    val targetCount: Int,
+    val timeEntryCount: Int,
+    val scheduleEntryCount: Int,
+    val recurrenceRuleCount: Int,
+    val goalStageCount: Int,
+    val futureGoalRuleCount: Int,
+    val migrationCount: Int,
+    val targetMoveCount: Int,
+    val activeTimerCount: Int,
+)
+
 fun newId(): String = UUID.randomUUID().toString()
 
 data class GoalProgress(

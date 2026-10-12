@@ -1866,6 +1866,35 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun deletion_impact_deduplicates_selected_parent_and_child_subtrees() {
+        val parent = Target("parent", title = "父")
+        val child = Target("child", parentId = parent.id, title = "子")
+        val state = AttentionState(
+            targets = listOf(parent, child),
+            timeEntries = listOf(TimeEntry("time", date.toString(), 10, child.id)),
+            schedules = listOf(ScheduleEntry("schedule", date.toString(), "安排", targetId = child.id)),
+            recurrenceRules = listOf(RecurrenceRule("rule", "重复", date.toString(), ScheduleFrequency.DAILY, targetId = child.id)),
+            goalStages = listOf(GoalStage("stage", child.id, GoalCadence.DAILY, 10, date.toString())),
+            futureGoalRules = listOf(FutureGoalRule("future", targetId = child.id, cadence = GoalCadence.DAILY, targetMinutes = 10, effectiveFrom = date.toString())),
+            migrations = listOf(Migration("migration", child.id, "stage", 5, date.toString(), date.toString())),
+            targetMoves = listOf(TargetMove("move", child.id, parent.id, date.toString())),
+            activeTimer = ActiveTimer(child.id, 0L, lastPlanningDate = date.toString()),
+        )
+
+        val impact = state.targetDeletionImpact(setOf(parent.id, child.id))
+
+        assertEquals(2, impact.targetCount)
+        assertEquals(1, impact.timeEntryCount)
+        assertEquals(1, impact.scheduleEntryCount)
+        assertEquals(1, impact.recurrenceRuleCount)
+        assertEquals(1, impact.goalStageCount)
+        assertEquals(1, impact.futureGoalRuleCount)
+        assertEquals(1, impact.migrationCount)
+        assertEquals(1, impact.targetMoveCount)
+        assertEquals(1, impact.activeTimerCount)
+    }
+
+    @Test
     fun recent_milestones_are_sorted_and_limited_without_duplicates() {
         val state = AttentionState(
             milestones = listOf(
