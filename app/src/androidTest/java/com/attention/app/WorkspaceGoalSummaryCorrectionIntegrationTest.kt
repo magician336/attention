@@ -68,12 +68,12 @@ class WorkspaceGoalSummaryCorrectionIntegrationTest {
     @Test
     fun summary_refreshes_after_edit_assignment_and_delete() {
         openTargetDetails()
-        composeRule.onAllNodesWithText("一次性阶段汇总：实际 10/30 分钟", substring = true).assertCountEquals(2)
+        assertSummary(10)
 
         composeRule.onNodeWithText("全选").performClick()
         composeRule.onNodeWithText("归入当前计划").performClick()
         composeRule.waitForIdle()
-        composeRule.onAllNodesWithText("一次性阶段汇总：实际 15/30 分钟", substring = true).assertCountEquals(2)
+        assertSummary(15)
 
         composeRule.onNode(hasText("今天") and hasClickAction()).performClick()
         composeRule.waitForIdle()
@@ -82,14 +82,22 @@ class WorkspaceGoalSummaryCorrectionIntegrationTest {
         composeRule.onNodeWithTag("save-time-$OWNED_ENTRY_ID").performClick()
         composeRule.waitForIdle()
         openTargetDetails()
-        composeRule.onAllNodesWithText("一次性阶段汇总：实际 25/30 分钟", substring = true).assertCountEquals(2)
+        assertSummary(25)
 
         composeRule.onNode(hasText("今天") and hasClickAction()).performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("delete-time-$OWNED_ENTRY_ID").performScrollTo().performClick()
         composeRule.waitForIdle()
         openTargetDetails()
-        composeRule.onAllNodesWithText("一次性阶段汇总：实际 5/30 分钟", substring = true).assertCountEquals(2)
+        assertSummary(5)
+    }
+
+    private fun assertSummary(actualMinutes: Int) {
+        val summary = "一次性阶段汇总：实际 $actualMinutes/30 分钟"
+        composeRule.waitUntil(5_000) {
+            composeRule.onAllNodesWithText(summary, substring = true).fetchSemanticsNodes().size == 2
+        }
+        composeRule.onAllNodesWithText(summary, substring = true).assertCountEquals(2)
     }
 
     private fun openTargetDetails() {

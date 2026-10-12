@@ -10,6 +10,7 @@ import com.attention.domain.StoredSettings
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.Target
 import com.attention.domain.TimeEntry
+import com.attention.domain.planningDate
 import com.attention.domain.toggleScheduleCompleted
 import java.time.LocalDate
 import java.time.Instant
@@ -62,7 +63,7 @@ class AttentionViewModelTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         Dispatchers.setMain(dispatcher)
         try {
-            val date = LocalDate.now(ZoneOffset.UTC)
+            val date = AttentionState().planningDate(Instant.now(), ZoneOffset.UTC)
             val target = Target("switch-target", title = "阶段目标")
             val repository = FakeRepository(
                 AttentionState(
@@ -70,7 +71,7 @@ class AttentionViewModelTest {
                     goalStages = listOf(GoalStage("switch-stage", target.id, GoalCadence.ONE_TIME, 1, date.toString())),
                     activeTimer = ActiveTimer(
                         targetId = target.id,
-                        startedAtEpochMillis = Instant.now().minusSeconds(60).toEpochMilli(),
+                        startedAtEpochMillis = Instant.now().minusSeconds(120).toEpochMilli(),
                         lastPlanningDate = date.toString(),
                     ),
                 ),
