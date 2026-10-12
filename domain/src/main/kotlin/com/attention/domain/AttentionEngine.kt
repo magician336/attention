@@ -248,6 +248,24 @@ fun AttentionState.validTarget(targetId: String?): Boolean = targetId == null ||
 private fun AttentionState.validRecordTarget(targetId: String?): Boolean =
     targetId == null || targets.any { it.id == targetId && !it.archived }
 
+/**
+ * Validates the domain invariant shared by imported and persisted timer state.
+ * Adapters call this pure function before replacing their storage rows.
+ */
+fun AttentionState.validateActiveTimerTarget() {
+    val timerTargetId = activeTimer?.targetId ?: return
+    val target = targets.singleOrNull { it.id == timerTargetId }
+        ?: error("活动计时器目标不存在")
+    require(!target.archived) { "活动计时器不能归入归档目标" }
+}
+
+/** Stable label used by every timer projection, including unowned activity. */
+fun AttentionState.timerTargetLabel(targetId: String?): String =
+    targetId
+        ?.let { id -> targets.firstOrNull { it.id == id }?.title }
+        ?.takeIf(String::isNotBlank)
+        ?: "未归属活动"
+
 fun AttentionState.addTarget(title: String, parentId: String? = null): AttentionState {
     require(title.isNotBlank())
     require(parentId == null || targets.any { it.id == parentId })
@@ -286,9 +304,17 @@ fun AttentionState.reorderTarget(targetId: String, newIndex: Int): AttentionStat
     return copy(targets = targets.map { item -> order[item.id]?.let { item.copy(sortOrder = it) } ?: item })
 }
 
-fun AttentionState.archiveTarget(targetId: String, archived: Boolean = true): AttentionState = copy(
-    targets = targets.map { if (it.id == targetId) it.copy(archived = archived) else it },
-)
+fun AttentionState.archiveTarget(targetId: String, archived: Boolean = true): AttentionState {
+    val nextTimer = if (archived && activeTimer?.targetId == targetId) {
+        activeTimer.copy(targetId = null)
+    } else {
+        activeTimer
+    }
+    return copy(
+        targets = targets.map { if (it.id == targetId) it.copy(archived = archived) else it },
+        activeTimer = nextTimer,
+    )
+}
 
 fun AttentionState.deleteTargetRelations(targetIds: Set<String>): AttentionState {
     val ids = targetIds.flatMap(::descendantIds).toSet()
@@ -302,6 +328,9 @@ fun AttentionState.deleteTargetRelations(targetIds: Set<String>): AttentionState
         targetMoves = targetMoves
             .filterNot { it.targetId in ids }
             .map { move -> if (move.parentId != null && move.parentId in ids) move.copy(parentId = null) else move },
+        activeTimer = activeTimer?.let { timer ->
+            if (timer.targetId in ids) timer.copy(targetId = null) else timer
+        },
     ).recalculateExperience()
 }
 
@@ -820,12 +849,14 @@ fun AttentionState.addRecurrenceAndMaterialize(
 
 fun AttentionState.startTimer(targetId: String?, now: Instant, zone: ZoneId = ZoneId.systemDefault()): AttentionState {
     require(validRecordTarget(targetId)) { "计时只能归入未归档目标" }
-    require(activeTimer == null)
+    require(activeTimer == null) { "已有活动计时器，请先暂停或结束" }
     return copy(activeTimer = ActiveTimer(targetId = targetId, startedAtEpochMillis = now.toEpochMilli(), lastPlanningDate = planningDate(now, zone).toString()))
 }
 
 fun AttentionState.switchTimer(targetId: String?, now: Instant, zone: ZoneId = ZoneId.systemDefault()): TimerResult {
+    require(validRecordTarget(targetId)) { "计时只能归入未归档目标" }
     if (activeTimer == null) return TimerResult(startTimer(targetId, now, zone), emptyList())
+    if (activeTimer.targetId == targetId) return TimerResult(this, emptyList())
     val stopped = stopTimer(now, zone)
     return TimerResult(stopped.state.startTimer(targetId, now, zone), stopped.entries)
 }
@@ -845,13 +876,19 @@ fun AttentionState.pauseTimer(now: Instant): AttentionState {
 fun AttentionState.resumeTimer(now: Instant): AttentionState {
     val timer = activeTimer ?: return this
     if (!timer.paused) return this
-    return copy(activeTimer = timer.copy(startedAtEpochMillis = now.toEpochMilli(), paused = false))
+    return copy(activeTimer = timer.copy(startedAtEpochMillis = timer.nonDecreasingBaseline(now.toEpochMilli()), paused = false))
 }
 
 fun AttentionState.recoverTimer(now: Instant): AttentionState {
     val timer = activeTimer ?: return this
-    return copy(activeTimer = timer.copy(startedAtEpochMillis = now.toEpochMilli(), paused = false))
+    return copy(activeTimer = timer.copy(startedAtEpochMillis = timer.nonDecreasingBaseline(now.toEpochMilli()), paused = false))
 }
+
+private fun ActiveTimer.nonDecreasingBaseline(nowEpochMillis: Long): Long = maxOf(
+    nowEpochMillis,
+    startedAtEpochMillis,
+    completedSegments.maxOfOrNull { it.endedAtEpochMillis } ?: startedAtEpochMillis,
+)
 
 fun AttentionState.stopTimer(now: Instant, zone: ZoneId = ZoneId.systemDefault()): TimerResult {
     val timer = activeTimer ?: return TimerResult(this, emptyList())
@@ -873,8 +910,19 @@ fun AttentionState.stopTimerAndAwardEligibleMilestones(
     return stopped.copy(state = stopped.state.awardEligibleMilestones(stopped.state.planningDate(now, zone)))
 }
 
+/**
+ * Calculates the records an explicit stop would produce without changing state.
+ * Callers supply the confirmation time so the preview remains deterministic.
+ */
+fun AttentionState.timerSettlementPreview(
+    now: Instant,
+    zone: ZoneId = ZoneId.systemDefault(),
+): TimerSettlementPreview = TimerSettlementPreview(activeTimer?.let { stopTimer(now, zone).entries } ?: emptyList())
+
 private fun splitTimerSegments(segments: List<TimerSegment>, targetId: String?, boundaryMinutes: Int, zone: ZoneId): List<TimeEntry> {
-    val buckets = linkedMapOf<LocalDate, Long>()
+    data class TimerBucket(var durationMillis: Long, val occurredAtEpochMillis: Long)
+
+    val buckets = linkedMapOf<LocalDate, TimerBucket>()
     segments.sortedBy { it.startedAtEpochMillis }.forEach { segment ->
         var cursor = Instant.ofEpochMilli(segment.startedAtEpochMillis)
         val end = Instant.ofEpochMilli(maxOf(segment.startedAtEpochMillis, segment.endedAtEpochMillis))
@@ -886,21 +934,21 @@ private fun splitTimerSegments(segments: List<TimerSegment>, targetId: String?, 
             val nextBoundary = planningDate.plusDays(1).atStartOfDay(zone).plusMinutes(boundaryMinutes.toLong()).toInstant()
             val chunkEnd = minOf(end, nextBoundary)
             val duration = chunkEnd.toEpochMilli() - cursor.toEpochMilli()
-            buckets[planningDate] = (buckets[planningDate] ?: 0L) + duration
+            val bucket = buckets.getOrPut(planningDate) { TimerBucket(0L, cursor.toEpochMilli()) }
+            bucket.durationMillis += duration
             cursor = chunkEnd
         }
     }
-    var carryMillis = 0L
-    return buckets.mapNotNull { (date, durationMillis) ->
-        val total = carryMillis + durationMillis
-        val minutes = (total / 60_000L).toInt()
-        carryMillis = total % 60_000L
+    return buckets.mapNotNull { (date, bucket) ->
+        // A partial minute cannot be carried across planning-day boundaries:
+        // each date is an independent ledger bucket.
+        val minutes = (bucket.durationMillis / 60_000L).toInt()
         if (minutes == 0) null else TimeEntry(
             planningDate = date.toString(),
             durationMinutes = minutes,
             targetId = targetId,
             source = TimeEntrySource.TIMER,
-            occurredAtEpochMillis = date.atStartOfDay(zone).toInstant().toEpochMilli(),
+            occurredAtEpochMillis = bucket.occurredAtEpochMillis,
         )
     }
 }

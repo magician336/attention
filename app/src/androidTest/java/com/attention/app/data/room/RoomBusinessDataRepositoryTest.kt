@@ -29,9 +29,11 @@ import com.attention.domain.addTimeEntry
 import com.attention.domain.parentAt
 import com.attention.domain.settlePeriodSnapshots
 import com.attention.domain.appendOneTimeGoalStage
+import com.attention.domain.archiveTarget
 import com.attention.domain.awardEligibleMilestones
-import com.attention.domain.toggleScheduleCompleted
 import com.attention.domain.recalculateExperience
+import com.attention.domain.stopTimer
+import com.attention.domain.toggleScheduleCompleted
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -206,6 +208,35 @@ class RoomBusinessDataRepositoryTest {
         assertEquals(state.periodSnapshots, loaded.periodSnapshots)
         assertEquals(emptyList<TargetMove>(), loaded.targetMoves)
         assertEquals(state.activeTimer?.copy(targetId = null), loaded.activeTimer)
+    }
+
+    @Test
+    fun archiving_a_running_target_detaches_the_timer_and_keeps_finished_minutes_unowned() = runBlocking {
+        val target = Target("archived-timer-target", title = "归档计时")
+        val repository = RoomBusinessDataRepository(database)
+        repository.replace(
+            AttentionState(
+                targets = listOf(target),
+                activeTimer = ActiveTimer(
+                    targetId = target.id,
+                    startedAtEpochMillis = 0L,
+                    lastPlanningDate = "1970-01-01",
+                ),
+            ),
+        )
+
+        repository.update { it.archiveTarget(target.id) }
+        assertNull(repository.read().activeTimer?.targetId)
+
+        repository.update {
+            it.stopTimer(java.time.Instant.ofEpochMilli(60_000L), java.time.ZoneOffset.UTC)
+                .state
+                .recalculateExperience()
+        }
+
+        val stopped = repository.read()
+        assertNull(stopped.timeEntries.single().targetId)
+        assertEquals(1, stopped.timeEntries.single().durationMinutes)
     }
 
     @Test

@@ -10,6 +10,7 @@ import com.attention.app.reminder.ReminderCoordinator
 import com.attention.domain.AttentionState
 import com.attention.domain.LaunchDestination
 import com.attention.domain.StoredSettings
+import com.attention.domain.validateActiveTimerTarget
 import com.attention.domain.recalculateExperience
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -102,6 +103,7 @@ class RoomAttentionStateRepository(
             val current = state.first()
             backupStore.write(AttentionBackupCodec.encode(current))
             val result = if (clearExisting) incoming else AttentionBackupCodec.merge(current, incoming)
+            result.validateActiveTimerTarget()
             replaceWithRollback(current, result)
         }
     }

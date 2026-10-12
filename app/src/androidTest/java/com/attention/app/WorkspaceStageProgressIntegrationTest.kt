@@ -8,8 +8,10 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.attention.app.data.RoomAttentionStateRepository
 import com.attention.app.data.room.AttentionDatabase
 import com.attention.app.data.room.RoomBusinessDataRepository
+import com.attention.app.data.settings.createSettingsStore
 import com.attention.domain.AttentionState
 import com.attention.domain.GoalCadence
 import com.attention.domain.GoalStage
@@ -45,7 +47,8 @@ class WorkspaceStageProgressIntegrationTest {
         @JvmStatic
         @BeforeClass
         fun seedIndependentStagesBeforeActivityStarts() {
-            val planningDate = AttentionState().planningDate(Instant.now())
+            val state = AttentionState()
+            val planningDate = state.planningDate(Instant.now())
             firstStart = planningDate.minusDays(2).toString()
             firstEnd = planningDate.minusDays(1).toString()
             secondStart = planningDate.toString()
@@ -54,8 +57,11 @@ class WorkspaceStageProgressIntegrationTest {
             val database = AttentionDatabase.create(context)
             try {
                 runBlocking {
-                    RoomBusinessDataRepository(database).replace(
-                        AttentionState(
+                    RoomAttentionStateRepository(
+                        business = RoomBusinessDataRepository(database),
+                        settings = context.createSettingsStore(),
+                    ).replace(
+                        state.copy(
                             targets = listOf(Target(TARGET_ID, title = TARGET_TITLE)),
                             goalStages = listOf(
                                 GoalStage(FIRST_STAGE_ID, TARGET_ID, GoalCadence.ONE_TIME, 30, firstStart),

@@ -232,3 +232,8 @@ data class PeriodStats(
 )
 
 data class TimerResult(val state: AttentionState, val entries: List<TimeEntry>)
+
+data class TimerSettlementPreview(val entries: List<TimeEntry>) {
+    val totalMinutes: Int get() = entries.sumOf { it.durationMinutes }
+    val hasCompleteMinutes: Boolean get() = entries.isNotEmpty()
+}

@@ -164,19 +164,28 @@ class AttentionViewModel(
         repository.setLastOpenedDestination(destination)
     }
 
-    fun startTimer(targetId: String?) = runCommand { it.startTimer(targetId, Instant.now(), zone) }
+    fun startTimer(targetId: String?, onSuccess: () -> Unit = {}) = runCommand(onSuccess = onSuccess) {
+        it.startTimer(targetId, Instant.now(), zone)
+    }
     fun switchTimer(targetId: String?) = scope.launch {
         runCatching {
-            repository.updateBusiness { current -> current.switchTimer(targetId, Instant.now(), zone).state }
+            val now = Instant.now()
+            repository.updateBusiness { current ->
+                current.switchTimer(targetId, now, zone).state
+                    .awardEligibleMilestones(current.planningDate(now, zone))
+            }
         }.onFailure { _error.value = it.message ?: "无法切换计时目标" }
     }
     fun pauseTimer() = runCommand { it.pauseTimer(Instant.now()) }
     fun resumeTimer() = runCommand { it.resumeTimer(Instant.now()) }
-    fun recoverTimer() = runCommand { it.recoverTimer(Instant.now()) }
-    fun stopTimer() = scope.launch {
+    fun recoverTimer(onSuccess: () -> Unit = {}) = runCommand(onSuccess = onSuccess) { it.recoverTimer(Instant.now()) }
+    fun stopTimer(onSuccess: () -> Unit = {}) = scope.launch {
         runCatching {
-            repository.updateBusiness { current -> current.stopTimerAndAwardEligibleMilestones(Instant.now(), zone).state }
-        }.onFailure { _error.value = it.message ?: "无法结束计时" }
+            repository.updateBusiness { current ->
+                current.stopTimerAndAwardEligibleMilestones(Instant.now(), zone).state
+            }
+        }.onSuccess { onSuccess() }
+            .onFailure { _error.value = it.message ?: "无法结束计时" }
     }
 
     fun awardMilestones() = runCommand { it.awardEligibleMilestones(java.time.LocalDate.now(zone)) }

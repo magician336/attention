@@ -12,6 +12,7 @@ import com.attention.app.data.room.RoomBusinessDataRepository
 import com.attention.app.data.settings.DataStoreSettingsStore
 import com.attention.domain.LaunchDestination
 import com.attention.domain.Target
+import com.attention.domain.TimeEntrySource
 import com.attention.domain.addTarget
 import com.attention.domain.addTimeEntry
 import com.attention.domain.assignUnowned
@@ -39,6 +40,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -146,6 +148,37 @@ class RoomAttentionStateRepositoryTest {
     }
 
     @Test
+    fun paused_timer_and_completed_segments_survive_process_rebuild() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val databaseName = "attention-room-repository-paused-restart.db"
+        context.deleteDatabase(databaseName)
+        val startedAt = Instant.ofEpochMilli(1_000L)
+        val pausedAt = Instant.ofEpochMilli(61_000L)
+        val firstDatabase = Room.databaseBuilder(context, AttentionDatabase::class.java, databaseName).build()
+        try {
+            val first = RoomAttentionStateRepository(RoomBusinessDataRepository(firstDatabase), settings)
+            first.updateBusiness { it.copy(targets = listOf(Target("target", title = "学习"))) }
+            first.updateBusiness { it.startTimer("target", startedAt, ZoneId.of("UTC")) }
+            first.updateBusiness { it.pauseTimer(pausedAt) }
+        } finally {
+            firstDatabase.close()
+        }
+
+        val secondDatabase = Room.databaseBuilder(context, AttentionDatabase::class.java, databaseName).build()
+        try {
+            val second = RoomAttentionStateRepository(RoomBusinessDataRepository(secondDatabase), settings)
+            val rebuilt = second.state.first()
+            assertEquals(true, rebuilt.activeTimer?.paused)
+            assertEquals(startedAt.toEpochMilli(), rebuilt.activeTimer?.completedSegments?.single()?.startedAtEpochMillis)
+            assertEquals(pausedAt.toEpochMilli(), rebuilt.activeTimer?.completedSegments?.single()?.endedAtEpochMillis)
+            assertTrue(rebuilt.timeEntries.isEmpty())
+        } finally {
+            secondDatabase.close()
+            context.deleteDatabase(databaseName)
+        }
+    }
+
+    @Test
     fun business_update_does_not_reset_existing_settings() = runBlocking {
         val repository = repository()
         repository.setPlannerSettings(repository.state.first().settings.copy(planningDayBoundaryMinutes = 75))
@@ -181,6 +214,49 @@ class RoomAttentionStateRepositoryTest {
     }
 
     @Test
+    fun timer_switch_uses_custom_boundary_and_keeps_each_segment_occurrence_time() = runBlocking {
+        val repository = repository()
+        repository.updateBusiness { it.copy(targets = listOf(Target("a", title = "A"), Target("b", title = "B"))) }
+        repository.setPlannerSettings(repository.state.first().settings.copy(planningDayBoundaryMinutes = 5 * 60))
+
+        val startedAt = Instant.parse("2026-10-10T04:50:00Z")
+        val switchedAt = Instant.parse("2026-10-10T05:10:00Z")
+        repository.updateBusiness { it.startTimer("a", startedAt, ZoneId.of("UTC")) }
+        repository.updateBusiness { it.switchTimer("b", switchedAt, ZoneId.of("UTC")).state }
+
+        val entries = repository.state.first().timeEntries.sortedBy { it.occurredAtEpochMillis }
+        assertEquals(listOf("2026-10-09", "2026-10-10"), entries.map { it.planningDate })
+        assertEquals(listOf(10, 10), entries.map { it.durationMinutes })
+        assertEquals(listOf("a", "a"), entries.map { it.targetId })
+        assertEquals(listOf(TimeEntrySource.TIMER, TimeEntrySource.TIMER), entries.map { it.source })
+        assertEquals(
+            listOf(startedAt.toEpochMilli(), Instant.parse("2026-10-10T05:00:00Z").toEpochMilli()),
+            entries.map { it.occurredAtEpochMillis },
+        )
+        assertEquals("b", repository.state.first().activeTimer?.targetId)
+    }
+
+    @Test
+    fun failed_timer_switch_rolls_back_the_old_timer_without_partial_entries() = runBlocking {
+        val repository = repository()
+        repository.updateBusiness { it.copy(targets = listOf(Target("a", title = "A"))) }
+        val startedAt = Instant.parse("2026-10-10T04:50:00Z")
+        val switchedAt = Instant.parse("2026-10-10T05:10:00Z")
+        repository.updateBusiness { it.startTimer("a", startedAt, ZoneId.of("UTC")) }
+
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking {
+                repository.updateBusiness { it.switchTimer("missing", switchedAt, ZoneId.of("UTC")).state }
+            }
+        }
+
+        val state = repository.state.first()
+        assertEquals("a", state.activeTimer?.targetId)
+        assertEquals(startedAt.toEpochMilli(), state.activeTimer?.startedAtEpochMillis)
+        assertTrue(state.timeEntries.isEmpty())
+    }
+
+    @Test
     fun timer_stop_splits_entries_at_planning_day_boundary() = runBlocking {
         val repository = repository()
         repository.updateBusiness { it.copy(targets = listOf(Target("target", title = "跨规划日"))) }
@@ -195,6 +271,21 @@ class RoomAttentionStateRepositoryTest {
         assertEquals("2026-10-09", entries[0].planningDate)
         assertEquals("2026-10-10", entries[1].planningDate)
         assertEquals(listOf(1, 1), entries.map { it.durationMinutes })
+    }
+
+    @Test
+    fun timer_does_not_carry_partial_minutes_between_planning_days() = runBlocking {
+        val repository = repository()
+        repository.updateBusiness { it.copy(targets = listOf(Target("target", title = "跨规划日"))) }
+
+        repository.updateBusiness {
+            it.startTimer("target", Instant.parse("2026-10-10T02:59:30Z"), ZoneId.of("UTC"))
+        }
+        repository.updateBusiness { it.pauseTimer(Instant.parse("2026-10-10T03:00:00Z")) }
+        repository.updateBusiness { it.resumeTimer(Instant.parse("2026-10-10T03:00:30Z")) }
+        repository.updateBusiness { it.stopTimer(Instant.parse("2026-10-10T03:01:00Z"), ZoneId.of("UTC")).state }
+
+        assertTrue(repository.state.first().timeEntries.isEmpty())
     }
 
     @Test

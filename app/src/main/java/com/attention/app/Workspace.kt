@@ -11,6 +11,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -59,6 +60,7 @@ import com.attention.app.data.room.AttentionDatabase
 import com.attention.app.data.room.RoomBusinessDataRepository
 import com.attention.app.data.settings.createSettingsStore
 import com.attention.app.timer.AttentionTimerService
+import com.attention.app.timer.AttentionBootReceiver
 import com.attention.app.reminder.AlarmReminderCoordinator
 import com.attention.app.reminder.ReminderScheduler
 import com.attention.domain.AttentionState
@@ -102,6 +104,8 @@ import com.attention.domain.reminderEpochMillis
 import com.attention.domain.subtreeMinutes
 import com.attention.domain.targetChildren
 import com.attention.domain.oneTimeStageMilestones
+import com.attention.domain.timerSettlementPreview
+import com.attention.domain.timerTargetLabel
 import java.time.Instant
 import java.time.LocalDate
 
@@ -219,11 +223,13 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
 private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionViewModel) {
     val context = LocalContext.current
     fun startTimer(targetId: String?) {
-        viewModel.startTimer(targetId)
-        if (Build.VERSION.SDK_INT >= 33 && androidx.core.content.ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            Toast.makeText(context, "通知权限未开启，计时仍会保存；锁屏控制需要开启通知权限。", Toast.LENGTH_LONG).show()
+        viewModel.startTimer(targetId) {
+            AttentionBootReceiver.cancelRecoveryPrompt(context)
+            if (!notificationsEnabled(context)) {
+                Toast.makeText(context, "通知权限未开启，计时仍会保存；通知栏控制不可用。", Toast.LENGTH_LONG).show()
+            }
+            ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
         }
-        ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
     }
     val date = state.planningDate(Instant.now()).toString()
     val capacity = state.capacitySummary(date)
@@ -304,26 +310,59 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
                     Button(onClick = {
                         startTimer(null)
                     }) { Text("开始未归属计时") }
-                    state.targets.filter { !it.archived }.take(4).forEach { target ->
+                    state.targets.filter { !it.archived }.forEach { target ->
                         OutlinedButton(onClick = {
                             startTimer(target.id)
                         }) { Text("计时：${target.title}") }
                     }
                 } else {
                     Text(if (timer.paused) "计时已暂停" else "正在计时")
+                    Text("当前目标：${state.timerTargetLabel(timer.targetId)}")
+                    if (timer.completedSegments.isNotEmpty()) {
+                        Text("已完成片段：${timer.completedSegments.size}")
+                    }
+                    val settlementPreview = state.timerSettlementPreview(Instant.now())
+                    val settlementScope = settlementPreview.entries.joinToString("；") {
+                        "${it.planningDate} ${it.durationMinutes} 分钟"
+                    }
+                    Text(
+                        if (settlementPreview.hasCompleteMinutes) {
+                            "结束范围预览：$settlementScope；共 ${settlementPreview.totalMinutes} 分钟"
+                        } else {
+                            "结束范围预览：当前片段不足 1 分钟，不会生成时间记录"
+                        },
+                        modifier = Modifier.testTag("timer-settlement-preview"),
+                    )
+                    if (!notificationsEnabled(context)) {
+                        Text(
+                            "通知权限未开启，计时数据仍会保存；通知栏暂停、继续和结束控制不可用。",
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.testTag("timer-notification-permission-warning"),
+                        )
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (timer.paused) Button(onClick = viewModel::resumeTimer) { Text("继续") }
                         else Button(onClick = viewModel::pauseTimer) { Text("暂停") }
                         OutlinedButton(onClick = {
-                            viewModel.recoverTimer()
-                            ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
+                            viewModel.recoverTimer {
+                                AttentionBootReceiver.cancelRecoveryPrompt(context)
+                                ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
+                            }
                         }) { Text("从此刻继续") }
                         OutlinedButton(onClick = {
-                            viewModel.stopTimer()
-                            context.stopService(AttentionTimerService.intent(context))
+                            viewModel.stopTimer {
+                                AttentionBootReceiver.cancelRecoveryPrompt(context)
+                                context.stopService(AttentionTimerService.intent(context))
+                            }
                         }) { Text("结束并保存") }
                     }
-                    state.targets.filter { !it.archived && it.id != timer.targetId }.take(3).forEach { target ->
+                    if (timer.targetId != null) {
+                        OutlinedButton(
+                            modifier = Modifier.testTag("switch-timer-unowned"),
+                            onClick = { viewModel.switchTimer(null) },
+                        ) { Text("切换到未归属活动") }
+                    }
+                    state.targets.filter { !it.archived && it.id != timer.targetId }.forEach { target ->
                         OutlinedButton(onClick = { viewModel.switchTimer(target.id) }) { Text("切换到 ${target.title}") }
                     }
                 }
@@ -1405,6 +1444,9 @@ private fun requestReminderPermission(context: Context) {
         ActivityCompat.requestPermissions(it, arrayOf(Manifest.permission.POST_NOTIFICATIONS), REMINDER_PERMISSION_REQUEST_CODE)
     }
 }
+
+private fun notificationsEnabled(context: Context): Boolean =
+    NotificationManagerCompat.from(context).areNotificationsEnabled()
 
 private fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this

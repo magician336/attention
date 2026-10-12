@@ -10,6 +10,7 @@ import com.attention.app.data.room.RoomBusinessDataRepository
 import com.attention.app.data.settings.SettingsSnapshot
 import com.attention.app.data.settings.SettingsStore
 import com.attention.domain.AttentionState
+import com.attention.domain.ActiveTimer
 import com.attention.domain.CapacitySummary
 import com.attention.domain.GoalCadence
 import com.attention.domain.GoalStage
@@ -19,13 +20,17 @@ import com.attention.domain.Milestone
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.StoredSettings
 import com.attention.domain.Target
+import com.attention.domain.TimeEntry
+import com.attention.domain.TimeEntrySource
+import com.attention.domain.TimerSegment
 import com.attention.domain.addMigration
 import com.attention.domain.cancelMigration
 import com.attention.domain.capacitySummary
 import com.attention.domain.updateMigration
-import com.attention.domain.TimeEntry
+import com.attention.domain.stopTimer
 import com.attention.domain.recalculateExperience
 import java.time.LocalDate
+import java.time.Instant
 import java.io.File
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -116,6 +121,177 @@ class RoomBackupIntegrationTest {
         assertEquals(expected.schedules, restored.schedules)
         assertEquals(CapacitySummary(60, 60, false), restored.capacitySummary(day))
         assertEquals(CapacitySummary(60, 0, false), restored.capacitySummary("2026-10-09"))
+    }
+
+    @Test
+    fun active_timer_backup_round_trip_preserves_segments_and_timer_entries() = runBlocking {
+        val target = Target("timer-target", title = "计时目标")
+        val expected = AttentionState(
+            targets = listOf(target),
+            timeEntries = listOf(
+                TimeEntry("timer-entry-1", "2026-10-08", 15, target.id, TimeEntrySource.TIMER, 100L, "计时"),
+                TimeEntry("timer-entry-2", "2026-10-08", 20, null, TimeEntrySource.TIMER, 200L, "未归属计时"),
+            ),
+            activeTimer = ActiveTimer(
+                targetId = target.id,
+                startedAtEpochMillis = 300L,
+                accumulatedMillis = 1_200_000L,
+                paused = true,
+                lastPlanningDate = "2026-10-08",
+                completedSegments = listOf(
+                    TimerSegment(100L, 400L),
+                    TimerSegment(500L, 800L),
+                ),
+            ),
+        )
+        val repository = RoomAttentionStateRepository(
+            RoomBusinessDataRepository(database),
+            settingsStore(),
+        )
+
+        repository.replace(expected)
+        val exported = repository.exportJson()
+        repository.replace(AttentionState())
+
+        val restored = repository.importJson(exported, clearExisting = true)
+
+        assertEquals(expected.timeEntries, restored.timeEntries)
+        assertEquals(expected.activeTimer, restored.activeTimer)
+        assertEquals(expected.activeTimer, repository.state.first().activeTimer)
+    }
+
+    @Test
+    fun restored_active_timer_can_be_stopped_without_duplicate_timer_entries() = runBlocking {
+        val target = Target("restored-target", title = "恢复目标")
+        val expected = AttentionState(
+            targets = listOf(target),
+            timeEntries = listOf(
+                TimeEntry("existing-timer-entry", "2026-10-08", 10, target.id, TimeEntrySource.TIMER, 100L, "计时"),
+            ),
+            activeTimer = ActiveTimer(
+                targetId = target.id,
+                startedAtEpochMillis = 100_000L,
+                paused = true,
+                lastPlanningDate = "2026-10-08",
+                completedSegments = listOf(TimerSegment(100L, 600_100L)),
+            ),
+        )
+        val repository = RoomAttentionStateRepository(
+            RoomBusinessDataRepository(database),
+            settingsStore(),
+        )
+        repository.replace(expected)
+        val exported = repository.exportJson()
+        repository.replace(AttentionState())
+        repository.importJson(exported, clearExisting = true)
+
+        repository.updateBusiness {
+            it.stopTimer(Instant.ofEpochMilli(660_100L)).state
+        }
+
+        val stopped = repository.state.first()
+        assertEquals(null, stopped.activeTimer)
+        assertEquals(2, stopped.timeEntries.size)
+        assertTrue(stopped.timeEntries.any { it.id == "existing-timer-entry" })
+        assertTrue(stopped.timeEntries.all { it.source == TimeEntrySource.TIMER })
+    }
+
+    @Test
+    fun timer_entry_merge_and_clear_restore_preserve_stable_ids_without_duplicates() = runBlocking {
+        val target = Target("stable-timer-target", title = "稳定计时目标")
+        val existingEntry = TimeEntry(
+            id = "stable-timer-entry",
+            planningDate = "2026-10-08",
+            durationMinutes = 10,
+            targetId = target.id,
+            source = TimeEntrySource.TIMER,
+            occurredAtEpochMillis = 100L,
+        )
+        val incomingEntry = existingEntry.copy(durationMinutes = 15)
+        val newEntry = existingEntry.copy(id = "new-timer-entry", durationMinutes = 20)
+        val repository = RoomAttentionStateRepository(
+            RoomBusinessDataRepository(database),
+            settingsStore(),
+        )
+        repository.replace(
+            AttentionState(
+                targets = listOf(target),
+                timeEntries = listOf(existingEntry),
+            ),
+        )
+        val incoming = AttentionBackupCodec.encode(
+            AttentionState(
+                targets = listOf(target),
+                timeEntries = listOf(incomingEntry, newEntry),
+            ),
+        )
+
+        repository.importJson(incoming, clearExisting = false)
+        assertEquals(
+            setOf(existingEntry.id, newEntry.id),
+            repository.state.first().timeEntries.map { it.id }.toSet(),
+        )
+
+        repository.importJson(incoming, clearExisting = true)
+        assertEquals(
+            listOf(incomingEntry, newEntry).sortedBy { it.id },
+            repository.state.first().timeEntries.sortedBy { it.id },
+        )
+    }
+
+    @Test
+    fun invalid_import_timer_target_rolls_back_timer_records_experience_and_milestones() = runBlocking {
+        val target = Target("current-target", title = "当前目标")
+        val current = AttentionState(
+            targets = listOf(target),
+            timeEntries = listOf(TimeEntry("current-timer-entry", "2026-10-08", 25, target.id, TimeEntrySource.TIMER, 100L, "计时")),
+            milestones = listOf(com.attention.domain.Milestone("current-milestone", "goal_period", "current", 20L, 200L)),
+            experience = 45L,
+            activeTimer = ActiveTimer(target.id, 300L, paused = true, lastPlanningDate = "2026-10-08"),
+        )
+        val incoming = AttentionBackupCodec.encode(
+            AttentionState(
+                targets = listOf(Target("incoming-target", title = "导入目标")),
+                timeEntries = listOf(TimeEntry("incoming-timer-entry", "2026-10-09", 30, "incoming-target", TimeEntrySource.TIMER, 400L, "导入计时")),
+                experience = 100L,
+                activeTimer = ActiveTimer("missing-target", 500L, lastPlanningDate = "2026-10-09"),
+            ),
+        )
+        val backupStore = InMemoryImportBackupStore()
+        val repository = RoomAttentionStateRepository(
+            RoomBusinessDataRepository(database),
+            settingsStore(),
+            backupStore,
+        )
+        repository.replace(current)
+
+        assertFalse(runCatching { repository.importJson(incoming, clearExisting = true) }.isSuccess)
+        assertEquals(current, repository.state.first())
+        assertEquals(AttentionBackupCodec.encode(current), backupStore.read())
+    }
+
+    @Test
+    fun archived_import_timer_target_is_rejected_without_changing_current_timer() = runBlocking {
+        val currentTarget = Target("current-target", title = "当前目标")
+        val current = AttentionState(
+            targets = listOf(currentTarget),
+            activeTimer = ActiveTimer(currentTarget.id, 100L, lastPlanningDate = "2026-10-08"),
+        )
+        val archivedTarget = Target("archived-target", title = "归档目标", archived = true)
+        val incoming = AttentionBackupCodec.encode(
+            AttentionState(
+                targets = listOf(archivedTarget),
+                activeTimer = ActiveTimer(archivedTarget.id, 200L, lastPlanningDate = "2026-10-09"),
+            ),
+        )
+        val repository = RoomAttentionStateRepository(
+            RoomBusinessDataRepository(database),
+            settingsStore(),
+        )
+        repository.replace(current)
+
+        assertFalse(runCatching { repository.importJson(incoming, clearExisting = true) }.isSuccess)
+        assertEquals(current, repository.state.first())
     }
 
     @Test
