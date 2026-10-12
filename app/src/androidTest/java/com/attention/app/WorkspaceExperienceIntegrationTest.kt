@@ -4,6 +4,7 @@ import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.core.app.ApplicationProvider
@@ -56,5 +57,15 @@ class WorkspaceExperienceIntegrationTest {
         composeRule.onNode(hasText("统计") and hasClickAction()).performClick()
         composeRule.waitForIdle()
         composeRule.onAllNodesWithText("投入经验：15", substring = true).assertCountEquals(2)
+    }
+
+    @Test
+    fun statistics_screen_shows_level_progress_and_upgrade_feedback() {
+        composeRule.onNode(hasText("统计") and hasClickAction()).performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("当前等级区间进度：15/1000 点").assertExists()
+        composeRule.onNodeWithText("下一等级门槛：1000 点").assertExists()
+        composeRule.onNodeWithText("剩余经验：985 点").assertExists()
+        composeRule.onNodeWithText("升级反馈：达到下一等级门槛后会显示").assertExists()
     }
 }

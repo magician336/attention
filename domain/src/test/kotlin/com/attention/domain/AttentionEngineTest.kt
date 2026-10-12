@@ -1099,6 +1099,26 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun level_progress_reports_boundaries_and_remaining_experience() {
+        assertEquals(LevelProgress(1, 0, 1000, 0, 1000), levelProgressForExperience(0))
+        assertEquals(LevelProgress(1, 0, 1000, 999, 1), levelProgressForExperience(999))
+        assertEquals(LevelProgress(2, 1000, 3000, 0, 2000), levelProgressForExperience(1000))
+        assertEquals(LevelProgress(2, 1000, 3000, 1999, 1), levelProgressForExperience(2999))
+        assertEquals(LevelProgress(3, 3000, 6000, 0, 3000), levelProgressForExperience(3000))
+    }
+
+    @Test
+    fun level_progress_handles_negative_experience_and_multiple_thresholds() {
+        assertEquals(LevelProgress(1, 0, 1000, 0, 1000), levelProgressForExperience(-1))
+        val progress = levelProgressForExperience(10_000)
+        assertEquals(5, progress.level)
+        assertEquals(10_000, progress.currentLevelThreshold)
+        assertEquals(15_000, progress.nextLevelThreshold)
+        assertEquals(0, progress.progressExperience)
+        assertEquals(5_000, progress.remainingExperience)
+    }
+
+    @Test
     fun future_rules_and_snapshots_preserve_previous_period() {
         val state = AttentionState().addTarget("项目")
         val target = state.targets.single()
