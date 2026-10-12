@@ -9,6 +9,7 @@ import com.attention.app.data.room.AttentionDatabase
 import com.attention.app.data.room.RoomBusinessDataRepository
 import com.attention.app.data.settings.SettingsSnapshot
 import com.attention.app.data.settings.SettingsStore
+import com.attention.app.reminder.ReminderCoordinator
 import com.attention.domain.AttentionState
 import com.attention.domain.ActiveTimer
 import com.attention.domain.CapacitySummary
@@ -272,6 +273,34 @@ class RoomBackupIntegrationTest {
         assertEquals(AttentionBackupCodec.encode(current), backupStore.read())
     }
 
+    @Test
+    fun malformed_import_keeps_existing_state_and_previous_pre_import_backup() = runBlocking {
+        val backupStore = InMemoryImportBackupStore()
+        backupStore.write("{\"version\":1,\"targets\":[]}")
+        val repository = RoomAttentionStateRepository(RoomBusinessDataRepository(database), settingsStore(), backupStore)
+        val current = AttentionState(targets = listOf(Target("parse-current", title = "当前")))
+        repository.replace(current)
+        assertFalse(runCatching { repository.importJson("{not-json", clearExisting = true) }.isSuccess)
+        assertEquals(current.targets, repository.state.first().targets)
+        assertEquals("{\"version\":1,\"targets\":[]}", backupStore.read())
+    }
+
+    @Test
+    fun reminder_failure_rolls_back_room_settings_and_alarm_projection() = runBlocking {
+        val backupStore = InMemoryImportBackupStore()
+        val reminders = FailingReminderCoordinator()
+        val repository = RoomAttentionStateRepository(RoomBusinessDataRepository(database), settingsStore(), backupStore, reminders)
+        val current = AttentionState(settings = StoredSettings(planningDayBoundaryMinutes = 30), targets = listOf(Target("reminder-current", title = "当前")), schedules = listOf(ScheduleEntry("current-schedule", "2026-10-08", "当前日程")))
+        repository.replace(current)
+        reminders.failNext = true
+        val incoming = AttentionBackupCodec.encode(AttentionState(settings = StoredSettings(planningDayBoundaryMinutes = 120), targets = listOf(Target("reminder-incoming", title = "导入")), schedules = listOf(ScheduleEntry("incoming-schedule", "2026-10-09", "导入日程"))))
+        assertFalse(runCatching { repository.importJson(incoming, clearExisting = true) }.isSuccess)
+        assertEquals(current.targets, repository.state.first().targets)
+        assertEquals(current.schedules, repository.state.first().schedules)
+        assertEquals(current.settings, repository.state.first().settings)
+        assertEquals(AttentionBackupCodec.encode(current), backupStore.read())
+        assertTrue(reminders.rollbackObserved)
+    }
     @Test
     fun archived_import_timer_target_is_rejected_without_changing_current_timer() = runBlocking {
         val currentTarget = Target("current-target", title = "当前目标")
@@ -644,5 +673,17 @@ private class FailingSettingsStore : SettingsStore {
 
     override suspend fun reset() {
         current.value = SettingsSnapshot()
+    }
+}
+
+private class FailingReminderCoordinator : ReminderCoordinator {
+    var failNext = false
+    var rollbackObserved = false
+    override fun sync(previous: AttentionState, next: AttentionState) {
+        if (failNext) {
+            failNext = false
+            error("提醒同步失败")
+        }
+        if (next.targets.any { it.id == "reminder-current" }) rollbackObserved = true
     }
 }
