@@ -282,6 +282,26 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun periodic_milestones_ignore_minutes_before_stage_start() {
+        val initial = AttentionState(settings = StoredSettings(weekStartDay = 1)).addTarget("周期目标")
+        val target = initial.targets.single()
+        val state = initial
+            .addGoalStage(target.id, GoalCadence.WEEKLY, 60, "2026-10-08")
+            .addTimeEntry("2026-10-07", 60, target.id)
+        val incomplete = state
+            .addTimeEntry("2026-10-08", 59, target.id)
+            .awardEligibleMilestones(LocalDate.parse("2026-10-09"))
+        assertEquals(emptyList<Milestone>(), incomplete.milestones)
+        val awarded = incomplete
+            .addTimeEntry("2026-10-09", 1, target.id)
+            .awardEligibleMilestones(LocalDate.parse("2026-10-09"))
+        assertEquals(1, awarded.milestones.size)
+        assertEquals("goal_period:${state.goalStages.single().id}:2026-10-05", awarded.milestones.single().instanceKey)
+        assertEquals(1_000L, awarded.milestones.single().reward)
+        assertEquals(1_120L, awarded.experience)
+    }
+
+    @Test
     fun migrations_are_limited_by_current_gap_and_source_period_boundary() {
         val targetState = AttentionState().addTarget("英语")
         val target = targetState.targets.single()
@@ -480,7 +500,7 @@ class AttentionEngineTest {
             settings = StoredSettings(weekStartDay = 1),
         )
         val mondayTarget = mondayStart.targets.single()
-        val stage = mondayStart.addGoalStage(mondayTarget.id, GoalCadence.WEEKLY, 60, date.toString()).goalStages.single()
+        val stage = mondayStart.addGoalStage(mondayTarget.id, GoalCadence.WEEKLY, 60, "2026-10-05").goalStages.single()
         val records = mondayStart
             .addTimeEntry("2026-10-04", 100, mondayTarget.id)
             .addTimeEntry("2026-10-05", 30, mondayTarget.id)
@@ -500,9 +520,9 @@ class AttentionEngineTest {
         assertEquals(10, mondayProgress.excessMinutes)
         assertEquals(LocalDate.of(2026, 10, 4), sundayRange.start)
         assertEquals(LocalDate.of(2026, 10, 10), sundayRange.endInclusive)
-        assertEquals(130, sundayProgress.actualMinutes)
-        assertTrue(sundayProgress.completed)
-        assertEquals(70, sundayProgress.excessMinutes)
+        assertEquals(30, sundayProgress.actualMinutes)
+        assertFalse(sundayProgress.completed)
+        assertEquals(0, sundayProgress.excessMinutes)
     }
 
     @Test
@@ -1865,6 +1885,87 @@ class AttentionEngineTest {
         assertEquals(1, awarded.oneTimeStageMilestones(stageIds[0]).size)
         assertEquals(1, awarded.oneTimeStageMilestones(stageIds[1]).size)
         assertEquals(2, awarded.awardEligibleMilestones(date.plusDays(1)).milestones.count { it.kind == "one_time_goal" })
+    }
+
+    @Test
+    fun incomplete_one_time_stage_does_not_award_stage_milestone() {
+        val state = AttentionState().addTarget("未完成阶段")
+        val target = state.targets.single()
+        val withStage = state
+            .addGoalStage(target.id, GoalCadence.ONE_TIME, 30, date.toString())
+            .addTimeEntry(date.toString(), 29, target.id)
+
+        val settled = withStage.awardEligibleMilestones(date)
+
+        assertTrue(settled.milestones.none { it.kind == "one_time_goal" })
+        assertEquals(29L, settled.experience)
+    }
+
+    @Test
+    fun continuous_milestones_use_target_branch_minutes_and_ignore_unowned_days() {
+        val rootState = AttentionState().addTarget("根目标")
+        val root = rootState.targets.single()
+        val withChild = rootState.addTarget("子目标", root.id)
+        val child = withChild.targets.single { it.title == "子目标" }
+        val state = (0..6).fold(withChild) { current, offset ->
+            current
+                .addTimeEntry(date.plusDays(offset.toLong()).toString(), 1)
+                .addTimeEntry(date.plusDays(offset.toLong()).toString(), 1, child.id)
+        }
+
+        val awarded = state.awardEligibleMilestones(date.plusDays(6))
+
+        assertTrue(awarded.milestones.any { it.instanceKey == "streak:${root.id}:7" })
+        assertTrue(awarded.milestones.any { it.instanceKey == "streak:${child.id}:7" })
+        assertEquals(2, awarded.milestones.count { it.kind == "streak" })
+    }
+
+    @Test
+    fun cumulative_milestones_follow_reward_bands_and_are_idempotent() {
+        val state = AttentionState().addTarget("累计投入")
+        val target = state.targets.single()
+        val withEntries = state.addTimeEntry(date.toString(), 1500 * 60, target.id)
+
+        val awarded = withEntries.awardEligibleMilestones(date)
+
+        assertEquals(15, awarded.milestones.count { it.kind == "cumulative" })
+        assertEquals(4, awarded.milestones.count { it.reward == 10_000L })
+        assertEquals(5, awarded.milestones.count { it.reward == 20_000L })
+        assertEquals(5, awarded.milestones.count { it.reward == 30_000L })
+        assertEquals(1, awarded.milestones.count { it.reward == 40_000L })
+        assertEquals(15, awarded.awardEligibleMilestones(date).milestones.count { it.kind == "cumulative" })
+    }
+
+    @Test
+    fun cumulative_milestones_ignore_future_time_entries_until_their_planning_date() {
+        val state = AttentionState().addTarget("未来累计投入")
+        val target = state.targets.single()
+        val withFutureEntry = state.addTimeEntry(date.plusDays(1).toString(), 100 * 60, target.id)
+
+        val beforeDate = withFutureEntry.awardEligibleMilestones(date)
+        val onDate = beforeDate.awardEligibleMilestones(date.plusDays(1))
+
+        assertTrue(beforeDate.milestones.none { it.kind == "cumulative" })
+        assertEquals(1, onDate.milestones.count { it.kind == "cumulative" })
+        assertEquals("cumulative:100", onDate.milestones.single { it.kind == "cumulative" }.instanceKey)
+    }
+
+    @Test
+    fun parent_streak_uses_historical_target_tree_relationships() {
+        val state = AttentionState().addTarget("父目标")
+        val parent = state.targets.single()
+        val withChild = state.addTarget("子目标", parent.id).addTarget("新父目标")
+        val child = withChild.targets.single { it.title == "子目标" }
+        val newParent = withChild.targets.single { it.title == "新父目标" }
+        val scheduled = withChild.addFutureTargetMove(child.id, newParent.id, date.plusDays(4).toString(), date)
+        val populated = (0..10).fold(scheduled) { current, offset ->
+            current.addTimeEntry(date.plusDays(offset.toLong()).toString(), 1, child.id)
+        }
+
+        val awarded = populated.awardEligibleMilestones(date.plusDays(10))
+
+        assertFalse(awarded.milestones.any { it.instanceKey == "streak:${parent.id}:7" })
+        assertTrue(awarded.milestones.any { it.instanceKey == "streak:${newParent.id}:7" })
     }
 
     @Test

@@ -1679,7 +1679,7 @@ private fun AttentionState.stageFeedbackLabels(stage: GoalStage): List<String> =
         emptyList()
     } else {
         oneTimeStageMilestones(stage.id).map { milestone ->
-            "阶段达成反馈：${stage.startDate} · +${milestone.reward} 投入经验"
+            "阶段达成反馈：${stage.startDate} · +${milestone.reward} 投入经验 · 来源：一次性阶段"
         }
     }
 

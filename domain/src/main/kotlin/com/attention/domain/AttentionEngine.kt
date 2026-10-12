@@ -125,8 +125,13 @@ private fun AttentionState.entriesForProgress(
     val effective = effectiveStage(stage, onDate)
     if (onDate.isBefore(LocalDate.parse(effective.startDate))) return emptyList()
     val range = progressRange(stage, onDate)
+    val effectiveStart = LocalDate.parse(effective.startDate)
     return timeEntries.filter { it.id !in excludedEntryIds && it.targetId != null }
         .filter { LocalDate.parse(it.planningDate) in range }
+        // A stage or future rule may begin in the middle of a calendar cycle.
+        // Minutes recorded before that effective start belong to the previous
+        // commitment and must not complete this stage's current period.
+        .filter { !LocalDate.parse(it.planningDate).isBefore(effectiveStart) }
         .filter { isDescendantAt(it.targetId!!, effective.targetId, LocalDate.parse(it.planningDate)) }
 }
 
@@ -997,9 +1002,12 @@ fun AttentionState.continuousPlanningDays(targetId: String? = null): Int {
 
 fun AttentionState.continuousPlanningDaysThrough(onDate: LocalDate, targetId: String? = null): Int {
     val dates = timeEntries.asSequence()
-        .filter { it.targetId != null && LocalDate.parse(it.planningDate) <= onDate }
-        .filter { targetId == null || it.targetId in descendantIds(targetId) }
-        .map { LocalDate.parse(it.planningDate) }
+        .mapNotNull { entry ->
+            val entryDate = LocalDate.parse(entry.planningDate)
+            if (entry.targetId == null || entryDate > onDate) return@mapNotNull null
+            if (targetId != null && !isDescendantAt(entry.targetId, targetId, entryDate)) return@mapNotNull null
+            entryDate
+        }
         .toSet()
     var cursor = onDate
     var count = 0
@@ -1073,7 +1081,10 @@ fun AttentionState.eligibleMilestones(onDate: LocalDate): List<Milestone> {
             if (days >= threshold) result.addMilestoneIfMissing(existing, "streak", key, reward)
         }
     }
-    val totalHours = timeEntries.filter { it.targetId != null }.sumOf { it.durationMinutes }.toLong() / 60
+    val totalHours = timeEntries
+        .filter { it.targetId != null && LocalDate.parse(it.planningDate) <= onDate }
+        .sumOf { it.durationMinutes }
+        .toLong() / 60
     (100L..totalHours step 100L).forEach { hours ->
         val key = "cumulative:$hours"
         val reward = cumulativeMilestoneReward(hours)
