@@ -10,6 +10,7 @@ import com.attention.app.reminder.ReminderCoordinator
 import com.attention.domain.AttentionState
 import com.attention.domain.LaunchDestination
 import com.attention.domain.StoredSettings
+import com.attention.domain.recalculateExperience
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
@@ -102,19 +103,20 @@ class RoomAttentionStateRepository(
             backupStore.write(AttentionBackupCodec.encode(current))
             val result = if (clearExisting) incoming else AttentionBackupCodec.merge(current, incoming)
             replaceWithRollback(current, result)
-            result
         }
     }
 
     override suspend fun lastImportBackup(): String? = backupStore.read()
 
-    private suspend fun replaceWithRollback(current: AttentionState, next: AttentionState) {
+    private suspend fun replaceWithRollback(current: AttentionState, next: AttentionState): AttentionState {
+        val canonicalNext = next.recalculateExperience()
         try {
-            business.replace(next)
-            settings.setSnapshot(next.toSettingsSnapshot())
-            reminderCoordinator.sync(current, next)
+            business.replace(canonicalNext)
+            settings.setSnapshot(canonicalNext.toSettingsSnapshot())
+            reminderCoordinator.sync(current, canonicalNext)
+            return canonicalNext
         } catch (error: Throwable) {
-            runCatching { reminderCoordinator.sync(next, current) }
+            runCatching { reminderCoordinator.sync(canonicalNext, current) }
                 .onFailure(error::addSuppressed)
             runCatching { settings.setSnapshot(current.toSettingsSnapshot()) }
                 .onFailure(error::addSuppressed)

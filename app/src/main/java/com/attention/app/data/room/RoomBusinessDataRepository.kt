@@ -21,7 +21,7 @@ class RoomBusinessDataRepository(
 
     /** Reads, applies one domain command, and persists it in one Room transaction. */
     suspend fun update(transform: (AttentionState) -> AttentionState): AttentionState = database.withTransaction {
-        val next = transform(readInTransaction())
+        val next = transform(readInTransaction()).recalculateExperience()
         replaceInTransaction(next)
         next
     }
@@ -34,19 +34,23 @@ class RoomBusinessDataRepository(
     }
 
     private suspend fun replaceInTransaction(state: AttentionState) {
+        // The time ledger and milestone history are the source of truth. Keep
+        // the singleton table as a compatibility cache, but never persist a
+        // caller supplied experience value that disagrees with those records.
+        val canonicalState = state.recalculateExperience()
         clearAll()
-        database.targetDao().upsertAll(state.targets.map { it.toEntity() })
-        database.goalStageDao().upsertAll(state.goalStages.map { it.toEntity() })
-        database.recurrenceRuleDao().upsertAll(state.recurrenceRules.map { it.toEntity() })
-        database.timeEntryDao().upsertAll(state.timeEntries.map { it.toEntity() })
-        database.scheduleEntryDao().upsertAll(state.schedules.map { it.toEntity() })
-        database.migrationDao().upsertAll(state.migrations.map { it.toEntity() })
-        database.futureGoalRuleDao().upsertAll(state.futureGoalRules.map { it.toEntity() })
-        database.periodSnapshotDao().upsertAll(state.periodSnapshots.map { it.toEntity() })
-        database.targetMoveDao().upsertAll(state.targetMoves.map { it.toEntity() })
-        database.milestoneDao().upsertAll(state.milestones.map { it.toEntity() })
-        database.experienceDao().upsert(ExperienceEntity(points = state.experience))
-        state.activeTimer?.let { database.activeTimerDao().upsert(it.toEntity()) }
+        database.targetDao().upsertAll(canonicalState.targets.map { it.toEntity() })
+        database.goalStageDao().upsertAll(canonicalState.goalStages.map { it.toEntity() })
+        database.recurrenceRuleDao().upsertAll(canonicalState.recurrenceRules.map { it.toEntity() })
+        database.timeEntryDao().upsertAll(canonicalState.timeEntries.map { it.toEntity() })
+        database.scheduleEntryDao().upsertAll(canonicalState.schedules.map { it.toEntity() })
+        database.migrationDao().upsertAll(canonicalState.migrations.map { it.toEntity() })
+        database.futureGoalRuleDao().upsertAll(canonicalState.futureGoalRules.map { it.toEntity() })
+        database.periodSnapshotDao().upsertAll(canonicalState.periodSnapshots.map { it.toEntity() })
+        database.targetMoveDao().upsertAll(canonicalState.targetMoves.map { it.toEntity() })
+        database.milestoneDao().upsertAll(canonicalState.milestones.map { it.toEntity() })
+        database.experienceDao().upsert(ExperienceEntity(points = canonicalState.experience))
+        canonicalState.activeTimer?.let { database.activeTimerDao().upsert(it.toEntity()) }
     }
 
     suspend fun read(): AttentionState = database.withTransaction {
@@ -65,9 +69,8 @@ class RoomBusinessDataRepository(
             periodSnapshots = database.periodSnapshotDao().getAll().map { it.toDomain() },
             targetMoves = database.targetMoveDao().getAll().map { it.toDomain() },
             milestones = database.milestoneDao().getAll().map { it.toDomain() },
-            experience = database.experienceDao().find()?.points ?: 0,
             activeTimer = database.activeTimerDao().find()?.toDomain(),
-        )
+        ).recalculateExperience()
     }
 
     /**
@@ -86,7 +89,6 @@ class RoomBusinessDataRepository(
         val periodSnapshots = database.periodSnapshotDao().observeAll().map { rows -> rows.map { it.toDomain() } }
         val targetMoves = database.targetMoveDao().observeAll().map { rows -> rows.map { it.toDomain() } }
         val milestones = database.milestoneDao().observeAll().map { rows -> rows.map { it.toDomain() } }
-        val experience = database.experienceDao().observe().map { it?.points ?: 0 }
         val activeTimer = database.activeTimerDao().observe().map { it?.toDomain() }
 
         val targetData = combine(targets, goalStages) { loadedTargets, loadedStages ->
@@ -98,7 +100,11 @@ class RoomBusinessDataRepository(
         val planningData = combine(migrations, futureGoalRules, periodSnapshots, targetMoves) { loadedMigrations, loadedFutureRules, loadedSnapshots, loadedMoves ->
             PlanningData(loadedMigrations, loadedFutureRules, loadedSnapshots, loadedMoves)
         }
-        val rewardData = combine(milestones, experience, activeTimer) { loadedMilestones, loadedExperience, loadedTimer ->
+        val rewardData = combine(milestones, timeEntries, activeTimer) { loadedMilestones, loadedEntries, loadedTimer ->
+            val loadedExperience = AttentionState(
+                timeEntries = loadedEntries,
+                milestones = loadedMilestones,
+            ).recalculateExperience().experience
             RewardData(loadedMilestones, loadedExperience, loadedTimer)
         }
         return combine(targetData, scheduleData, planningData, rewardData) { targetsAndStages, schedulesAndEntries, planning, rewards ->

@@ -31,6 +31,7 @@ import com.attention.domain.settlePeriodSnapshots
 import com.attention.domain.appendOneTimeGoalStage
 import com.attention.domain.awardEligibleMilestones
 import com.attention.domain.toggleScheduleCompleted
+import com.attention.domain.recalculateExperience
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -79,7 +80,7 @@ class RoomBusinessDataRepositoryTest {
         assertEquals(state.periodSnapshots.sortedBy { it.id }, loaded.periodSnapshots.sortedBy { it.id })
         assertEquals(state.targetMoves.sortedBy { it.id }, loaded.targetMoves.sortedBy { it.id })
         assertEquals(state.milestones.sortedBy { it.id }, loaded.milestones.sortedBy { it.id })
-        assertEquals(state.experience, loaded.experience)
+        assertEquals(state.recalculateExperience().experience, loaded.experience)
         assertEquals(state.activeTimer, loaded.activeTimer)
     }
 
@@ -95,7 +96,7 @@ class RoomBusinessDataRepositoryTest {
         assertEquals(initial.schedules.single().copy(completed = true), loaded.schedules.single())
         assertEquals(initial.timeEntries, loaded.timeEntries)
         assertEquals(initial.milestones, loaded.milestones)
-        assertEquals(initial.experience, loaded.experience)
+        assertEquals(initial.recalculateExperience().experience, loaded.experience)
 
         repository.update { it.toggleScheduleCompleted("schedule") }
         assertEquals(initial.schedules.single(), repository.read().schedules.single())
@@ -378,6 +379,33 @@ class RoomBusinessDataRepositoryTest {
             assertEquals("target", RoomBusinessDataRepository(second).read().targets.single().id)
         } finally {
             second.close()
+            context.deleteDatabase(name)
+        }
+    }
+
+    @Test
+    fun room_restart_rebuilds_experience_from_time_ledger_and_milestones() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val name = "room-experience-restart-test.db"
+        context.deleteDatabase(name)
+        val target = Target("experience-target", title = "学习")
+        val expected = AttentionState(
+            targets = listOf(target),
+            timeEntries = listOf(TimeEntry("experience-entry", "2026-10-08", 45, target.id)),
+            milestones = listOf(Milestone("experience-milestone", "goal_period", "stage:1", 20, 1L)),
+            experience = 9999L,
+        ).recalculateExperience()
+        val firstDatabase = Room.databaseBuilder(context, AttentionDatabase::class.java, name).build()
+        RoomBusinessDataRepository(firstDatabase).replace(expected.copy(experience = 9999L))
+        firstDatabase.close()
+
+        val secondDatabase = Room.databaseBuilder(context, AttentionDatabase::class.java, name).build()
+        try {
+            val loaded = RoomBusinessDataRepository(secondDatabase).read()
+            assertEquals(expected, loaded)
+            assertEquals(65L, loaded.experience)
+        } finally {
+            secondDatabase.close()
             context.deleteDatabase(name)
         }
     }

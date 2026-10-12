@@ -14,6 +14,7 @@ import com.attention.domain.StoredSettings
 import com.attention.domain.Target
 import com.attention.domain.TargetMove
 import com.attention.domain.TimeEntry
+import com.attention.domain.recalculateExperience
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -58,30 +59,33 @@ data class AttentionBackup(
         launchDestination = launchDestination,
         lastOpenedDestination = lastOpenedDestination,
         notificationsEnabled = notificationsEnabled,
-    )
+    ).recalculateExperience()
 
     companion object {
         const val CURRENT_VERSION = 1
 
-        fun fromDomain(state: AttentionState): AttentionBackup = AttentionBackup(
-            settings = state.settings,
-            targets = state.targets,
-            goalStages = state.goalStages,
-            timeEntries = state.timeEntries,
-            schedules = state.schedules,
-            recurrenceRules = state.recurrenceRules,
-            migrations = state.migrations,
-            futureGoalRules = state.futureGoalRules,
-            periodSnapshots = state.periodSnapshots,
-            targetMoves = state.targetMoves,
-            milestones = state.milestones,
-            experience = state.experience,
-            activeTimer = state.activeTimer,
-            onboardingCompleted = state.onboardingCompleted,
-            launchDestination = state.launchDestination,
-            lastOpenedDestination = state.lastOpenedDestination,
-            notificationsEnabled = state.notificationsEnabled,
-        )
+        fun fromDomain(state: AttentionState): AttentionBackup {
+            val canonical = state.recalculateExperience()
+            return AttentionBackup(
+                settings = canonical.settings,
+                targets = canonical.targets,
+                goalStages = canonical.goalStages,
+                timeEntries = canonical.timeEntries,
+                schedules = canonical.schedules,
+                recurrenceRules = canonical.recurrenceRules,
+                migrations = canonical.migrations,
+                futureGoalRules = canonical.futureGoalRules,
+                periodSnapshots = canonical.periodSnapshots,
+                targetMoves = canonical.targetMoves,
+                milestones = canonical.milestones,
+                experience = canonical.experience,
+                activeTimer = canonical.activeTimer,
+                onboardingCompleted = canonical.onboardingCompleted,
+                launchDestination = canonical.launchDestination,
+                lastOpenedDestination = canonical.lastOpenedDestination,
+                notificationsEnabled = canonical.notificationsEnabled,
+            )
+        }
     }
 }
 
@@ -115,13 +119,13 @@ object AttentionBackupCodec {
         periodSnapshots = mergeById(current.periodSnapshots, incoming.periodSnapshots) { it.id },
         targetMoves = mergeById(current.targetMoves, incoming.targetMoves) { it.id },
         milestones = mergeById(current.milestones, incoming.milestones) { it.id },
-        experience = maxOf(current.experience, incoming.experience),
+        experience = 0,
         activeTimer = incoming.activeTimer,
         onboardingCompleted = incoming.onboardingCompleted,
         launchDestination = incoming.launchDestination,
         lastOpenedDestination = incoming.lastOpenedDestination,
         notificationsEnabled = incoming.notificationsEnabled,
-    )
+    ).recalculateExperience()
 
     private fun <T> mergeById(existing: List<T>, incoming: List<T>, id: (T) -> String): List<T> {
         val result = existing.toMutableList()
