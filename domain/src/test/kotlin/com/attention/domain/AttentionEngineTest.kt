@@ -1895,6 +1895,20 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun cumulative_milestones_ignore_future_time_entries_until_their_planning_date() {
+        val state = AttentionState().addTarget("未来累计投入")
+        val target = state.targets.single()
+        val withFutureEntry = state.addTimeEntry(date.plusDays(1).toString(), 100 * 60, target.id)
+
+        val beforeDate = withFutureEntry.awardEligibleMilestones(date)
+        val onDate = beforeDate.awardEligibleMilestones(date.plusDays(1))
+
+        assertTrue(beforeDate.milestones.none { it.kind == "cumulative" })
+        assertEquals(1, onDate.milestones.count { it.kind == "cumulative" })
+        assertEquals("cumulative:100", onDate.milestones.single { it.kind == "cumulative" }.instanceKey)
+    }
+
+    @Test
     fun parent_streak_uses_historical_target_tree_relationships() {
         val state = AttentionState().addTarget("父目标")
         val parent = state.targets.single()

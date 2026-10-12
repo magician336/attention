@@ -1061,7 +1061,10 @@ fun AttentionState.eligibleMilestones(onDate: LocalDate): List<Milestone> {
             if (days >= threshold) result.addMilestoneIfMissing(existing, "streak", key, reward)
         }
     }
-    val totalHours = timeEntries.filter { it.targetId != null }.sumOf { it.durationMinutes }.toLong() / 60
+    val totalHours = timeEntries
+        .filter { it.targetId != null && LocalDate.parse(it.planningDate) <= onDate }
+        .sumOf { it.durationMinutes }
+        .toLong() / 60
     (100L..totalHours step 100L).forEach { hours ->
         val key = "cumulative:$hours"
         val reward = cumulativeMilestoneReward(hours)
