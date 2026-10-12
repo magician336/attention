@@ -982,9 +982,12 @@ fun AttentionState.continuousPlanningDays(targetId: String? = null): Int {
 
 fun AttentionState.continuousPlanningDaysThrough(onDate: LocalDate, targetId: String? = null): Int {
     val dates = timeEntries.asSequence()
-        .filter { it.targetId != null && LocalDate.parse(it.planningDate) <= onDate }
-        .filter { targetId == null || it.targetId in descendantIds(targetId) }
-        .map { LocalDate.parse(it.planningDate) }
+        .mapNotNull { entry ->
+            val entryDate = LocalDate.parse(entry.planningDate)
+            if (entry.targetId == null || entryDate > onDate) return@mapNotNull null
+            if (targetId != null && !isDescendantAt(entry.targetId, targetId, entryDate)) return@mapNotNull null
+            entryDate
+        }
         .toSet()
     var cursor = onDate
     var count = 0
