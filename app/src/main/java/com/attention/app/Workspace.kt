@@ -492,6 +492,7 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
     var moveParentId by remember { mutableStateOf<String?>(null) }
     var moveEffectiveDate by remember { mutableStateOf("") }
     var selectedUnownedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var selectedArchivedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("目标树", style = MaterialTheme.typography.headlineMedium)
         Text("父目标显示整个子树的实际投入；归档目标会从默认列表隐藏。")
@@ -887,15 +888,37 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
             },
         )
         if (state.targets.none { !it.archived }) Text("还没有计划。")
-        if (state.targets.any { it.archived }) {
+        val archivedTargets = state.targets.filter { it.archived }
+        if (archivedTargets.isNotEmpty()) {
             Text("已归档目标", style = MaterialTheme.typography.titleMedium)
-            state.targets.filter { it.archived }.forEach { target ->
+            Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Text("已选 ${selectedArchivedIds.size} 个", Modifier.weight(1f))
+                TextButton(onClick = { selectedArchivedIds = archivedTargets.map { it.id }.toSet() }) { Text("全选") }
+                TextButton(onClick = { selectedArchivedIds = emptySet() }) { Text("清除选择") }
+                Button(
+                    modifier = Modifier.testTag("restore-archived-selected"),
+                    enabled = selectedArchivedIds.isNotEmpty(),
+                    onClick = { viewModel.restoreTargets(selectedArchivedIds); selectedArchivedIds = emptySet() },
+                ) { Text("批量恢复") }
+            }
+            archivedTargets.forEach { target ->
                 Column(Modifier.fillMaxWidth()) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = target.id in selectedArchivedIds,
+                            onCheckedChange = { checked ->
+                                selectedArchivedIds = if (checked) selectedArchivedIds + target.id else selectedArchivedIds - target.id
+                            },
+                        )
                         Text(target.title, Modifier.weight(1f))
                         TextButton(onClick = { viewModel.restoreTarget(target.id) }) { Text("恢复") }
                         TextButton(onClick = { pendingDelete = target }) { Text("安全删除") }
                     }
+                    Text("层级：${state.targetPath(target.id)}", modifier = Modifier.padding(start = 16.dp))
+                    val historicalMinutes = state.timeEntries
+                        .filter { it.targetId in state.descendantIds(target.id) }
+                        .sumOf { it.durationMinutes }
+                    Text("历史投入：$historicalMinutes 分钟", modifier = Modifier.padding(start = 16.dp))
                     val planningDate = state.planningDate(Instant.now())
                     val stages = state.goalStagesForTarget(target.id)
                     val oneTimeSummary = state.goalSummary(target.id, planningDate)
@@ -914,6 +937,8 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
                     }
                 }
             }
+        } else {
+            Text("暂无归档目标", modifier = Modifier.testTag("archived-empty-state"))
         }
     }
     pendingDelete?.let { target ->

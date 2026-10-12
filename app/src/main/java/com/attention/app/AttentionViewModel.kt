@@ -24,6 +24,7 @@ import com.attention.domain.addTarget
 import com.attention.domain.addTimeEntry
 import com.attention.domain.assignUnowned
 import com.attention.domain.archiveTarget
+import com.attention.domain.restoreTargets
 import com.attention.domain.deleteTargetRelations
 import com.attention.domain.deleteTimeEntry
 import com.attention.domain.editTimeEntry
@@ -97,6 +98,7 @@ class AttentionViewModel(
     fun toggleTarget(id: String, expanded: Boolean) = runCommand { it.setTargetExpanded(id, expanded) }
     fun archiveTarget(id: String) = runCommand { it.archiveTarget(id) }
     fun restoreTarget(id: String) = runCommand { it.archiveTarget(id, archived = false) }
+    fun restoreTargets(ids: Set<String>) = runCommand { it.restoreTargets(ids) }
     fun deleteTargetRelations(ids: Set<String>) = runCommand { it.deleteTargetRelations(ids) }
 
     fun addTime(date: String, minutes: Int, targetId: String?, note: String = "") =

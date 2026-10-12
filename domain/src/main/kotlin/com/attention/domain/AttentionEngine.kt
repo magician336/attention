@@ -341,6 +341,15 @@ fun AttentionState.archiveTarget(targetId: String, archived: Boolean = true): At
     )
 }
 
+/** Restores one or more archived targets without changing their hierarchy or ordering. */
+fun AttentionState.restoreTargets(targetIds: Set<String>): AttentionState {
+    if (targetIds.isEmpty()) return this
+    require(targetIds.all { id -> targets.any { it.id == id } }) { "目标不存在" }
+    return copy(targets = targets.map { target ->
+        if (target.id in targetIds) target.copy(archived = false) else target
+    })
+}
+
 fun AttentionState.deleteTargetRelations(targetIds: Set<String>): AttentionState {
     val ids = targetIds.flatMap(::descendantIds).toSet()
     return copy(
