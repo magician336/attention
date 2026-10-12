@@ -99,7 +99,7 @@ jobs:
           target: default
           arch: x86_64
           profile: pixel_2
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot
+          emulator-options: -no-window -gpu off -noaudio -no-boot-anim -camera-back none -no-snapshot
           disable-animations: true
           script: status=0; ./gradlew --no-daemon connectedDebugAndroidTest || status=$?; timeout 30s adb logcat -d -b all -v threadtime > instrumentation-logcat.txt || true; exit $status
 
