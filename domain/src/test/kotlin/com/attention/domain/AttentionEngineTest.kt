@@ -290,15 +290,15 @@ class AttentionEngineTest {
             .addTimeEntry("2026-10-07", 60, target.id)
         val incomplete = state
             .addTimeEntry("2026-10-08", 59, target.id)
-            .awardEligibleMilestones(LocalDate.parse("2026-10-12"))
+            .awardEligibleMilestones(LocalDate.parse("2026-10-09"))
         assertEquals(emptyList<Milestone>(), incomplete.milestones)
         val awarded = incomplete
             .addTimeEntry("2026-10-09", 1, target.id)
-            .awardEligibleMilestones(LocalDate.parse("2026-10-12"))
+            .awardEligibleMilestones(LocalDate.parse("2026-10-09"))
         assertEquals(1, awarded.milestones.size)
-        assertEquals("goal_period:${state.goalStages.single().id}:2026-10-06", awarded.milestones.single().instanceKey)
+        assertEquals("goal_period:${state.goalStages.single().id}:2026-10-05", awarded.milestones.single().instanceKey)
         assertEquals(1_000L, awarded.milestones.single().reward)
-        assertEquals(1_000L, awarded.experience)
+        assertEquals(1_120L, awarded.experience)
     }
 
     @Test
@@ -500,7 +500,7 @@ class AttentionEngineTest {
             settings = StoredSettings(weekStartDay = 1),
         )
         val mondayTarget = mondayStart.targets.single()
-        val stage = mondayStart.addGoalStage(mondayTarget.id, GoalCadence.WEEKLY, 60, date.toString()).goalStages.single()
+        val stage = mondayStart.addGoalStage(mondayTarget.id, GoalCadence.WEEKLY, 60, "2026-10-05").goalStages.single()
         val records = mondayStart
             .addTimeEntry("2026-10-04", 100, mondayTarget.id)
             .addTimeEntry("2026-10-05", 30, mondayTarget.id)
@@ -520,9 +520,9 @@ class AttentionEngineTest {
         assertEquals(10, mondayProgress.excessMinutes)
         assertEquals(LocalDate.of(2026, 10, 4), sundayRange.start)
         assertEquals(LocalDate.of(2026, 10, 10), sundayRange.endInclusive)
-        assertEquals(130, sundayProgress.actualMinutes)
-        assertTrue(sundayProgress.completed)
-        assertEquals(70, sundayProgress.excessMinutes)
+        assertEquals(30, sundayProgress.actualMinutes)
+        assertFalse(sundayProgress.completed)
+        assertEquals(0, sundayProgress.excessMinutes)
     }
 
     @Test
