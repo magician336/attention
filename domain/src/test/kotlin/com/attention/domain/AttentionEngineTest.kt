@@ -1691,6 +1691,39 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun restoring_multiple_archived_targets_preserves_their_hierarchy_and_history() {
+        val initial = AttentionState().addTarget("父目标")
+        val parent = initial.targets.single()
+        val withChild = initial.addTarget("子目标", parent.id)
+        val child = withChild.targets.single { it.parentId == parent.id }
+        val archived = withChild
+            .addTimeEntry(date.toString(), 25, child.id)
+            .archiveTarget(parent.id)
+            .archiveTarget(child.id)
+
+        val restored = archived.restoreTargets(setOf(parent.id, child.id))
+
+        assertEquals(parent.id, restored.targets.single { it.id == child.id }.parentId)
+        assertEquals(25, restored.subtreeMinutes(parent.id))
+        assertTrue(restored.targets.none { it.archived })
+    }
+
+    @Test
+    fun restoring_archived_descendant_also_restores_archived_ancestors() {
+        val initial = AttentionState().addTarget("父目标")
+        val parent = initial.targets.single()
+        val withChild = initial.addTarget("子目标", parent.id)
+        val child = withChild.targets.single { it.parentId == parent.id }
+        val archived = withChild.archiveTarget(parent.id).archiveTarget(child.id)
+
+        val restored = archived.restoreTargets(setOf(child.id))
+
+        assertFalse(restored.targets.single { it.id == child.id }.archived)
+        assertFalse(restored.targets.single { it.id == parent.id }.archived)
+        assertEquals(listOf(child.id), restored.targetChildren(parent.id).map { it.id })
+    }
+
+    @Test
     fun batch_assignment_is_atomic_for_stale_or_already_owned_ids() {
         val state = AttentionState().addTarget("学习")
         val target = state.targets.single()
@@ -1845,6 +1878,35 @@ class AttentionEngineTest {
         assertTrue(removed.timeEntries.single().targetId == null)
         assertEquals(10_000L, removed.experience)
         assertEquals(1, removed.milestones.size)
+    }
+
+    @Test
+    fun deletion_impact_deduplicates_selected_parent_and_child_subtrees() {
+        val parent = Target("parent", title = "父")
+        val child = Target("child", parentId = parent.id, title = "子")
+        val state = AttentionState(
+            targets = listOf(parent, child),
+            timeEntries = listOf(TimeEntry("time", date.toString(), 10, child.id)),
+            schedules = listOf(ScheduleEntry("schedule", date.toString(), "安排", targetId = child.id)),
+            recurrenceRules = listOf(RecurrenceRule("rule", "重复", date.toString(), ScheduleFrequency.DAILY, targetId = child.id)),
+            goalStages = listOf(GoalStage("stage", child.id, GoalCadence.DAILY, 10, date.toString())),
+            futureGoalRules = listOf(FutureGoalRule("future", targetId = child.id, cadence = GoalCadence.DAILY, targetMinutes = 10, effectiveFrom = date.toString())),
+            migrations = listOf(Migration("migration", child.id, "stage", 5, date.toString(), date.toString())),
+            targetMoves = listOf(TargetMove("move", child.id, parent.id, date.toString())),
+            activeTimer = ActiveTimer(child.id, 0L, lastPlanningDate = date.toString()),
+        )
+
+        val impact = state.targetDeletionImpact(setOf(parent.id, child.id))
+
+        assertEquals(2, impact.targetCount)
+        assertEquals(1, impact.timeEntryCount)
+        assertEquals(1, impact.scheduleEntryCount)
+        assertEquals(1, impact.recurrenceRuleCount)
+        assertEquals(1, impact.goalStageCount)
+        assertEquals(1, impact.futureGoalRuleCount)
+        assertEquals(1, impact.migrationCount)
+        assertEquals(1, impact.targetMoveCount)
+        assertEquals(1, impact.activeTimerCount)
     }
 
     @Test
@@ -2165,4 +2227,44 @@ class AttentionEngineTest {
             scheduled.updateFutureTargetMove(move.copy(effectiveFrom = date.plusDays(2).toString()), date.plusDays(1))
         }
     }
+    @Test
+    fun batch_deletion_deduplicates_parent_and_child_and_cleans_all_target_relations() {
+        val parent = Target("batch-parent", title = "批量父目标")
+        val child = Target("batch-child", parentId = parent.id, title = "批量子目标")
+        val survivor = Target("batch-survivor", title = "保留目标")
+        val stage = GoalStage("batch-stage", child.id, GoalCadence.ONE_TIME, 10, date.toString())
+        val state = AttentionState(
+            targets = listOf(parent, child, survivor),
+            goalStages = listOf(stage),
+            timeEntries = listOf(
+                TimeEntry("batch-time", date.toString(), 10, child.id),
+                TimeEntry("survivor-time", date.toString(), 5, survivor.id),
+            ),
+            schedules = listOf(
+                ScheduleEntry("batch-schedule", date.toString(), "批量日程", targetId = child.id),
+                ScheduleEntry("survivor-schedule", date.toString(), "保留日程", targetId = survivor.id),
+            ),
+            recurrenceRules = listOf(
+                RecurrenceRule("batch-rule", "批量重复", date.toString(), ScheduleFrequency.DAILY, targetId = child.id),
+                RecurrenceRule("survivor-rule", "保留重复", date.toString(), ScheduleFrequency.DAILY, targetId = survivor.id),
+            ),
+            activeTimer = ActiveTimer(child.id, 0L, lastPlanningDate = date.toString()),
+        ).awardEligibleMilestones(date)
+
+        val deleted = state.deleteTargetRelations(setOf(parent.id, child.id))
+
+        assertEquals(listOf(survivor), deleted.targets)
+        assertEquals(listOf("batch-time", "survivor-time"), deleted.timeEntries.map { it.id })
+        assertNull(deleted.timeEntries.first().targetId)
+        assertEquals(survivor.id, deleted.timeEntries.last().targetId)
+        assertEquals(listOf("batch-schedule", "survivor-schedule"), deleted.schedules.map { it.id })
+        assertNull(deleted.schedules.first().targetId)
+        assertEquals(listOf("batch-rule", "survivor-rule"), deleted.recurrenceRules.map { it.id })
+        assertNull(deleted.recurrenceRules.first().targetId)
+        assertTrue(deleted.goalStages.isEmpty())
+        assertNull(deleted.activeTimer?.targetId)
+        assertEquals(state.milestones, deleted.milestones)
+        assertTrue(deleted.experience >= deleted.milestones.sumOf { it.reward })
+    }
+
 }

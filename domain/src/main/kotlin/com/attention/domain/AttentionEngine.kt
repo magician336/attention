@@ -341,15 +341,55 @@ fun AttentionState.archiveTarget(targetId: String, archived: Boolean = true): At
     )
 }
 
+/** Restores one or more archived targets without changing their hierarchy or ordering. */
+fun AttentionState.restoreTargets(targetIds: Set<String>): AttentionState {
+    if (targetIds.isEmpty()) return this
+    require(targetIds.all { id -> targets.any { it.id == id } }) { "目标不存在" }
+    // A restored descendant must remain reachable from the default tree. Restore
+    // any archived ancestors along its parent chain as part of the same action.
+    val idsToRestore = targetIds.toMutableSet()
+    var changed = true
+    while (changed) {
+        changed = false
+        targets.filter { it.id in idsToRestore }.forEach { target ->
+            val parentId = target.parentId
+            if (parentId != null && targets.any { it.id == parentId && it.archived }) {
+                changed = idsToRestore.add(parentId) || changed
+            }
+        }
+    }
+    return copy(targets = targets.map { target ->
+        if (target.id in idsToRestore) target.copy(archived = false) else target
+    })
+}
+
+/** Returns a deduplicated impact summary for deleting the selected target subtrees. */
+fun AttentionState.targetDeletionImpact(targetIds: Set<String>): TargetDeletionImpact {
+    val ids = targetIds.flatMap(::descendantIds).toSet()
+    return TargetDeletionImpact(
+        targetCount = ids.count { id -> targets.any { it.id == id } },
+        timeEntryCount = timeEntries.count { it.targetId in ids },
+        scheduleEntryCount = schedules.count { it.targetId in ids },
+        recurrenceRuleCount = recurrenceRules.count { it.targetId in ids },
+        goalStageCount = goalStages.count { it.targetId in ids },
+        futureGoalRuleCount = futureGoalRules.count { it.targetId in ids },
+        migrationCount = migrations.count { it.targetId in ids || goalStages.any { stage -> stage.id == it.sourceStageId && stage.targetId in ids } },
+        targetMoveCount = targetMoves.count { it.targetId in ids || it.parentId in ids },
+        activeTimerCount = if (activeTimer?.targetId in ids) 1 else 0,
+    )
+}
+
 fun AttentionState.deleteTargetRelations(targetIds: Set<String>): AttentionState {
     val ids = targetIds.flatMap(::descendantIds).toSet()
+    val deletedStageIds = goalStages.filter { it.targetId in ids }.map { it.id }.toSet()
     return copy(
         targets = targets.filterNot { it.id in ids },
         goalStages = goalStages.filterNot { it.targetId in ids },
+        recurrenceRules = recurrenceRules.map { if (it.targetId in ids) it.copy(targetId = null) else it },
         timeEntries = timeEntries.map { if (it.targetId in ids) it.copy(targetId = null) else it },
         schedules = schedules.map { if (it.targetId in ids) it.copy(targetId = null) else it },
-        migrations = migrations.filterNot { it.targetId in ids },
-        futureGoalRules = futureGoalRules.filterNot { it.targetId in ids },
+        migrations = migrations.filterNot { it.targetId in ids || it.sourceStageId in deletedStageIds },
+        futureGoalRules = futureGoalRules.filterNot { it.targetId in ids || it.stageId in deletedStageIds },
         targetMoves = targetMoves
             .filterNot { it.targetId in ids }
             .map { move -> if (move.parentId != null && move.parentId in ids) move.copy(parentId = null) else move },
