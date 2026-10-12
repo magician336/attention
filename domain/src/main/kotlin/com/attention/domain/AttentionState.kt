@@ -229,6 +229,7 @@ data class PeriodStats(
     val migrationMinutes: Int,
     val excessMinutes: Int,
     val byTargetMinutes: Map<String, Int>,
+    val subtreeByTargetMinutes: Map<String, Int> = emptyMap(),
 )
 
 data class TimerResult(val state: AttentionState, val entries: List<TimeEntry>)

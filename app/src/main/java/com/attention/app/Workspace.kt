@@ -1527,13 +1527,24 @@ private fun StatisticsScreen(
     onExportCsv: () -> Unit,
     onImportJson: () -> Unit,
 ) {
-    val date = state.planningDate(Instant.now()).toString()
+    var selectedDate by remember { mutableStateOf(state.planningDate(Instant.now())) }
     var cadence by remember { mutableStateOf(GoalCadence.DAILY) }
-    val stats = state.periodStats(LocalDate.parse(date), cadence)
+    val stats = state.periodStats(selectedDate, cadence)
+    val visibleMigrations = state.migrations.filterNot { it.cancelled }.filter { migration ->
+        val start = LocalDate.parse(migration.destinationStartDate)
+        val end = migration.destinationEndDate?.let(LocalDate::parse) ?: start
+        start <= stats.range.endInclusive && end >= stats.range.start
+    }
+    val statisticsCadences = listOf(GoalCadence.DAILY, GoalCadence.WEEKLY, GoalCadence.MONTHLY)
     val levelProgress = levelProgressForExperience(state.experience)
     val levelSpan = levelProgress.nextLevelThreshold - levelProgress.currentLevelThreshold
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("统计与成长", style = MaterialTheme.typography.headlineMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            TextButton(onClick = { selectedDate = shiftStatisticsDate(selectedDate, cadence, -1) }) { Text("上一周期") }
+            Text("${stats.range.start} 至 ${stats.range.endInclusive}")
+            TextButton(onClick = { selectedDate = shiftStatisticsDate(selectedDate, cadence, 1) }) { Text("下一周期") }
+        }
         Text("历史周期快照", style = MaterialTheme.typography.titleMedium)
         Text("快照保存周期结束时的目标、实际投入、缺口和达成结果；重复结算不会新增记录。")
         Button(onClick = viewModel::settlePeriodSnapshots) { Text("结算已结束周期") }
@@ -1551,19 +1562,26 @@ private fun StatisticsScreen(
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            GoalCadence.entries.forEach { value ->
+            statisticsCadences.forEach { value ->
                 if (cadence == value) Button(onClick = {}) { Text(value.label()) }
                 else OutlinedButton(onClick = { cadence = value }) { Text(value.label()) }
             }
         }
-        Text("${stats.range.start} 至 ${stats.range.endInclusive}：实际 ${stats.actualMinutes} 分钟 · 目标 ${stats.targetMinutes} 分钟 · 缺口 ${stats.targetMinutes.minus(stats.actualMinutes).coerceAtLeast(0)} 分钟 · 超额 ${stats.excessMinutes} 分钟")
-        Text("未归属活动：${state.unownedMinutesForUi()} 分钟")
+        Text("实际 ${stats.actualMinutes} 分钟 · 目标 ${stats.targetMinutes} 分钟 · 缺口 ${stats.targetMinutes.minus(stats.actualMinutes).coerceAtLeast(0)} 分钟 · 超额 ${stats.excessMinutes} 分钟")
+        Text("未归属活动：${stats.unownedMinutes} 分钟")
         Text("迁移目标：${stats.migrationMinutes} 分钟")
-        state.migrations.filterNot { it.cancelled }.forEach { migration ->
+        visibleMigrations.forEach { migration ->
             Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                 Text("主动迁移 ${migration.minutes} 分钟 · ${migration.destinationStartDate}", Modifier.weight(1f))
                 TextButton(onClick = { viewModel.cancelMigration(migration.id) }) { Text("取消") }
             }
+        }
+        Text("目标树投入", style = MaterialTheme.typography.titleMedium)
+        state.targets.forEach { target ->
+            val direct = stats.byTargetMinutes[target.id] ?: 0
+            val subtree = stats.subtreeByTargetMinutes[target.id] ?: 0
+            val archivedLabel = if (target.archived) "（已归档）" else ""
+            Text("${target.title}$archivedLabel：$subtree 分钟 · 直接投入 $direct 分钟 · 子树汇总 $subtree 分钟")
         }
         Text("投入经验：${state.experience} · 等级 ${levelProgress.level}")
         Text("当前等级区间进度：${levelProgress.progressExperience}/${levelSpan} 点")
@@ -1592,17 +1610,14 @@ private fun StatisticsScreen(
             }
         }
         state.targets.filter { !it.archived }.forEach { target ->
-            val total = state.subtreeMinutes(target.id)
-            Text("${target.title}：$total 分钟")
-            val planningDate = LocalDate.parse(date)
             val stages = state.goalStagesForTarget(target.id)
-            val oneTimeSummary = state.goalSummary(target.id, planningDate)
+            val oneTimeSummary = state.goalSummary(target.id, selectedDate)
             if (oneTimeSummary.stageProgresses.isNotEmpty()) {
                 Text(oneTimeSummary.summaryLabel())
             }
             stages.forEach { stage ->
                 val detail = oneTimeSummary.stageProgresses.firstOrNull { it.stage.id == stage.id }
-                Text(detail?.let { state.goalProgressLabel(it, planningDate) } ?: state.goalProgressLabel(stage, planningDate))
+                Text(detail?.let { state.goalProgressLabel(it, selectedDate) } ?: state.goalProgressLabel(stage, selectedDate))
                 state.stageFeedbackLabels(stage).forEach { label ->
                     Text(label, modifier = Modifier.padding(start = 16.dp))
                 }
@@ -1617,7 +1632,12 @@ private fun resolveLaunchDestination(requested: LaunchDestination, lastOpened: L
     else -> requested
 }
 
-private fun AttentionState.unownedMinutesForUi(): Int = timeEntries.filter { it.targetId == null }.sumOf { it.durationMinutes }
+private fun shiftStatisticsDate(date: LocalDate, cadence: GoalCadence, amount: Long): LocalDate = when (cadence) {
+    GoalCadence.DAILY -> date.plusDays(amount)
+    GoalCadence.WEEKLY -> date.plusWeeks(amount)
+    GoalCadence.MONTHLY -> date.plusMonths(amount)
+    GoalCadence.ONE_TIME -> date
+}
 
 private fun AttentionState.goalProgressLabel(stage: GoalStage, planningDate: LocalDate): String =
     goalProgressLabel(GoalStageSummary(stage, progress(stage, planningDate)), planningDate)
