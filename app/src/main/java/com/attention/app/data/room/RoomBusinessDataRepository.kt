@@ -152,6 +152,8 @@ class RoomBusinessDataRepository(
         }
         database.goalStageDao().deleteByTargetIds(idList)
         deleteTargetsLeafFirst(existingTargets, ids)
+        val reconciled = readInTransaction().recalculateExperience()
+        database.experienceDao().upsert(ExperienceEntity(points = reconciled.experience))
     }
 
     private suspend fun deleteTargetsLeafFirst(
