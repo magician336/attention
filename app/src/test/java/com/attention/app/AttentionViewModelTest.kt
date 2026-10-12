@@ -193,6 +193,33 @@ class AttentionViewModelTest {
         }
     }
 
+    @Test
+    fun combined_csv_export_returns_both_files_from_one_snapshot() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val target = Target("bundle-target", title = "学习")
+            val schedule = ScheduleEntry("bundle-schedule", "2026-10-08", "复习", estimatedMinutes = 30)
+            val repository = FakeRepository(
+                AttentionState(
+                    targets = listOf(target),
+                    timeEntries = listOf(TimeEntry("bundle-entry", "2026-10-08", 45, target.id)),
+                    schedules = listOf(schedule),
+                ),
+            )
+            val viewModel = AttentionViewModel(repository, ZoneOffset.UTC)
+            var exported: AttentionViewModel.CsvExportBundle? = null
+
+            viewModel.exportCsvBundle { exported = it }
+            advanceUntilIdle()
+
+            assertTrue(exported?.timeEntries?.contains("2026-10-08,45,bundle-target,学习,MANUAL") == true)
+            assertTrue(exported?.schedules?.contains("2026-10-08,复习,false,30") == true)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
     private class FakeRepository(initial: AttentionState) : AttentionStateRepository {
         private val values = MutableStateFlow(initial)
         override val state: StateFlow<AttentionState> = values
