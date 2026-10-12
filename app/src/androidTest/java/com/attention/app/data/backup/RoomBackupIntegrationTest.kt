@@ -18,6 +18,8 @@ import com.attention.domain.LaunchDestination
 import com.attention.domain.Migration
 import com.attention.domain.Milestone
 import com.attention.domain.ScheduleEntry
+import com.attention.domain.RecurrenceRule
+import com.attention.domain.ScheduleFrequency
 import com.attention.domain.StoredSettings
 import com.attention.domain.Target
 import com.attention.domain.TimeEntry
@@ -439,6 +441,105 @@ class RoomBackupIntegrationTest {
         assertEquals(35L, restored.experience)
         assertEquals(35L, repository.state.first().experience)
         assertEquals(5, restored.timeEntries.single().durationMinutes)
+    }
+
+    @Test
+    fun deleted_target_relations_round_trip_as_unowned_history() = runBlocking {
+        val target = Target("deleted-target", title = "已移除目标", archived = true)
+        val state = AttentionState(
+            targets = listOf(target),
+            timeEntries = listOf(
+                TimeEntry("orphaned-time", "2026-10-10", 40, target.id, note = "历史投入"),
+            ),
+            schedules = listOf(
+                ScheduleEntry(
+                    id = "orphaned-schedule",
+                    planningDate = "2026-10-10",
+                    title = "保留日程",
+                    targetId = target.id,
+                    recurrenceRuleId = "orphaned-rule",
+                ),
+            ),
+            recurrenceRules = listOf(
+                RecurrenceRule(
+                    id = "orphaned-rule",
+                    title = "保留重复日程",
+                    startDate = "2026-10-10",
+                    frequency = ScheduleFrequency.DAILY,
+                    targetId = target.id,
+                ),
+            ),
+            milestones = listOf(Milestone("deleted-milestone", "goal_period", "deleted:period", 25L, 10L)),
+        )
+        val repository = RoomAttentionStateRepository(
+            RoomBusinessDataRepository(database),
+            settingsStore(),
+        )
+        repository.replace(state)
+        RoomBusinessDataRepository(database).deleteTargetRelations(setOf(target.id))
+
+        val afterDelete = repository.state.first()
+        assertTrue(afterDelete.targets.isEmpty())
+        assertEquals(null, afterDelete.timeEntries.single().targetId)
+        assertEquals(null, afterDelete.schedules.single().targetId)
+        assertEquals(null, afterDelete.recurrenceRules.single().targetId)
+        assertEquals(25L, afterDelete.experience)
+
+        val exported = repository.exportJson()
+        repository.replace(AttentionState())
+        val restored = repository.importJson(exported, clearExisting = true)
+
+        assertEquals(afterDelete.timeEntries, restored.timeEntries)
+        assertEquals(afterDelete.schedules, restored.schedules)
+        assertEquals(afterDelete.recurrenceRules, restored.recurrenceRules)
+        assertEquals(afterDelete.milestones, restored.milestones)
+        assertEquals(afterDelete.experience, restored.experience)
+    }
+
+    @Test
+    fun archived_history_and_rewards_survive_room_restart_after_backup_restore() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val databaseName = "attention-backup-restart-${System.nanoTime()}.db"
+        val target = Target("restart-target", title = "重启归档目标", archived = true)
+        val expected = AttentionState(
+            targets = listOf(target),
+            timeEntries = listOf(TimeEntry("restart-time", "2026-10-11", 60, null)),
+            schedules = listOf(ScheduleEntry("restart-schedule", "2026-10-11", "未归属日程")),
+            recurrenceRules = listOf(
+                RecurrenceRule("restart-rule", "未归属重复日程", "2026-10-11", ScheduleFrequency.WEEKLY),
+            ),
+            milestones = listOf(Milestone("restart-milestone", "cumulative", "total:1", 30L, 11L)),
+        )
+        try {
+            val firstDatabase = Room.databaseBuilder(context, AttentionDatabase::class.java, databaseName).build()
+            val first = RoomAttentionStateRepository(
+                RoomBusinessDataRepository(firstDatabase),
+                settingsStore(),
+            )
+            first.replace(expected)
+            val encoded = first.exportJson()
+            firstDatabase.close()
+
+            val secondDatabase = Room.databaseBuilder(context, AttentionDatabase::class.java, databaseName).build()
+            val second = RoomAttentionStateRepository(
+                RoomBusinessDataRepository(secondDatabase),
+                settingsStore(),
+            )
+            val restored = second.importJson(encoded, clearExisting = true)
+            secondDatabase.close()
+
+            val thirdDatabase = Room.databaseBuilder(context, AttentionDatabase::class.java, databaseName).build()
+            val afterRestart = RoomBusinessDataRepository(thirdDatabase).read()
+            assertEquals(restored.targets, afterRestart.targets)
+            assertEquals(restored.timeEntries, afterRestart.timeEntries)
+            assertEquals(restored.schedules, afterRestart.schedules)
+            assertEquals(restored.recurrenceRules, afterRestart.recurrenceRules)
+            assertEquals(restored.milestones, afterRestart.milestones)
+            assertEquals(restored.experience, afterRestart.experience)
+            thirdDatabase.close()
+        } finally {
+            context.deleteDatabase(databaseName)
+        }
     }
 
     private fun settingsStore(): com.attention.app.data.settings.DataStoreSettingsStore =
