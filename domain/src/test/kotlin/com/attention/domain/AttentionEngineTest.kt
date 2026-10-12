@@ -1691,6 +1691,24 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun restoring_multiple_archived_targets_preserves_their_hierarchy_and_history() {
+        val initial = AttentionState().addTarget("父目标")
+        val parent = initial.targets.single()
+        val withChild = initial.addTarget("子目标", parent.id)
+        val child = withChild.targets.single { it.parentId == parent.id }
+        val archived = withChild
+            .addTimeEntry(date.toString(), 25, child.id)
+            .archiveTarget(parent.id)
+            .archiveTarget(child.id)
+
+        val restored = archived.restoreTargets(setOf(parent.id, child.id))
+
+        assertEquals(parent.id, restored.targets.single { it.id == child.id }.parentId)
+        assertEquals(25, restored.subtreeMinutes(parent.id))
+        assertTrue(restored.targets.none { it.archived })
+    }
+
+    @Test
     fun batch_assignment_is_atomic_for_stale_or_already_owned_ids() {
         val state = AttentionState().addTarget("学习")
         val target = state.targets.single()
