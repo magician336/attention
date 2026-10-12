@@ -87,7 +87,7 @@ class WorkspaceStageProgressIntegrationTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithText(TARGET_TITLE).assertExists()
         composeRule.onNodeWithText("添加子计划").performClick()
-        composeRule.waitForIdle()
+        waitForText("一次性目标 35/30 分钟")
 
         composeRule.onAllNodesWithText("一次性目标 35/30 分钟", substring = true).assertCountEquals(2)
         composeRule.onAllNodesWithText("范围 $firstStart 至 $firstEnd", substring = true).assertCountEquals(2)
@@ -101,9 +101,15 @@ class WorkspaceStageProgressIntegrationTest {
         composeRule.onAllNodesWithText("尚未开始", substring = true).assertCountEquals(2)
 
         composeRule.onNode(hasText("统计") and hasClickAction()).performClick()
-        composeRule.waitForIdle()
+        waitForText("范围 $firstStart 至 $firstEnd")
         composeRule.onNodeWithText("范围 $firstStart 至 $firstEnd", substring = true).assertExists()
         composeRule.onNodeWithText("阶段封闭于 $firstEnd", substring = true).assertExists()
         composeRule.onNodeWithText("超额 5 分钟", substring = true).assertExists()
+    }
+
+    private fun waitForText(text: String) {
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
     }
 }

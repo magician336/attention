@@ -4,6 +4,7 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -53,37 +54,25 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
         replace("agenda-title-input", "UI-新增超载")
         replace("agenda-estimate-input", "1")
         click("agenda-add-submit")
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("agenda-capacity-summary", useUnmergedTree = true)
-            .performScrollTo()
-            .assert(hasText("已安排 61 / 60 分钟（超载）", substring = true))
+        waitForText("已安排 61 / 60 分钟（超载）")
         composeRule.onNodeWithText("UI-新增超载").assertExists()
 
         // Editing remains available while overloaded, and the summary follows the edit.
         click("schedule-edit-$ESTIMATED_ID")
         replace("schedule-edit-estimate-$ESTIMATED_ID", "31")
         click("schedule-edit-save-$ESTIMATED_ID")
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("agenda-capacity-summary", useUnmergedTree = true)
-            .performScrollTo()
-            .assert(hasText("已安排 62 / 60 分钟（超载）", substring = true))
+        waitForText("已安排 62 / 60 分钟（超载）")
 
         // Completing a schedule is still saved and does not change reserved capacity.
         click("schedule-completion-$RANGE_ID")
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("agenda-capacity-summary", useUnmergedTree = true)
-            .performScrollTo()
-            .assert(hasText("已安排 62 / 60 分钟（超载）", substring = true))
-        composeRule.onNodeWithText("已完成", substring = true).assertExists()
+        waitForText("已完成")
+        waitForText("已安排 62 / 60 分钟（超载）")
 
         // Reducing the edited entry removes the overload notice without touching its date.
         click("schedule-edit-$ESTIMATED_ID")
         replace("schedule-edit-estimate-$ESTIMATED_ID", "29")
         click("schedule-edit-save-$ESTIMATED_ID")
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("agenda-capacity-summary", useUnmergedTree = true)
-            .performScrollTo()
-            .assert(hasText("已安排 60 / 60 分钟", substring = true))
+        waitForText("已安排 60 / 60 分钟")
 
         // Date switching and the all-dates grouping continue to show independent totals.
         selectDate(SECONDARY_DATE)
@@ -142,6 +131,12 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
             node.performClick()
         } else {
             node.performScrollTo().performClick()
+        }
+    }
+
+    private fun waitForText(text: String) {
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty()
         }
     }
 

@@ -3,6 +3,7 @@ package com.attention.app
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -38,11 +39,12 @@ class WorkspaceCapacityIntegrationTest {
 
         capacityInput.performTextReplacement("60")
         saveButton.performClick()
-        composeRule.waitForIdle()
+        waitForText("已安排 90 / 60 分钟（超载）")
         summary.assert(hasText("已安排 90 / 60 分钟（超载）", substring = true))
 
         composeRule.activityRule.scenario.recreate()
         composeRule.waitForIdle()
+        waitForText("已安排 90 / 60 分钟（超载）")
         capacityInput = composeRule.onNodeWithTag("daily-capacity-input", useUnmergedTree = true).performScrollTo()
         saveButton = composeRule.onNodeWithTag("daily-capacity-save", useUnmergedTree = true).performScrollTo()
         summary = composeRule.onNodeWithTag("daily-capacity-summary", useUnmergedTree = true).performScrollTo()
@@ -51,23 +53,31 @@ class WorkspaceCapacityIntegrationTest {
         listOf("0", "-5", "abc").forEach { invalidInput ->
             capacityInput.performTextReplacement(invalidInput)
             saveButton.performClick()
-            composeRule.waitForIdle()
+            waitForText("已安排 90 / 60 分钟（超载）")
+            waitForText("正整数")
             composeRule.onNodeWithTag("daily-capacity-error", useUnmergedTree = true).assert(hasText("正整数", substring = true))
             summary.assert(hasText("已安排 90 / 60 分钟（超载）", substring = true))
         }
 
         capacityInput.performTextReplacement("")
         saveButton.performClick()
-        composeRule.waitForIdle()
+        waitForText("已安排 90 分钟")
         summary.assert(hasText("已安排 90 分钟", substring = true))
         summary.assert(hasText("未设置", substring = true))
 
         composeRule.activityRule.scenario.recreate()
         composeRule.waitForIdle()
+        waitForText("已安排 90 分钟")
         composeRule.onNodeWithTag("daily-capacity-summary", useUnmergedTree = true)
             .performScrollTo()
             .assert(hasText("已安排 90 分钟", substring = true))
             .assert(hasText("未设置", substring = true))
+    }
+
+    private fun waitForText(text: String) {
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
     }
 
     companion object {
