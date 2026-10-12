@@ -196,6 +196,14 @@ data class GoalProgress(
     val completed: Boolean,
 )
 
+data class LevelProgress(
+    val level: Int,
+    val currentLevelThreshold: Long,
+    val nextLevelThreshold: Long,
+    val progressExperience: Long,
+    val remainingExperience: Long,
+)
+
 data class GoalStageSummary(
     val stage: GoalStage,
     val progress: GoalProgress,

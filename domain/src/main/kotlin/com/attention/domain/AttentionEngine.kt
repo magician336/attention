@@ -1010,10 +1010,38 @@ fun AttentionState.awardEligibleMilestones(onDate: LocalDate): AttentionState {
     return copy(milestones = milestones + additions).recalculateExperience()
 }
 
+/** Returns the cumulative experience required to enter [level]. */
+fun levelThreshold(level: Int): Long {
+    require(level >= 1) { "等级必须从 1 开始" }
+    if (level == 1) return 0
+    val n = level.toLong()
+    val multiplier = 500L * n
+    return if (multiplier > Long.MAX_VALUE / (n - 1)) Long.MAX_VALUE else multiplier * (n - 1)
+}
+
 fun levelForExperience(experience: Long): Int {
+    val safeExperience = experience.coerceAtLeast(0)
     var level = 1
-    while (500L * (level + 1) * level <= experience) level++
+    while (level < Int.MAX_VALUE) {
+        val nextThreshold = levelThreshold(level + 1)
+        if (nextThreshold == Long.MAX_VALUE || nextThreshold > safeExperience) break
+        level++
+    }
     return level
+}
+
+fun levelProgressForExperience(experience: Long): LevelProgress {
+    val safeExperience = experience.coerceAtLeast(0)
+    val level = levelForExperience(safeExperience)
+    val currentThreshold = levelThreshold(level)
+    val nextThreshold = levelThreshold(level + 1)
+    return LevelProgress(
+        level = level,
+        currentLevelThreshold = currentThreshold,
+        nextLevelThreshold = nextThreshold,
+        progressExperience = (safeExperience - currentThreshold).coerceAtLeast(0),
+        remainingExperience = (nextThreshold - safeExperience).coerceAtLeast(0),
+    )
 }
 
 fun cumulativeMilestoneReward(hours: Long): Long? {
