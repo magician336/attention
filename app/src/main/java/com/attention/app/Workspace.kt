@@ -192,6 +192,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     var pendingScheduleCsv by remember { mutableStateOf<String?>(null) }
     var scheduleExportMessage by remember { mutableStateOf<String?>(null) }
     var pendingImport by remember { mutableStateOf<String?>(null) }
+    var pendingClearImport by remember { mutableStateOf<String?>(null) }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             val result = runCatching {
@@ -332,6 +333,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                         }
                     },
                     onImportJson = { importLauncher.launch(arrayOf("application/json", "text/plain")) },
+                    onRestoreImportBackup = { viewModel.restoreLastImportBackup() },
                 )
             }
             jsonPreview?.let { Text("JSON 预览：\n$it", modifier = Modifier.padding(16.dp)) }
@@ -359,10 +361,24 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             },
             dismissButton = {
                 Row {
-                    TextButton(onClick = { if (preview != null) viewModel.importJson(encoded, true); pendingImport = null }) { Text("清空后恢复") }
+                    TextButton(onClick = { if (preview != null) { pendingClearImport = encoded; pendingImport = null } }) { Text("清空后恢复") }
                     TextButton(onClick = { pendingImport = null }) { Text("取消") }
                 }
             },
+        )
+    }
+    pendingClearImport?.let { encoded ->
+        AlertDialog(
+            onDismissRequest = { pendingClearImport = null },
+            title = { Text("确认清空后恢复") },
+            text = { Text("这会清空当前全部数据，并在导入前保存保护性备份。确定继续吗？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.importJson(encoded, clearExisting = true)
+                    pendingClearImport = null
+                }) { Text("确认清空并恢复") }
+            },
+            dismissButton = { TextButton(onClick = { pendingClearImport = null }) { Text("取消") } },
         )
     }
 }
@@ -1740,6 +1756,7 @@ private fun StatisticsScreen(
     onExportSchedulesCsv: () -> Unit,
     onExportCsvBundle: () -> Unit,
     onImportJson: () -> Unit,
+    onRestoreImportBackup: () -> Unit,
 ) {
     var selectedDate by remember { mutableStateOf(state.planningDate(Instant.now())) }
     var cadence by remember { mutableStateOf(GoalCadence.DAILY) }
@@ -1809,6 +1826,7 @@ private fun StatisticsScreen(
             },
         )
         Button(onClick = viewModel::awardMilestones) { Text("结算可达成里程碑") }
+        OutlinedButton(onClick = onRestoreImportBackup) { Text("恢复最近一次导入前备份") }
         Text("累计投入里程碑", style = MaterialTheme.typography.titleMedium)
         val cumulativeMilestones = state.milestones
             .filter { it.kind == "cumulative" }

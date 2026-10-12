@@ -240,6 +240,15 @@ class AttentionViewModel(
             .onFailure { _error.value = it.message ?: "导入失败，现有数据未改变" }
     }
 
+    /** Restores the snapshot captured immediately before the most recent import. */
+    fun restoreLastImportBackup(onComplete: () -> Unit = {}) = scope.launch {
+        runCatching {
+            val backup = repository.lastImportBackup() ?: error("没有可恢复的导入前备份")
+            repository.importJson(backup, clearExisting = true)
+        }.onSuccess { onComplete() }
+            .onFailure { _error.value = it.message ?: "导入前备份恢复失败，现有数据未改变" }
+    }
+
     fun restoreReminders() = scope.launch {
         runCatching { repository.restoreReminders() }
             .onFailure { _error.value = it.message ?: "提醒恢复失败" }
