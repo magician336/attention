@@ -213,6 +213,12 @@ class AttentionViewModel(
             .onFailure { _error.value = it.message ?: "时间记录 CSV 导出失败" }
     }
 
+    fun exportSchedulesCsv(onResult: (String) -> Unit) = scope.launch {
+        runCatching { repository.state.first().schedulesCsv() }
+            .onSuccess(onResult)
+            .onFailure { _error.value = it.message ?: "日程 CSV 导出失败" }
+    }
+
     fun importJson(encoded: String, clearExisting: Boolean, onComplete: () -> Unit = {}) = scope.launch {
         runCatching { repository.importJson(encoded, clearExisting) }
             .onSuccess { onComplete() }
