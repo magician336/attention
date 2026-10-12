@@ -208,6 +208,25 @@ class RoomBusinessDataRepositoryTest {
     }
 
     @Test
+    fun deleting_target_relations_preserves_awarded_milestones_and_experience() = runBlocking {
+        val target = Target("reward-target", title = "奖励目标")
+        val awarded = AttentionState(targets = listOf(target))
+            .addGoalStage(target.id, GoalCadence.ONE_TIME, 30, "2026-10-08")
+            .addTimeEntry("2026-10-08", 30, target.id)
+            .awardEligibleMilestones(LocalDate.parse("2026-10-08"))
+        val repository = RoomBusinessDataRepository(database)
+
+        repository.replace(awarded)
+        repository.deleteTargetRelations(setOf(target.id))
+
+        val loaded = repository.read()
+        assertEquals(30, loaded.timeEntries.single().durationMinutes)
+        assertNull(loaded.timeEntries.single().targetId)
+        assertEquals(1, loaded.milestones.size)
+        assertEquals(10_000L, loaded.experience)
+    }
+
+    @Test
     fun deleting_target_detaches_target_move_parent_reference() = runBlocking {
         val parent = Target("parent", title = "父目标")
         val other = Target("other", title = "其他目标")

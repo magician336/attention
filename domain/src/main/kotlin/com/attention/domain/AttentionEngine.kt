@@ -302,7 +302,7 @@ fun AttentionState.deleteTargetRelations(targetIds: Set<String>): AttentionState
         targetMoves = targetMoves
             .filterNot { it.targetId in ids }
             .map { move -> if (move.parentId != null && move.parentId in ids) move.copy(parentId = null) else move },
-    )
+    ).recalculateExperience()
 }
 
 fun AttentionState.addGoalStage(
@@ -897,7 +897,8 @@ private fun splitTimerSegments(segments: List<TimerSegment>, targetId: String?, 
 }
 
 fun AttentionState.recalculateExperience(): AttentionState = copy(
-    experience = timeEntries.filter { it.targetId != null }.sumOf { it.durationMinutes.toLong() } + milestones.sumOf { it.reward },
+    experience = timeEntries.filter { it.targetId != null }.sumOf { it.durationMinutes.toLong() } +
+        milestones.distinctBy { it.instanceKey }.sumOf { it.reward },
 )
 
 fun AttentionState.continuousPlanningDays(targetId: String? = null): Int {
@@ -946,6 +947,14 @@ fun Milestone.isOneTimeStageFeedbackFor(stageId: String): Boolean {
 fun AttentionState.oneTimeStageMilestones(stageId: String): List<Milestone> = milestones
     .filter { it.isOneTimeStageFeedbackFor(stageId) }
     .sortedWith(compareBy<Milestone> { it.achievedAtEpochMillis }.thenBy { it.id })
+
+fun AttentionState.recentMilestones(limit: Int = 8): List<Milestone> {
+    require(limit >= 0) { "里程碑数量不能为负数" }
+    return milestones
+        .sortedWith(compareBy<Milestone> { it.achievedAtEpochMillis }.thenBy { it.id })
+        .distinctBy { it.instanceKey }
+        .takeLast(limit)
+}
 
 private fun MutableList<Milestone>.addMilestoneIfMissing(
     existingKeys: MutableSet<String>,
@@ -998,7 +1007,7 @@ fun AttentionState.eligibleMilestones(onDate: LocalDate): List<Milestone> {
 
 fun AttentionState.awardEligibleMilestones(onDate: LocalDate): AttentionState {
     val additions = eligibleMilestones(onDate)
-    return if (additions.isEmpty()) this else copy(milestones = milestones + additions).recalculateExperience()
+    return copy(milestones = milestones + additions).recalculateExperience()
 }
 
 /** Returns the cumulative experience required to enter [level]. */

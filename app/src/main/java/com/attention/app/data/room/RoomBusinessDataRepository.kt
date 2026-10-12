@@ -6,6 +6,7 @@ import com.attention.app.data.room.mapper.toDomain
 import com.attention.app.data.room.mapper.toEntity
 import com.attention.domain.AttentionState
 import com.attention.domain.descendantIds
+import com.attention.domain.recalculateExperience
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
@@ -145,6 +146,8 @@ class RoomBusinessDataRepository(
         }
         database.goalStageDao().deleteByTargetIds(idList)
         deleteTargetsLeafFirst(existingTargets, ids)
+        val reconciled = readInTransaction().recalculateExperience()
+        database.experienceDao().upsert(ExperienceEntity(points = reconciled.experience))
     }
 
     private suspend fun deleteTargetsLeafFirst(
