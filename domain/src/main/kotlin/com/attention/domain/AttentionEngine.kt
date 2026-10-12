@@ -226,6 +226,17 @@ fun AttentionState.periodStats(date: LocalDate, cadence: GoalCadence): PeriodSta
     val byTarget = entries.filter { it.targetId != null }
         .groupBy { it.targetId!! }
         .mapValues { (_, values) -> values.sumOf { it.durationMinutes } }
+    val subtreeByTarget = targets.associate { target ->
+        target.id to entries.asSequence()
+            .filter { entry ->
+                entry.targetId != null && isDescendantAt(
+                    entry.targetId,
+                    target.id,
+                    LocalDate.parse(entry.planningDate),
+                )
+            }
+            .sumOf { it.durationMinutes }
+    }.filterValues { it > 0 }
     val targetMinutes = goalStages
         .filter { it.cadence == cadence && LocalDate.parse(it.startDate) <= range.endInclusive }
         .sumOf { stage ->
@@ -240,7 +251,16 @@ fun AttentionState.periodStats(date: LocalDate, cadence: GoalCadence): PeriodSta
         val end = it.destinationEndDate?.let(LocalDate::parse) ?: start
         start <= range.endInclusive && end >= range.start
     }.sumOf { it.minutes }
-    return PeriodStats(range, targetMinutes, actual, unowned, migrationMinutes, (actual - targetMinutes).coerceAtLeast(0), byTarget)
+    return PeriodStats(
+        range = range,
+        targetMinutes = targetMinutes,
+        actualMinutes = actual,
+        unownedMinutes = unowned,
+        migrationMinutes = migrationMinutes,
+        excessMinutes = (actual - targetMinutes).coerceAtLeast(0),
+        byTargetMinutes = byTarget,
+        subtreeByTargetMinutes = subtreeByTarget,
+    )
 }
 
 fun AttentionState.validTarget(targetId: String?): Boolean = targetId == null || targets.any { it.id == targetId }

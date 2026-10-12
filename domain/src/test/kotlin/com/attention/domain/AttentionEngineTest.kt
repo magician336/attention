@@ -1709,6 +1709,48 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun period_stats_expose_unowned_and_deduplicated_target_tree_minutes() {
+        val root = Target("stats-root", title = "根目标")
+        val child = Target("stats-child", parentId = root.id, title = "子目标")
+        val state = AttentionState(
+            targets = listOf(root, child),
+            timeEntries = listOf(
+                TimeEntry("root-entry", date.toString(), 20, root.id),
+                TimeEntry("child-entry", date.toString(), 30, child.id),
+                TimeEntry("unowned-entry", date.toString(), 10),
+            ),
+        )
+
+        val stats = state.periodStats(date, GoalCadence.DAILY)
+
+        assertEquals(60, stats.actualMinutes)
+        assertEquals(10, stats.unownedMinutes)
+        assertEquals(mapOf(root.id to 20, child.id to 30), stats.byTargetMinutes)
+        assertEquals(50, stats.subtreeByTargetMinutes[root.id])
+        assertEquals(30, stats.subtreeByTargetMinutes[child.id])
+    }
+
+    @Test
+    fun period_stats_exclude_cancelled_migrations_and_keep_excess_non_negative() {
+        val target = Target("stats-migration-target", title = "迁移目标")
+        val stage = GoalStage("stats-migration-stage", target.id, GoalCadence.DAILY, 30, date.toString())
+        val state = AttentionState(
+            targets = listOf(target),
+            goalStages = listOf(stage),
+            timeEntries = listOf(TimeEntry("stats-entry", date.toString(), 45, target.id)),
+            migrations = listOf(
+                Migration("active-migration", target.id, stage.id, 10, date.toString()),
+                Migration("cancelled-migration", target.id, stage.id, 20, date.toString(), cancelled = true),
+            ),
+        )
+
+        val stats = state.periodStats(date, GoalCadence.DAILY)
+
+        assertEquals(10, stats.migrationMinutes)
+        assertEquals(15, stats.excessMinutes)
+    }
+
+    @Test
     fun milestone_instance_is_awarded_once() {
         val state = AttentionState().addTarget("每日投入")
         val target = state.targets.single()
