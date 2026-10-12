@@ -205,6 +205,14 @@ class AttentionViewModel(
             .onFailure { _error.value = it.message ?: "CSV 导出失败" }
     }
 
+    /** Returns the analysis-only time-entry CSV from one consistent state snapshot. */
+    fun exportTimeEntriesCsv(onResult: (String) -> Unit) = scope.launch {
+        runCatching {
+            repository.state.first().timeEntriesCsv()
+        }.onSuccess(onResult)
+            .onFailure { _error.value = it.message ?: "时间记录 CSV 导出失败" }
+    }
+
     fun importJson(encoded: String, clearExisting: Boolean, onComplete: () -> Unit = {}) = scope.launch {
         runCatching { repository.importJson(encoded, clearExisting) }
             .onSuccess { onComplete() }
