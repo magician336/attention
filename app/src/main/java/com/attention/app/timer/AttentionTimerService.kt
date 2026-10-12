@@ -21,14 +21,11 @@ import com.attention.app.data.room.AttentionDatabase
 import com.attention.app.data.room.RoomBusinessDataRepository
 import com.attention.app.data.settings.createSettingsStore
 import com.attention.domain.AttentionState
-import com.attention.domain.awardEligibleMilestones
 import com.attention.domain.pauseTimer
-import com.attention.domain.recalculateExperience
 import com.attention.domain.resumeTimer
-import com.attention.domain.stopTimer
+import com.attention.domain.stopTimerAndAwardEligibleMilestones
 import com.attention.domain.timerTargetLabel
 import java.time.Instant
-import java.time.LocalDate
 import java.time.ZoneId
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -79,9 +76,7 @@ class AttentionTimerService : Service() {
                     ACTION_PAUSE -> repository.updateBusiness { it.pauseTimer(Instant.now()) }
                     ACTION_RESUME -> repository.updateBusiness { it.resumeTimer(Instant.now()) }
                     ACTION_STOP -> repository.updateBusiness {
-                        it.stopTimer(Instant.now(), ZoneId.systemDefault()).state
-                            .recalculateExperience()
-                            .awardEligibleMilestones(LocalDate.now(ZoneId.systemDefault()))
+                        it.stopTimerAndAwardEligibleMilestones(Instant.now(), ZoneId.systemDefault()).state
                     }
                 }
 

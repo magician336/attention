@@ -16,6 +16,7 @@ import com.attention.domain.GoalCadence
 import com.attention.domain.GoalStage
 import com.attention.domain.LaunchDestination
 import com.attention.domain.Migration
+import com.attention.domain.Milestone
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.StoredSettings
 import com.attention.domain.Target
@@ -27,6 +28,7 @@ import com.attention.domain.cancelMigration
 import com.attention.domain.capacitySummary
 import com.attention.domain.updateMigration
 import com.attention.domain.stopTimer
+import com.attention.domain.recalculateExperience
 import java.time.LocalDate
 import java.time.Instant
 import java.io.File
@@ -403,6 +405,40 @@ class RoomBackupIntegrationTest {
 
         repository.importJson(incoming, clearExisting = true)
         assertEquals(listOf(cancelled.copy(cancelled = false), incomingOnly), repository.state.first().migrations)
+    }
+
+    @Test
+    fun backup_merge_and_clear_restore_recomputed_experience() = runBlocking {
+        val target = Target("experience-target", title = "项目")
+        val repository = RoomAttentionStateRepository(
+            RoomBusinessDataRepository(database),
+            settingsStore(),
+        )
+        repository.replace(
+            AttentionState(
+                targets = listOf(target),
+                timeEntries = listOf(TimeEntry("existing", "2026-10-08", 10, target.id)),
+                milestones = listOf(Milestone("existing-milestone", "streak", "target:7", 20, 1L)),
+                experience = 10_000L,
+            ),
+        )
+        val incoming = AttentionBackupCodec.encode(
+            AttentionState(
+                targets = listOf(target),
+                timeEntries = listOf(TimeEntry("incoming", "2026-10-09", 5, target.id)),
+                milestones = listOf(Milestone("incoming-milestone", "goal_period", "stage:1", 30, 2L)),
+                experience = 1L,
+            ),
+        )
+
+        val merged = repository.importJson(incoming, clearExisting = false)
+        assertEquals(65L, merged.experience)
+        assertEquals(65L, repository.state.first().experience)
+
+        val restored = repository.importJson(incoming, clearExisting = true)
+        assertEquals(35L, restored.experience)
+        assertEquals(35L, repository.state.first().experience)
+        assertEquals(5, restored.timeEntries.single().durationMinutes)
     }
 
     private fun settingsStore(): com.attention.app.data.settings.DataStoreSettingsStore =

@@ -1323,6 +1323,35 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun level_progress_reports_boundaries_and_remaining_experience() {
+        assertEquals(LevelProgress(1, 0, 1000, 0, 1000), levelProgressForExperience(0))
+        assertEquals(LevelProgress(1, 0, 1000, 999, 1), levelProgressForExperience(999))
+        assertEquals(LevelProgress(2, 1000, 3000, 0, 2000), levelProgressForExperience(1000))
+        assertEquals(LevelProgress(2, 1000, 3000, 1999, 1), levelProgressForExperience(2999))
+        assertEquals(LevelProgress(3, 3000, 6000, 0, 3000), levelProgressForExperience(3000))
+    }
+
+    @Test
+    fun level_progress_handles_negative_experience_and_multiple_thresholds() {
+        assertEquals(LevelProgress(1, 0, 1000, 0, 1000), levelProgressForExperience(-1))
+        val progress = levelProgressForExperience(10_000)
+        assertEquals(5, progress.level)
+        assertEquals(10_000, progress.currentLevelThreshold)
+        assertEquals(15_000, progress.nextLevelThreshold)
+        assertEquals(0, progress.progressExperience)
+        assertEquals(5_000, progress.remainingExperience)
+    }
+
+    @Test
+    fun level_progress_handles_the_largest_supported_experience_without_linear_scan() {
+        val progress = levelProgressForExperience(Long.MAX_VALUE)
+
+        assertTrue(progress.level > 1)
+        assertEquals(Long.MAX_VALUE, progress.nextLevelThreshold)
+        assertEquals(0, progress.remainingExperience)
+    }
+
+    @Test
     fun future_rules_and_snapshots_preserve_previous_period() {
         val state = AttentionState().addTarget("项目")
         val target = state.targets.single()
@@ -1512,6 +1541,94 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun actual_time_commands_recalculate_experience_without_parent_duplication() {
+        val withRoot = AttentionState().addTarget("父目标")
+        val root = withRoot.targets.single()
+        val withChild = withRoot.addTarget("子目标", root.id)
+        val child = withChild.targets.single { it.parentId == root.id }
+
+        val recorded = withChild
+            .addTimeEntry(date.toString(), 10, child.id, TimeEntrySource.TIMER)
+            .addTimeEntry(date.toString(), 7, root.id, TimeEntrySource.IMPORT)
+
+        assertEquals(17L, recorded.experience)
+        assertEquals(17, recorded.subtreeMinutes(root.id))
+
+        val childEntry = recorded.timeEntries.single { it.targetId == child.id }
+        val edited = recorded.editTimeEntry(childEntry.id, 20, null)
+        assertEquals(7L, edited.experience)
+
+        val reassigned = edited.assignUnowned(setOf(childEntry.id), root.id)
+        assertEquals(27L, reassigned.experience)
+
+        val deleted = reassigned.deleteTimeEntry(childEntry.id)
+        assertEquals(7L, deleted.experience)
+    }
+
+    @Test
+    fun stopping_a_timer_recalculates_experience_from_its_actual_minutes() {
+        val state = AttentionState().addTarget("计时目标")
+        val target = state.targets.single()
+        val stopped = state
+            .startTimer(target.id, Instant.ofEpochMilli(0), utc)
+            .stopTimer(Instant.ofEpochMilli(121_000L), utc)
+
+        assertEquals(2, stopped.entries.single().durationMinutes)
+        assertEquals(2L, stopped.state.experience)
+    }
+
+    @Test
+    fun stopping_a_timer_uses_the_same_milestone_award_path_as_ui_and_notification_stops() {
+        val target = Target("stop-award-target", title = "计时目标")
+        val state = AttentionState(
+            targets = listOf(target),
+            goalStages = listOf(GoalStage("stop-award-stage", target.id, GoalCadence.ONE_TIME, 30, date.toString())),
+            timeEntries = listOf(TimeEntry("stop-award-entry", date.toString(), 30, target.id)),
+            activeTimer = ActiveTimer(
+                targetId = target.id,
+                startedAtEpochMillis = 0,
+                paused = true,
+                lastPlanningDate = date.toString(),
+            ),
+        )
+
+        val stopped = state.stopTimerAndAwardEligibleMilestones(date.atTime(3, 0).atZone(utc).toInstant(), utc)
+
+        assertEquals(1, stopped.state.milestones.count { it.kind == "one_time_goal" })
+        assertEquals(10_030L, stopped.state.experience)
+    }
+
+    @Test
+    fun stopping_before_the_planning_boundary_awards_streak_for_the_previous_planning_day() {
+        val target = Target("planning-boundary-stop-target", title = "规划日目标")
+        val settings = StoredSettings(planningDayBoundaryMinutes = 180)
+        val entries = (1..7).map { offset ->
+            TimeEntry(
+                id = "planning-boundary-entry-$offset",
+                planningDate = date.minusDays((8 - offset).toLong()).toString(),
+                durationMinutes = 1,
+                targetId = target.id,
+            )
+        }
+        val state = AttentionState(
+            settings = settings,
+            targets = listOf(target),
+            timeEntries = entries,
+            activeTimer = ActiveTimer(
+                targetId = target.id,
+                startedAtEpochMillis = 0,
+                paused = true,
+                lastPlanningDate = date.minusDays(1).toString(),
+            ),
+        )
+
+        val stop = Instant.parse("2026-10-08T02:30:00Z")
+        val stopped = state.stopTimerAndAwardEligibleMilestones(stop, utc)
+
+        assertTrue(stopped.state.milestones.any { it.kind == "streak" && it.instanceKey == "streak:${target.id}:7" })
+    }
+
+    @Test
     fun editing_time_entry_preserves_planning_date_and_source() {
         val state = AttentionState().addTarget("学习")
         val target = state.targets.single()
@@ -1602,6 +1719,85 @@ class AttentionEngineTest {
         assertTrue(awarded.milestones.any { it.instanceKey == "streak:${target.id}:7" })
         assertEquals(500L, awarded.milestones.single().reward)
         assertEquals(1, awarded.awardEligibleMilestones(date.plusDays(6)).milestones.size)
+    }
+
+    @Test
+    fun stage_streak_and_cumulative_rewards_are_added_to_experience() {
+        val state = AttentionState().addTarget("长期投入")
+        val target = state.targets.single()
+        val withEntries = (0..99).fold(state) { current, offset ->
+            current.addTimeEntry(date.plusDays(offset.toLong()).toString(), 60, target.id)
+        }
+
+        val awarded = withEntries.awardEligibleMilestones(date.plusDays(99))
+
+        assertEquals(setOf("streak", "cumulative"), awarded.milestones.map { it.kind }.toSet())
+        assertEquals(4, awarded.milestones.size)
+        assertEquals(6_000L + 500L + 1_000L + 10_000L + 10_000L, awarded.experience)
+    }
+
+    @Test
+    fun awarding_milestones_reconciles_experience_when_all_instances_are_existing() {
+        val existing = Milestone("existing", "streak", "streak:target:7", 500L, 1L)
+        val duplicate = existing.copy(id = "duplicate", achievedAtEpochMillis = 2L)
+        val state = AttentionState(milestones = listOf(existing, duplicate), experience = 0L)
+
+        val reconciled = state.awardEligibleMilestones(date)
+
+        assertEquals(listOf(existing, duplicate), reconciled.milestones)
+        assertEquals(500L, reconciled.experience)
+    }
+
+    @Test
+    fun parent_and_child_milestones_share_base_minutes_without_double_counting_experience() {
+        val withParent = AttentionState().addTarget("父目标")
+        val parent = withParent.targets.single()
+        val withChild = withParent.addTarget("子目标", parent.id)
+        val child = withChild.targets.single { it.title == "子目标" }
+        val state = withChild
+            .addGoalStage(parent.id, GoalCadence.ONE_TIME, 20, date.toString())
+            .addGoalStage(child.id, GoalCadence.ONE_TIME, 20, date.toString())
+            .addTimeEntry(date.toString(), 20, child.id)
+
+        val awarded = state.awardEligibleMilestones(date)
+
+        assertEquals(2, awarded.milestones.count { it.kind == "one_time_goal" })
+        assertEquals(20L + 20_000L, awarded.experience)
+    }
+
+    @Test
+    fun awarded_milestone_survives_time_correction_and_target_relation_removal() {
+        val state = AttentionState().addTarget("可更正目标")
+        val target = state.targets.single()
+        val awarded = state
+            .addGoalStage(target.id, GoalCadence.ONE_TIME, 30, date.toString())
+            .addTimeEntry(date.toString(), 30, target.id)
+            .awardEligibleMilestones(date)
+        val entryId = awarded.timeEntries.single().id
+
+        val corrected = awarded.editTimeEntry(entryId, 5, null)
+        assertEquals(10_000L, corrected.experience)
+        assertEquals(1, corrected.milestones.size)
+
+        val removed = awarded.deleteTargetRelations(setOf(target.id))
+        assertTrue(removed.timeEntries.single().targetId == null)
+        assertEquals(10_000L, removed.experience)
+        assertEquals(1, removed.milestones.size)
+    }
+
+    @Test
+    fun recent_milestones_are_sorted_and_limited_without_duplicates() {
+        val state = AttentionState(
+            milestones = listOf(
+                Milestone("old", "streak", "streak:target:7", 500L, 10L),
+                Milestone("newer", "cumulative", "cumulative:100", 10_000L, 30L),
+                Milestone("middle", "goal_period", "goal_period:stage:2026-10-08", 500L, 20L),
+                Milestone("duplicate", "streak", "streak:target:7", 500L, 40L),
+            ),
+        )
+
+        assertEquals(listOf("middle", "newer"), state.recentMilestones(2).map { it.id })
+        assertEquals(3, state.recentMilestones(8).size)
     }
 
     @Test

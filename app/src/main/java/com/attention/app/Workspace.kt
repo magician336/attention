@@ -91,7 +91,7 @@ import com.attention.domain.isFutureTargetMoveDate
 import com.attention.domain.isPending
 import com.attention.domain.goalStagesForTarget
 import com.attention.domain.goalSummary
-import com.attention.domain.levelForExperience
+import com.attention.domain.levelProgressForExperience
 import com.attention.domain.parseTargetMoveDate
 import com.attention.domain.pendingTargetMoves
 import com.attention.domain.planningDate
@@ -99,6 +99,7 @@ import com.attention.domain.periodStats
 import com.attention.domain.parentAt
 import com.attention.domain.progress
 import com.attention.domain.progressRange
+import com.attention.domain.recentMilestones
 import com.attention.domain.reminderEpochMillis
 import com.attention.domain.subtreeMinutes
 import com.attention.domain.targetChildren
@@ -1529,6 +1530,8 @@ private fun StatisticsScreen(
     val date = state.planningDate(Instant.now()).toString()
     var cadence by remember { mutableStateOf(GoalCadence.DAILY) }
     val stats = state.periodStats(LocalDate.parse(date), cadence)
+    val levelProgress = levelProgressForExperience(state.experience)
+    val levelSpan = levelProgress.nextLevelThreshold - levelProgress.currentLevelThreshold
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("统计与成长", style = MaterialTheme.typography.headlineMedium)
         Text("历史周期快照", style = MaterialTheme.typography.titleMedium)
@@ -1562,9 +1565,19 @@ private fun StatisticsScreen(
                 TextButton(onClick = { viewModel.cancelMigration(migration.id) }) { Text("取消") }
             }
         }
-        Text("投入经验：${state.experience} · 等级 ${levelForExperience(state.experience)}")
+        Text("投入经验：${state.experience} · 等级 ${levelProgress.level}")
+        Text("当前等级区间进度：${levelProgress.progressExperience}/${levelSpan} 点")
+        Text("下一等级门槛：${levelProgress.nextLevelThreshold} 点")
+        Text("剩余经验：${levelProgress.remainingExperience} 点")
+        Text(
+            if (levelProgress.level > 1) {
+                "升级反馈：已达到等级 ${levelProgress.level}"
+            } else {
+                "升级反馈：达到下一等级门槛后会显示"
+            },
+        )
         Button(onClick = viewModel::awardMilestones) { Text("结算可达成里程碑") }
-        state.milestones.takeLast(8).forEach { milestone ->
+        state.recentMilestones().forEach { milestone ->
             Text("里程碑 ${milestone.kind}：+${milestone.reward}（${milestone.instanceKey}）")
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

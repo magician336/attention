@@ -29,11 +29,10 @@ import com.attention.domain.deleteTimeEntry
 import com.attention.domain.editTimeEntry
 import com.attention.domain.pauseTimer
 import com.attention.domain.renameTarget
-import com.attention.domain.recalculateExperience
 import com.attention.domain.recoverTimer
 import com.attention.domain.resumeTimer
 import com.attention.domain.startTimer
-import com.attention.domain.stopTimer
+import com.attention.domain.stopTimerAndAwardEligibleMilestones
 import com.attention.domain.stopRecurrence
 import com.attention.domain.updateSchedule
 import com.attention.domain.toggleScheduleCompleted
@@ -101,15 +100,16 @@ class AttentionViewModel(
     fun deleteTargetRelations(ids: Set<String>) = runCommand { it.deleteTargetRelations(ids) }
 
     fun addTime(date: String, minutes: Int, targetId: String?, note: String = "") =
-        runCommand { it.addTimeEntry(date, minutes, targetId, TimeEntrySource.MANUAL, note = note).recalculateExperience().awardEligibleMilestones(LocalDate.parse(date)) }
+        runCommand { it.addTimeEntry(date, minutes, targetId, TimeEntrySource.MANUAL, note = note).awardEligibleMilestones(LocalDate.parse(date)) }
 
     fun editTime(id: String, minutes: Int, targetId: String?, note: String = "") =
         runCommand {
-            val edited = it.editTimeEntry(id, minutes, targetId, note).recalculateExperience()
-            edited.awardEligibleMilestones(LocalDate.now(zone))
+            val edited = it.editTimeEntry(id, minutes, targetId, note)
+            val planningDate = edited.timeEntries.single { entry -> entry.id == id }.planningDate
+            edited.awardEligibleMilestones(LocalDate.parse(planningDate))
         }
 
-    fun deleteTime(id: String) = runCommand { it.deleteTimeEntry(id).recalculateExperience() }
+    fun deleteTime(id: String) = runCommand { it.deleteTimeEntry(id) }
 
     fun addGoal(targetId: String, cadence: GoalCadence, minutes: Int, startDate: String, dueDate: String? = null) =
         runCommand { it.addGoalStage(targetId, cadence, minutes, startDate, dueDate) }
@@ -133,7 +133,6 @@ class AttentionViewModel(
     fun cancelMigration(migrationId: String) = runCommand { it.cancelMigration(migrationId) }
     fun assignUnowned(entryIds: Set<String>, targetId: String) = runCommand {
         it.assignUnowned(entryIds, targetId)
-            .recalculateExperience()
             .awardEligibleMilestones(LocalDate.now(zone))
     }
 
@@ -170,10 +169,10 @@ class AttentionViewModel(
     }
     fun switchTimer(targetId: String?) = scope.launch {
         runCatching {
-            repository.updateBusiness {
-                current -> current.switchTimer(targetId, Instant.now(), zone).state
-                    .recalculateExperience()
-                    .awardEligibleMilestones(LocalDate.now(zone))
+            val now = Instant.now()
+            repository.updateBusiness { current ->
+                current.switchTimer(targetId, now, zone).state
+                    .awardEligibleMilestones(current.planningDate(now, zone))
             }
         }.onFailure { _error.value = it.message ?: "无法切换计时目标" }
     }
@@ -182,7 +181,9 @@ class AttentionViewModel(
     fun recoverTimer(onSuccess: () -> Unit = {}) = runCommand(onSuccess = onSuccess) { it.recoverTimer(Instant.now()) }
     fun stopTimer(onSuccess: () -> Unit = {}) = scope.launch {
         runCatching {
-            repository.updateBusiness { current -> current.stopTimer(Instant.now(), zone).state.recalculateExperience().awardEligibleMilestones(LocalDate.now(zone)) }
+            repository.updateBusiness { current ->
+                current.stopTimerAndAwardEligibleMilestones(Instant.now(), zone).state
+            }
         }.onSuccess { onSuccess() }
             .onFailure { _error.value = it.message ?: "无法结束计时" }
     }

@@ -19,6 +19,7 @@ import com.attention.domain.TimeEntry
 import com.attention.domain.TimeEntrySource
 import com.attention.domain.TimerSegment
 import com.attention.domain.capacitySummary
+import com.attention.domain.recalculateExperience
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -42,7 +43,7 @@ class AttentionBackupCodecTest {
             periodSnapshots = listOf(PeriodSnapshot("snapshot", target.id, GoalCadence.WEEKLY, "2026-10-01", "2026-10-07", 120, 90, 30, 0, false, stageId = "stage")),
             targetMoves = listOf(TargetMove("move", target.id, null, "2026-11-01")),
             milestones = listOf(Milestone("milestone", "goal_period", "target:2026-10-01", 20, 789L)),
-            experience = 1234L,
+            experience = 65L,
             activeTimer = ActiveTimer(target.id, 100L, 200L, paused = true, "2026-10-02", listOf(TimerSegment(100L, 200L))),
             onboardingCompleted = true,
             launchDestination = LaunchDestination.TARGETS,
@@ -131,6 +132,28 @@ class AttentionBackupCodecTest {
         assertEquals(300, merged.settings.dailyCapacityMinutes)
         assertEquals(LaunchDestination.STATISTICS, merged.launchDestination)
         assertEquals(incoming.activeTimer, merged.activeTimer)
+    }
+
+    @Test
+    fun merge_recomputes_experience_from_time_entries_and_milestones() {
+        val target = Target("target", title = "学习")
+        val existing = AttentionState(
+            targets = listOf(target),
+            timeEntries = listOf(TimeEntry("existing-entry", "2026-10-08", 10, target.id)),
+            milestones = listOf(Milestone("existing-milestone", "goal_period", "stage:1", 20, 1L)),
+            experience = 999L,
+        )
+        val incoming = AttentionState(
+            targets = listOf(target),
+            timeEntries = listOf(TimeEntry("incoming-entry", "2026-10-09", 5, target.id)),
+            milestones = listOf(Milestone("incoming-milestone", "streak", "target:7", 30, 2L)),
+            experience = 1L,
+        )
+
+        val merged = AttentionBackupCodec.merge(existing, incoming)
+
+        assertEquals(65L, merged.experience)
+        assertEquals(merged.recalculateExperience(), merged)
     }
 
     @Test

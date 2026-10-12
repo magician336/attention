@@ -14,6 +14,10 @@ import com.attention.domain.LaunchDestination
 import com.attention.domain.Target
 import com.attention.domain.TimeEntrySource
 import com.attention.domain.addTarget
+import com.attention.domain.addTimeEntry
+import com.attention.domain.assignUnowned
+import com.attention.domain.deleteTimeEntry
+import com.attention.domain.editTimeEntry
 import com.attention.domain.pauseTimer
 import com.attention.domain.recalculateExperience
 import com.attention.domain.recoverTimer
@@ -86,6 +90,27 @@ class RoomAttentionStateRepositoryTest {
         val storedKeys = rawSettingsDataStore.data.first().asMap().keys.map { it.name }.toSet()
         assertFalse(storedKeys.contains("attention_state_json"))
         assertFalse(storedKeys.any { it.contains("target") || it.contains("time") || it.contains("schedule") || it.contains("timer") })
+    }
+
+    @Test
+    fun time_entry_commands_keep_room_experience_in_sync() = runBlocking {
+        val repository = repository()
+        repository.updateBusiness { it.addTarget("学习") }
+        val target = repository.state.first().targets.single()
+
+        repository.updateBusiness { it.addTimeEntry("2026-10-08", 15, target.id) }
+        val recorded = repository.state.first()
+        val entry = recorded.timeEntries.single()
+        assertEquals(15L, recorded.experience)
+
+        repository.updateBusiness { it.editTimeEntry(entry.id, 25, null) }
+        assertEquals(0L, repository.state.first().experience)
+
+        repository.updateBusiness { it.assignUnowned(setOf(entry.id), target.id) }
+        assertEquals(25L, repository.state.first().experience)
+
+        repository.updateBusiness { it.deleteTimeEntry(entry.id) }
+        assertEquals(0L, repository.state.first().experience)
     }
 
     @Test
