@@ -1826,6 +1826,20 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun incomplete_one_time_stage_does_not_award_stage_milestone() {
+        val state = AttentionState().addTarget("未完成阶段")
+        val target = state.targets.single()
+        val withStage = state
+            .addGoalStage(target.id, GoalCadence.ONE_TIME, 30, date.toString())
+            .addTimeEntry(date.toString(), 29, target.id)
+
+        val settled = withStage.awardEligibleMilestones(date)
+
+        assertTrue(settled.milestones.none { it.kind == "one_time_goal" })
+        assertEquals(29L, settled.experience)
+    }
+
+    @Test
     fun one_time_stage_feedback_follows_stage_identity_across_parent_and_child_goals() {
         val withParent = AttentionState().addTarget("父目标")
         val parent = withParent.targets.single()
