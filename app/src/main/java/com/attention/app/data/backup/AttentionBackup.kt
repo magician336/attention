@@ -68,7 +68,12 @@ data class AttentionBackup(
         const val CURRENT_VERSION = 1
 
         fun fromDomain(state: AttentionState): AttentionBackup {
-            val canonical = state.recalculateExperience()
+            // Normalize the milestone ledger before deriving experience so the
+            // serialized rows and the saved total are computed from the same
+            // canonical set of instance keys.
+            val canonical = state.copy(
+                milestones = state.milestones.distinctBy { it.instanceKey },
+            ).recalculateExperience()
             return AttentionBackup(
                 settings = canonical.settings,
                 targets = canonical.targets,
@@ -80,7 +85,7 @@ data class AttentionBackup(
                 futureGoalRules = canonical.futureGoalRules,
                 periodSnapshots = canonical.periodSnapshots,
                 targetMoves = canonical.targetMoves,
-                milestones = canonical.milestones.distinctBy { it.instanceKey },
+                milestones = canonical.milestones,
                 experience = canonical.experience,
                 activeTimer = canonical.activeTimer,
                 onboardingCompleted = canonical.onboardingCompleted,

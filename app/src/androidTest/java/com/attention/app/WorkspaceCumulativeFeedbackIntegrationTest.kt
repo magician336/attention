@@ -41,7 +41,12 @@ class WorkspaceCumulativeFeedbackIntegrationTest {
                                 id = "ui-cumulative-$index",
                                 kind = "cumulative",
                                 instanceKey = "cumulative:${index * 100}",
-                                reward = if (index <= 4) 10_000L else 20_000L,
+                                reward = when {
+                                    index <= 4 -> 10_000L
+                                    index <= 9 -> 20_000L
+                                    index <= 14 -> 30_000L
+                                    else -> 40_000L
+                                },
                                 achievedAtEpochMillis = index.toLong(),
                             )
                         },
@@ -61,7 +66,7 @@ class WorkspaceCumulativeFeedbackIntegrationTest {
 
         composeRule.onAllNodesWithText("累计投入里程碑：", substring = true).assertCountEquals(MILESTONE_COUNT)
         composeRule.onNodeWithText("累计投入里程碑：100 小时 · +10000 投入经验").assertExists()
-        composeRule.onNodeWithText("累计投入里程碑：1500 小时 · +20000 投入经验").assertExists()
+        composeRule.onNodeWithText("累计投入里程碑：1500 小时 · +40000 投入经验").assertExists()
 
         composeRule.onNodeWithText("结算可达成里程碑").performClick()
         composeRule.waitForIdle()

@@ -198,6 +198,22 @@ class AttentionBackupCodecTest {
     }
 
     @Test
+    fun from_domain_normalizes_duplicate_milestone_instances_before_recomputing_experience() {
+        val state = AttentionState(
+            milestones = listOf(
+                Milestone("first", "cumulative", "cumulative:100", 10_000L, 100L),
+                Milestone("duplicate", "cumulative", "cumulative:100", 20_000L, 200L),
+            ),
+            experience = 999_999L,
+        )
+
+        val backup = AttentionBackup.fromDomain(state)
+
+        assertEquals(listOf("first"), backup.milestones.map { it.id })
+        assertEquals(10_000L, backup.experience)
+    }
+
+    @Test
     fun backup_round_trip_preserves_one_time_goal_deadline() {
         val target = Target("target", title = "项目")
         val expected = AttentionState(
