@@ -157,6 +157,63 @@ class AttentionBackupCodecTest {
     }
 
     @Test
+    fun merge_deduplicates_milestones_by_instance_key_and_keeps_existing_award() {
+        val existing = AttentionState(
+            milestones = listOf(Milestone("old-id", "cumulative", "cumulative:100", 10_000L, 100L)),
+        )
+        val incoming = AttentionState(
+            milestones = listOf(
+                Milestone("new-id", "cumulative", "cumulative:100", 10_000L, 200L),
+                Milestone("another-id", "cumulative", "cumulative:200", 10_000L, 300L),
+            ),
+            experience = 999_999L,
+        )
+
+        val merged = AttentionBackupCodec.merge(existing, incoming)
+
+        assertEquals(listOf("cumulative:100", "cumulative:200"), merged.milestones.map { it.instanceKey })
+        assertEquals("old-id", merged.milestones.first().id)
+        assertEquals(20_000L, merged.experience)
+    }
+
+    @Test
+    fun decode_normalizes_duplicate_milestone_instances_and_ignores_saved_experience() {
+        val target = Target("target", title = "学习")
+        val encoded = AttentionBackupCodec.encode(
+            AttentionState(
+                targets = listOf(target),
+                timeEntries = listOf(TimeEntry("entry", "2026-10-08", 25, target.id)),
+                milestones = listOf(
+                    Milestone("first", "cumulative", "cumulative:100", 10_000L, 100L),
+                    Milestone("duplicate", "cumulative", "cumulative:100", 10_000L, 200L),
+                ),
+                experience = 1L,
+            ),
+        )
+
+        val restored = AttentionBackupCodec.decode(encoded)
+
+        assertEquals(listOf("first"), restored.milestones.map { it.id })
+        assertEquals(10_025L, restored.experience)
+    }
+
+    @Test
+    fun from_domain_normalizes_duplicate_milestone_instances_before_recomputing_experience() {
+        val state = AttentionState(
+            milestones = listOf(
+                Milestone("first", "cumulative", "cumulative:100", 10_000L, 100L),
+                Milestone("duplicate", "cumulative", "cumulative:100", 20_000L, 200L),
+            ),
+            experience = 999_999L,
+        )
+
+        val backup = AttentionBackup.fromDomain(state)
+
+        assertEquals(listOf("first"), backup.milestones.map { it.id })
+        assertEquals(10_000L, backup.experience)
+    }
+
+    @Test
     fun backup_round_trip_preserves_one_time_goal_deadline() {
         val target = Target("target", title = "项目")
         val expected = AttentionState(

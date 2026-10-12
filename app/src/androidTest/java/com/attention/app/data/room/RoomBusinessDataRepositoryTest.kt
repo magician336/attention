@@ -259,6 +259,82 @@ class RoomBusinessDataRepositoryTest {
     }
 
     @Test
+    fun cumulative_milestone_and_normalized_experience_survive_room_restart() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val name = "room-cumulative-restart-test.db"
+        context.deleteDatabase(name)
+        val target = Target("cumulative-target", title = "累计投入")
+        val date = LocalDate.parse("2026-10-08")
+        val awarded = AttentionState(
+            targets = listOf(target),
+            timeEntries = listOf(TimeEntry("cumulative-entry", date.toString(), 6_000, target.id)),
+        ).awardEligibleMilestones(date)
+        assertEquals("cumulative:100", awarded.milestones.single().instanceKey)
+        assertEquals(16_000L, awarded.experience)
+
+        val firstDatabase = Room.databaseBuilder(context, AttentionDatabase::class.java, name).build()
+        try {
+            // A caller supplied cache value must not override the normalized ledger result.
+            RoomBusinessDataRepository(firstDatabase).replace(awarded.copy(experience = 1L))
+        } finally {
+            firstDatabase.close()
+        }
+
+        val secondDatabase = Room.databaseBuilder(context, AttentionDatabase::class.java, name).build()
+        try {
+            val loaded = RoomBusinessDataRepository(secondDatabase).read()
+            assertEquals(awarded.milestones, loaded.milestones)
+            assertEquals(awarded.experience, loaded.experience)
+            assertEquals(6_000, loaded.timeEntries.single().durationMinutes)
+        } finally {
+            secondDatabase.close()
+            context.deleteDatabase(name)
+        }
+    }
+
+    @Test
+    fun archiving_target_retains_cumulative_milestone_history_and_experience() = runBlocking {
+        val target = Target("archive-cumulative-target", title = "归档累计投入")
+        val date = LocalDate.parse("2026-10-08")
+        val awarded = AttentionState(
+            targets = listOf(target),
+            timeEntries = listOf(TimeEntry("archive-cumulative-entry", date.toString(), 6_000, target.id)),
+        ).awardEligibleMilestones(date)
+        val repository = RoomBusinessDataRepository(database)
+        repository.replace(awarded)
+
+        repository.update { it.archiveTarget(target.id) }
+
+        val loaded = repository.read()
+        assertTrue(loaded.targets.single().archived)
+        assertEquals(awarded.milestones, loaded.milestones)
+        assertEquals(16_000L, loaded.experience)
+        assertEquals(target.id, loaded.timeEntries.single().targetId)
+    }
+
+    @Test
+    fun deleting_target_relations_retains_cumulative_milestone_history_and_experience() = runBlocking {
+        val target = Target("delete-cumulative-target", title = "删除累计投入")
+        val date = LocalDate.parse("2026-10-08")
+        val awarded = AttentionState(
+            targets = listOf(target),
+            timeEntries = listOf(TimeEntry("delete-cumulative-entry", date.toString(), 6_000, target.id)),
+        ).awardEligibleMilestones(date)
+        val repository = RoomBusinessDataRepository(database)
+        repository.replace(awarded)
+
+        repository.deleteTargetRelations(setOf(target.id))
+
+        val loaded = repository.read()
+        assertTrue(loaded.targets.isEmpty())
+        assertEquals(awarded.milestones, loaded.milestones)
+        // Deletion detaches historical minutes from the removed target; the
+        // awarded cumulative reward remains in the milestone ledger.
+        assertEquals(10_000L, loaded.experience)
+        assertNull(loaded.timeEntries.single().targetId)
+    }
+
+    @Test
     fun deleting_target_detaches_target_move_parent_reference() = runBlocking {
         val parent = Target("parent", title = "父目标")
         val other = Target("other", title = "其他目标")

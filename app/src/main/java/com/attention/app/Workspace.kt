@@ -1595,6 +1595,18 @@ private fun StatisticsScreen(
             },
         )
         Button(onClick = viewModel::awardMilestones) { Text("结算可达成里程碑") }
+        Text("累计投入里程碑", style = MaterialTheme.typography.titleMedium)
+        val cumulativeMilestones = state.milestones
+            .filter { it.kind == "cumulative" }
+            .sortedWith(compareBy({ it.achievedAtEpochMillis }, { it.id }))
+            .distinctBy { it.instanceKey }
+        if (cumulativeMilestones.isEmpty()) {
+            Text("还没有累计投入里程碑。")
+        } else {
+            cumulativeMilestones.forEach { milestone ->
+                Text(milestone.cumulativeFeedbackLabel())
+            }
+        }
         state.recentMilestones().forEach { milestone ->
             Text("里程碑 ${milestone.kind}：+${milestone.reward}（${milestone.instanceKey}）")
         }
@@ -1682,6 +1694,15 @@ private fun AttentionState.stageFeedbackLabels(stage: GoalStage): List<String> =
             "阶段达成反馈：${stage.startDate} · +${milestone.reward} 投入经验 · 来源：一次性阶段"
         }
     }
+
+private fun com.attention.domain.Milestone.cumulativeFeedbackLabel(): String {
+    val hours = instanceKey.substringAfter("cumulative:", "").toLongOrNull()
+    return if (hours != null) {
+        "累计投入里程碑：$hours 小时 · +$reward 投入经验"
+    } else {
+        "累计投入里程碑：+${reward} 投入经验"
+    }
+}
 
 private fun AttentionState.targetPath(targetId: String, onDate: LocalDate? = null): String {
     val names = mutableListOf<String>()

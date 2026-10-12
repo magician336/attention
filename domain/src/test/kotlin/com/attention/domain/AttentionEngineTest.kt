@@ -1951,6 +1951,23 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun cumulative_milestones_count_owned_minutes_once_across_parent_and_child_targets() {
+        val withParent = AttentionState().addTarget("累计父目标")
+        val parent = withParent.targets.single()
+        val withChild = withParent.addTarget("累计子目标", parent.id)
+        val child = withChild.targets.single { it.title == "累计子目标" }
+        val populated = withChild
+            .addTimeEntry(date.toString(), 50 * 60, parent.id)
+            .addTimeEntry(date.toString(), 50 * 60, child.id)
+            .addTimeEntry(date.toString(), 100 * 60)
+
+        val awarded = populated.awardEligibleMilestones(date)
+
+        assertEquals(1, awarded.milestones.count { it.kind == "cumulative" })
+        assertEquals("cumulative:100", awarded.milestones.single { it.kind == "cumulative" }.instanceKey)
+    }
+
+    @Test
     fun parent_streak_uses_historical_target_tree_relationships() {
         val state = AttentionState().addTarget("父目标")
         val parent = state.targets.single()

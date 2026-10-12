@@ -52,7 +52,10 @@ data class AttentionBackup(
         futureGoalRules = futureGoalRules,
         periodSnapshots = periodSnapshots,
         targetMoves = targetMoves,
-        milestones = milestones,
+        // The instance key is the domain ledger identity. Backups may have
+        // been produced by older versions that retained duplicate rows, so
+        // normalize them at the import boundary before deriving experience.
+        milestones = milestones.distinctBy { it.instanceKey },
         experience = experience,
         activeTimer = activeTimer,
         onboardingCompleted = onboardingCompleted,
@@ -65,7 +68,12 @@ data class AttentionBackup(
         const val CURRENT_VERSION = 1
 
         fun fromDomain(state: AttentionState): AttentionBackup {
-            val canonical = state.recalculateExperience()
+            // Normalize the milestone ledger before deriving experience so the
+            // serialized rows and the saved total are computed from the same
+            // canonical set of instance keys.
+            val canonical = state.copy(
+                milestones = state.milestones.distinctBy { it.instanceKey },
+            ).recalculateExperience()
             return AttentionBackup(
                 settings = canonical.settings,
                 targets = canonical.targets,
@@ -133,7 +141,7 @@ object AttentionBackupCodec {
         futureGoalRules = mergeById(current.futureGoalRules, incoming.futureGoalRules) { it.id },
         periodSnapshots = mergeById(current.periodSnapshots, incoming.periodSnapshots) { it.id },
         targetMoves = mergeById(current.targetMoves, incoming.targetMoves) { it.id },
-        milestones = mergeById(current.milestones, incoming.milestones) { it.id },
+        milestones = mergeMilestones(current.milestones, incoming.milestones),
         experience = 0,
         activeTimer = incoming.activeTimer,
         onboardingCompleted = incoming.onboardingCompleted,
@@ -146,6 +154,20 @@ object AttentionBackupCodec {
         val result = existing.toMutableList()
         val ids = existing.mapTo(mutableSetOf(), id)
         incoming.forEach { if (ids.add(id(it))) result += it }
+        return result
+    }
+
+    private fun mergeMilestones(existing: List<Milestone>, incoming: List<Milestone>): List<Milestone> {
+        val result = existing.distinctBy { it.instanceKey }.toMutableList()
+        val keys = result.mapTo(mutableSetOf()) { it.instanceKey }
+        val ids = result.mapTo(mutableSetOf()) { it.id }
+        incoming.forEach { milestone ->
+            if (milestone.instanceKey !in keys && milestone.id !in ids) {
+                keys += milestone.instanceKey
+                ids += milestone.id
+                result += milestone
+            }
+        }
         return result
     }
 }
