@@ -31,6 +31,32 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class AttentionViewModelTest {
     @Test
+    fun exporting_schedules_csv_returns_current_schedule_snapshot() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val schedule = ScheduleEntry(
+                id = "export-schedule",
+                planningDate = "2026-10-12",
+                title = "复习,章节",
+                estimatedMinutes = 45,
+                note = "分析备注",
+            )
+            val viewModel = AttentionViewModel(FakeRepository(AttentionState(schedules = listOf(schedule))), ZoneOffset.UTC)
+            var exported: String? = null
+
+            viewModel.exportSchedulesCsv { exported = it }
+            advanceUntilIdle()
+
+            assertTrue(exported?.contains("planning_date,title,completed") == true)
+            assertTrue(exported?.contains("\"复习,章节\"") == true)
+            assertTrue(exported?.contains("45") == true)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
     fun editing_a_historical_entry_does_not_award_a_future_stage_milestone() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         Dispatchers.setMain(dispatcher)
