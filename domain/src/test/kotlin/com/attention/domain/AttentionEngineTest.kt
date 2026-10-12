@@ -282,6 +282,26 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun periodic_milestones_ignore_minutes_before_stage_start() {
+        val initial = AttentionState(settings = StoredSettings(weekStartDay = 1)).addTarget("周期目标")
+        val target = initial.targets.single()
+        val state = initial
+            .addGoalStage(target.id, GoalCadence.WEEKLY, 60, "2026-10-08")
+            .addTimeEntry("2026-10-07", 60, target.id)
+        val incomplete = state
+            .addTimeEntry("2026-10-08", 59, target.id)
+            .awardEligibleMilestones(LocalDate.parse("2026-10-12"))
+        assertEquals(emptyList<Milestone>(), incomplete.milestones)
+        val awarded = incomplete
+            .addTimeEntry("2026-10-09", 1, target.id)
+            .awardEligibleMilestones(LocalDate.parse("2026-10-12"))
+        assertEquals(1, awarded.milestones.size)
+        assertEquals("goal_period:${state.goalStages.single().id}:2026-10-06", awarded.milestones.single().instanceKey)
+        assertEquals(1_000L, awarded.milestones.single().reward)
+        assertEquals(1_000L, awarded.experience)
+    }
+
+    @Test
     fun migrations_are_limited_by_current_gap_and_source_period_boundary() {
         val targetState = AttentionState().addTarget("英语")
         val target = targetState.targets.single()

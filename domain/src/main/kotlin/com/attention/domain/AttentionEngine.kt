@@ -125,8 +125,13 @@ private fun AttentionState.entriesForProgress(
     val effective = effectiveStage(stage, onDate)
     if (onDate.isBefore(LocalDate.parse(effective.startDate))) return emptyList()
     val range = progressRange(stage, onDate)
+    val effectiveStart = LocalDate.parse(effective.startDate)
     return timeEntries.filter { it.id !in excludedEntryIds && it.targetId != null }
         .filter { LocalDate.parse(it.planningDate) in range }
+        // A stage or future rule may begin in the middle of a calendar cycle.
+        // Minutes recorded before that effective start belong to the previous
+        // commitment and must not complete this stage's current period.
+        .filter { !LocalDate.parse(it.planningDate).isBefore(effectiveStart) }
         .filter { isDescendantAt(it.targetId!!, effective.targetId, LocalDate.parse(it.planningDate)) }
 }
 
