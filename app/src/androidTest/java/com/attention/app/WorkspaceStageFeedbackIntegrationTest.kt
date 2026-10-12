@@ -93,9 +93,11 @@ class WorkspaceStageFeedbackIntegrationTest {
         composeRule.waitForIdle()
         composeRule.onAllNodesWithText("阶段达成反馈：$firstStart · +10000 投入经验", substring = true).assertCountEquals(1)
         composeRule.onAllNodesWithText("阶段达成反馈：$secondStart · +10000 投入经验", substring = true).assertCountEquals(1)
+        composeRule.onAllNodesWithText("里程碑 one_time_goal：+10000", substring = true).assertCountEquals(3)
         composeRule.onNodeWithText("结算可达成里程碑").performClick()
         composeRule.waitForIdle()
         composeRule.onAllNodesWithText("阶段达成反馈：$firstStart · +10000 投入经验", substring = true).assertCountEquals(1)
         composeRule.onAllNodesWithText("阶段达成反馈：$secondStart · +10000 投入经验", substring = true).assertCountEquals(1)
+        composeRule.onAllNodesWithText("里程碑 one_time_goal：+10000", substring = true).assertCountEquals(3)
     }
 }

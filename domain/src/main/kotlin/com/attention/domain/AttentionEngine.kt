@@ -302,7 +302,7 @@ fun AttentionState.deleteTargetRelations(targetIds: Set<String>): AttentionState
         targetMoves = targetMoves
             .filterNot { it.targetId in ids }
             .map { move -> if (move.parentId != null && move.parentId in ids) move.copy(parentId = null) else move },
-    )
+    ).recalculateExperience()
 }
 
 fun AttentionState.addGoalStage(
@@ -379,15 +379,18 @@ fun AttentionState.addTimeEntry(
     require(durationMinutes > 0)
     require(validRecordTarget(targetId)) { "时间记录只能归入未归档目标" }
     return copy(timeEntries = timeEntries + TimeEntry(planningDate = planningDate, durationMinutes = durationMinutes, targetId = targetId, source = source, occurredAtEpochMillis = occurredAtEpochMillis, note = note))
+        .recalculateExperience()
 }
 
 fun AttentionState.editTimeEntry(entryId: String, durationMinutes: Int, targetId: String?, note: String = ""): AttentionState {
     require(durationMinutes > 0 && validRecordTarget(targetId)) { "时间记录只能归入未归档目标" }
     require(timeEntries.any { it.id == entryId }) { "时间记录不存在" }
     return copy(timeEntries = timeEntries.map { if (it.id == entryId) it.copy(durationMinutes = durationMinutes, targetId = targetId, note = note) else it })
+        .recalculateExperience()
 }
 
 fun AttentionState.deleteTimeEntry(entryId: String): AttentionState = copy(timeEntries = timeEntries.filterNot { it.id == entryId })
+    .recalculateExperience()
 
 fun AttentionState.assignUnowned(entryIds: Set<String>, targetId: String): AttentionState {
     if (entryIds.isEmpty()) return this
@@ -858,7 +861,16 @@ fun AttentionState.stopTimer(now: Instant, zone: ZoneId = ZoneId.systemDefault()
         segments += TimerSegment(timer.startedAtEpochMillis, endedAt)
     }
     val entries = splitTimerSegments(segments, timer.targetId, settings.planningDayBoundaryMinutes, zone)
-    return TimerResult(copy(activeTimer = null, timeEntries = timeEntries + entries), entries)
+    return TimerResult(copy(activeTimer = null, timeEntries = timeEntries + entries).recalculateExperience(), entries)
+}
+
+/** Stops the active timer and evaluates milestone eligibility at the stop instant. */
+fun AttentionState.stopTimerAndAwardEligibleMilestones(
+    now: Instant,
+    zone: ZoneId = ZoneId.systemDefault(),
+): TimerResult {
+    val stopped = stopTimer(now, zone)
+    return stopped.copy(state = stopped.state.awardEligibleMilestones(stopped.state.planningDate(now, zone)))
 }
 
 private fun splitTimerSegments(segments: List<TimerSegment>, targetId: String?, boundaryMinutes: Int, zone: ZoneId): List<TimeEntry> {
@@ -894,7 +906,8 @@ private fun splitTimerSegments(segments: List<TimerSegment>, targetId: String?, 
 }
 
 fun AttentionState.recalculateExperience(): AttentionState = copy(
-    experience = timeEntries.filter { it.targetId != null }.sumOf { it.durationMinutes.toLong() } + milestones.sumOf { it.reward },
+    experience = timeEntries.filter { it.targetId != null }.sumOf { it.durationMinutes.toLong() } +
+        milestones.distinctBy { it.instanceKey }.sumOf { it.reward },
 )
 
 fun AttentionState.continuousPlanningDays(targetId: String? = null): Int {
@@ -943,6 +956,14 @@ fun Milestone.isOneTimeStageFeedbackFor(stageId: String): Boolean {
 fun AttentionState.oneTimeStageMilestones(stageId: String): List<Milestone> = milestones
     .filter { it.isOneTimeStageFeedbackFor(stageId) }
     .sortedWith(compareBy<Milestone> { it.achievedAtEpochMillis }.thenBy { it.id })
+
+fun AttentionState.recentMilestones(limit: Int = 8): List<Milestone> {
+    require(limit >= 0) { "里程碑数量不能为负数" }
+    return milestones
+        .sortedWith(compareBy<Milestone> { it.achievedAtEpochMillis }.thenBy { it.id })
+        .distinctBy { it.instanceKey }
+        .takeLast(limit)
+}
 
 private fun MutableList<Milestone>.addMilestoneIfMissing(
     existingKeys: MutableSet<String>,
@@ -995,13 +1016,59 @@ fun AttentionState.eligibleMilestones(onDate: LocalDate): List<Milestone> {
 
 fun AttentionState.awardEligibleMilestones(onDate: LocalDate): AttentionState {
     val additions = eligibleMilestones(onDate)
-    return if (additions.isEmpty()) this else copy(milestones = milestones + additions).recalculateExperience()
+    return copy(milestones = milestones + additions).recalculateExperience()
+}
+
+/** Returns the cumulative experience required to enter [level]. */
+fun levelThreshold(level: Int): Long {
+    require(level >= 1) { "等级必须从 1 开始" }
+    if (level == 1) return 0
+    val n = level.toLong()
+    val multiplier = 500L * n
+    return if (multiplier > Long.MAX_VALUE / (n - 1)) Long.MAX_VALUE else multiplier * (n - 1)
 }
 
 fun levelForExperience(experience: Long): Int {
-    var level = 1
-    while (500L * (level + 1) * level <= experience) level++
-    return level
+    val safeExperience = experience.coerceAtLeast(0)
+    var low = 1
+    var high = highestFiniteLevel()
+    while (low < high) {
+        val middle = low + (high - low + 1) / 2
+        if (levelThreshold(middle) <= safeExperience) {
+            low = middle
+        } else {
+            high = middle - 1
+        }
+    }
+    return low
+}
+
+private fun highestFiniteLevel(): Int {
+    var low = 1
+    var high = Int.MAX_VALUE
+    while (low < high) {
+        val middle = low + (high - low + 1) / 2
+        if (levelThreshold(middle) < Long.MAX_VALUE) {
+            low = middle
+        } else {
+            high = middle - 1
+        }
+    }
+    return low
+}
+
+fun levelProgressForExperience(experience: Long): LevelProgress {
+    val safeExperience = experience.coerceAtLeast(0)
+    val level = levelForExperience(safeExperience)
+    val currentThreshold = levelThreshold(level)
+    val nextThreshold = levelThreshold(level + 1)
+    return LevelProgress(
+        level = level,
+        currentLevelThreshold = currentThreshold,
+        nextLevelThreshold = nextThreshold,
+        progressExperience = (safeExperience - currentThreshold).coerceAtLeast(0),
+        remainingExperience = (nextThreshold - safeExperience).coerceAtLeast(0),
+    )
 }
 
 fun cumulativeMilestoneReward(hours: Long): Long? {
