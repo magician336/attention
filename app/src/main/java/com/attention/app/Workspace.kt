@@ -140,6 +140,8 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     }
     var selectedAgendaDate by remember { mutableStateOf(openScheduleDate) }
     var jsonPreview by remember { mutableStateOf<String?>(null) }
+    var pendingJsonBackup by remember { mutableStateOf<String?>(null) }
+    var jsonExportMessage by remember { mutableStateOf<String?>(null) }
     var pendingTimeEntriesCsv by remember { mutableStateOf<String?>(null) }
     var pendingCsvBundle by remember { mutableStateOf<AttentionViewModel.CsvExportBundle?>(null) }
     var csvBundleMessage by remember { mutableStateOf<String?>(null) }
@@ -161,6 +163,27 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                 Toast.makeText(context, "时间记录 CSV 已保存", Toast.LENGTH_SHORT).show()
             }.onFailure {
                 Toast.makeText(context, "时间记录 CSV 保存失败：${it.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+    val jsonExportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri: Uri? ->
+        val json = pendingJsonBackup
+        pendingJsonBackup = null
+        if (uri == null) {
+            jsonExportMessage = "已取消保存 JSON 备份"
+        } else if (json == null) {
+            jsonExportMessage = "JSON 备份导出失败：没有可保存的数据"
+        } else {
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.let { output ->
+                    writeUtf8Json(json, output)
+                } ?: error("无法打开保存位置")
+            }.onSuccess {
+                jsonExportMessage = "JSON 备份已保存"
+            }.onFailure {
+                jsonExportMessage = "JSON 备份保存失败：${it.message ?: "无法写入文件"}"
             }
         }
     }
@@ -275,7 +298,14 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                 LaunchDestination.STATISTICS -> StatisticsScreen(
                     state = state,
                     viewModel = viewModel,
-                    onExportJson = { viewModel.exportJson { jsonPreview = it.take(800) } },
+                    onExportJson = {
+                        jsonExportMessage = null
+                        viewModel.exportJson {
+                            jsonPreview = it.take(800)
+                            pendingJsonBackup = it
+                            jsonExportLauncher.launch("attention-backup.json")
+                        }
+                    },
                     onExportTimeEntriesCsv = {
                         viewModel.exportTimeEntriesCsv { csv ->
                             pendingTimeEntriesCsv = csv
@@ -301,6 +331,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                 )
             }
             jsonPreview?.let { Text("JSON 预览：\n$it", modifier = Modifier.padding(16.dp)) }
+            jsonExportMessage?.let { Text(it, modifier = Modifier.padding(horizontal = 16.dp)) }
             csvPreview?.let { Text("CSV 预览：\n${it.take(800)}", modifier = Modifier.padding(16.dp)) }
             scheduleExportMessage?.let { Text(it, modifier = Modifier.padding(horizontal = 16.dp)) }
             csvBundleMessage?.let { Text(it, modifier = Modifier.padding(horizontal = 16.dp)) }
@@ -1770,7 +1801,7 @@ private fun StatisticsScreen(
             Text("里程碑 ${milestone.kind}：+${milestone.reward}（${milestone.instanceKey}）")
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onExportJson) { Text("预览 JSON 备份") }
+            Button(onClick = onExportJson) { Text("保存 JSON 备份") }
             OutlinedButton(onClick = onImportJson) { Text("导入 JSON") }
             OutlinedButton(onClick = onExportTimeEntriesCsv) { Text("导出时间记录 CSV") }
             OutlinedButton(onClick = onExportCsv) { Text("预览 CSV") }
