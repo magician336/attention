@@ -57,6 +57,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.attention.app.data.AttentionStateRepository
 import com.attention.app.data.RoomAttentionStateRepository
 import com.attention.app.data.backup.AttentionBackupCodec
+import com.attention.app.data.backup.BackupPreview
 import com.attention.app.data.backup.FileImportBackupStore
 import com.attention.app.data.room.AttentionDatabase
 import com.attention.app.data.room.RoomBusinessDataRepository
@@ -193,11 +194,14 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     var pendingImport by remember { mutableStateOf<String?>(null) }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            val encoded = runCatching {
+            val result = runCatching {
                 context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-            }.getOrNull()
-            if (!encoded.isNullOrBlank()) {
-                pendingImport = encoded
+                ?: error("无法读取所选文件")
+            }
+            result.onSuccess { encoded ->
+                if (encoded.isNotBlank()) pendingImport = encoded else jsonExportMessage = "导入失败：文件为空"
+            }.onFailure {
+                jsonExportMessage = "导入失败：${it.message ?: "无法读取文件"}"
             }
         }
     }
@@ -338,13 +342,15 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         }
     }
     pendingImport?.let { encoded ->
-        val preview = runCatching { AttentionBackupCodec.decode(encoded) }.getOrNull()
+        val preview = runCatching { AttentionBackupCodec.preview(encoded) }.getOrNull()
+        val incoming = runCatching { AttentionBackupCodec.decode(encoded) }.getOrNull()
+        val merged = incoming?.let { AttentionBackupCodec.merge(state, it) }
         AlertDialog(
             onDismissRequest = { pendingImport = null },
             title = { Text("导入预览") },
             text = {
                 Text(
-                    preview?.let { "目标 ${it.targets.size} 个，阶段 ${it.goalStages.size} 个，时间记录 ${it.timeEntries.size} 条，日程 ${it.schedules.size} 条。导入前会自动备份当前数据。" }
+                    preview?.let { backupPreviewText(it, state, merged) }
                         ?: "JSON 无法解析，现有数据不会改变。",
                 )
             },
@@ -359,6 +365,24 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             },
         )
     }
+}
+
+private fun backupPreviewText(preview: BackupPreview, current: AttentionState, merged: AttentionState?): String = buildString {
+    append("版本 ${preview.version}，共 ${preview.totalRecords} 条记录\n")
+    append("目标 ${preview.targets}，阶段 ${preview.goalStages}，时间记录 ${preview.timeEntries}，日程 ${preview.schedules}\n")
+    append("重复规则 ${preview.recurrenceRules}，迁移 ${preview.migrations}，未来目标规则 ${preview.futureGoalRules}\n")
+    append("周期快照 ${preview.periodSnapshots}，目标移动 ${preview.targetMoves}，里程碑 ${preview.milestones}\n")
+    append(if (preview.hasActiveTimer) "包含活动计时器。" else "不包含活动计时器。")
+    if (merged != null) {
+        val currentCount = current.targets.size + current.goalStages.size + current.timeEntries.size + current.schedules.size +
+            current.recurrenceRules.size + current.migrations.size + current.futureGoalRules.size + current.periodSnapshots.size +
+            current.targetMoves.size + current.milestones.size
+        val mergedCount = merged.targets.size + merged.goalStages.size + merged.timeEntries.size + merged.schedules.size +
+            merged.recurrenceRules.size + merged.migrations.size + merged.futureGoalRules.size + merged.periodSnapshots.size +
+            merged.targetMoves.size + merged.milestones.size
+        append("\n合并后预计 ${mergedCount} 条，可能新增约 ${mergedCount - currentCount} 条。")
+    }
+    append("\n导入前会自动备份当前数据。")
 }
 
 @Composable

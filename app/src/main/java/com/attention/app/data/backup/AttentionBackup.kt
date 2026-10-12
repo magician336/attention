@@ -97,6 +97,26 @@ data class AttentionBackup(
     }
 }
 
+/** Lightweight, validated metadata shown before an import is committed. */
+data class BackupPreview(
+    val version: Int,
+    val targets: Int,
+    val goalStages: Int,
+    val timeEntries: Int,
+    val schedules: Int,
+    val recurrenceRules: Int,
+    val migrations: Int,
+    val futureGoalRules: Int,
+    val periodSnapshots: Int,
+    val targetMoves: Int,
+    val milestones: Int,
+    val hasActiveTimer: Boolean,
+) {
+    val totalRecords: Int
+        get() = targets + goalStages + timeEntries + schedules + recurrenceRules + migrations +
+            futureGoalRules + periodSnapshots + targetMoves + milestones
+}
+
 object AttentionBackupCodec {
     private val json = Json {
         encodeDefaults = true
@@ -106,6 +126,29 @@ object AttentionBackupCodec {
     fun encode(state: AttentionState): String = json.encodeToString(AttentionBackup.fromDomain(state))
 
     fun decode(encoded: String): AttentionState {
+        return parseValidated(encoded).toDomain()
+    }
+
+    /** Parses and validates a backup without mutating any repository state. */
+    fun preview(encoded: String): BackupPreview {
+        val backup = parseValidated(encoded)
+        return BackupPreview(
+            version = backup.version,
+            targets = backup.targets.size,
+            goalStages = backup.goalStages.size,
+            timeEntries = backup.timeEntries.size,
+            schedules = backup.schedules.size,
+            recurrenceRules = backup.recurrenceRules.size,
+            migrations = backup.migrations.size,
+            futureGoalRules = backup.futureGoalRules.size,
+            periodSnapshots = backup.periodSnapshots.size,
+            targetMoves = backup.targetMoves.size,
+            milestones = backup.milestones.distinctBy { it.instanceKey }.size,
+            hasActiveTimer = backup.activeTimer != null,
+        )
+    }
+
+    private fun parseValidated(encoded: String): AttentionBackup {
         val root = json.parseToJsonElement(encoded).jsonObject
         require("version" in root) { "备份缺少版本字段" }
         val backup = json.decodeFromString<AttentionBackup>(encoded)
@@ -113,7 +156,7 @@ object AttentionBackupCodec {
             "不支持的备份版本：${backup.version}"
         }
         backup.activeTimer?.validate()
-        return backup.toDomain()
+        return backup
     }
 
     /**

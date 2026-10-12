@@ -29,6 +29,38 @@ import org.junit.Test
 
 class AttentionBackupCodecTest {
     @Test
+    fun preview_reports_version_and_all_record_counts_without_writing() {
+        val target = Target("target", title = "学习")
+        val state = AttentionState(
+            targets = listOf(target),
+            goalStages = listOf(GoalStage("stage", target.id, GoalCadence.WEEKLY, 30, "2026-10-01")),
+            timeEntries = listOf(TimeEntry("entry", "2026-10-02", 5)),
+            schedules = listOf(ScheduleEntry("schedule", "2026-10-02", "阅读")),
+            recurrenceRules = listOf(RecurrenceRule("rule", "阅读", "2026-10-01", ScheduleFrequency.DAILY)),
+            migrations = listOf(Migration("migration", target.id, "stage", 10, "2026-10-01")),
+            futureGoalRules = listOf(com.attention.domain.FutureGoalRule("future", target.id, cadence = GoalCadence.WEEKLY, targetMinutes = 10, effectiveFrom = "2026-10-01")),
+            periodSnapshots = listOf(PeriodSnapshot("period", target.id, GoalCadence.WEEKLY, "2026-10-01", "2026-10-07", 10, 5, 5, 0, false)),
+            targetMoves = listOf(TargetMove("move", target.id, null, "2026-10-01")),
+            milestones = listOf(Milestone("milestone", "kind", "instance", 10, 1)),
+        )
+
+        val preview = AttentionBackupCodec.preview(AttentionBackupCodec.encode(state))
+
+        assertEquals(AttentionBackup.CURRENT_VERSION, preview.version)
+        assertEquals(1, preview.targets)
+        assertEquals(1, preview.goalStages)
+        assertEquals(1, preview.timeEntries)
+        assertEquals(1, preview.schedules)
+        assertEquals(1, preview.recurrenceRules)
+        assertEquals(1, preview.migrations)
+        assertEquals(1, preview.futureGoalRules)
+        assertEquals(1, preview.periodSnapshots)
+        assertEquals(1, preview.targetMoves)
+        assertEquals(1, preview.milestones)
+        assertFalse(preview.hasActiveTimer)
+    }
+
+    @Test
     fun versioned_backup_round_trip_preserves_every_domain_field() {
         val target = Target("target", title = "学习")
         val expected = AttentionState(
