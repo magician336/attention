@@ -870,7 +870,7 @@ fun AttentionState.stopTimerAndAwardEligibleMilestones(
     zone: ZoneId = ZoneId.systemDefault(),
 ): TimerResult {
     val stopped = stopTimer(now, zone)
-    return stopped.copy(state = stopped.state.awardEligibleMilestones(now.atZone(zone).toLocalDate()))
+    return stopped.copy(state = stopped.state.awardEligibleMilestones(stopped.state.planningDate(now, zone)))
 }
 
 private fun splitTimerSegments(segments: List<TimerSegment>, targetId: String?, boundaryMinutes: Int, zone: ZoneId): List<TimeEntry> {
@@ -1030,13 +1030,31 @@ fun levelThreshold(level: Int): Long {
 
 fun levelForExperience(experience: Long): Int {
     val safeExperience = experience.coerceAtLeast(0)
-    var level = 1
-    while (level < Int.MAX_VALUE) {
-        val nextThreshold = levelThreshold(level + 1)
-        if (nextThreshold == Long.MAX_VALUE || nextThreshold > safeExperience) break
-        level++
+    var low = 1
+    var high = highestFiniteLevel()
+    while (low < high) {
+        val middle = low + (high - low + 1) / 2
+        if (levelThreshold(middle) <= safeExperience) {
+            low = middle
+        } else {
+            high = middle - 1
+        }
     }
-    return level
+    return low
+}
+
+private fun highestFiniteLevel(): Int {
+    var low = 1
+    var high = Int.MAX_VALUE
+    while (low < high) {
+        val middle = low + (high - low + 1) / 2
+        if (levelThreshold(middle) < Long.MAX_VALUE) {
+            low = middle
+        } else {
+            high = middle - 1
+        }
+    }
+    return low
 }
 
 fun levelProgressForExperience(experience: Long): LevelProgress {

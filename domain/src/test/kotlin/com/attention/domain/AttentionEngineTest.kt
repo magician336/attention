@@ -1119,6 +1119,15 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun level_progress_handles_the_largest_supported_experience_without_linear_scan() {
+        val progress = levelProgressForExperience(Long.MAX_VALUE)
+
+        assertTrue(progress.level > 1)
+        assertEquals(Long.MAX_VALUE, progress.nextLevelThreshold)
+        assertEquals(0, progress.remainingExperience)
+    }
+
+    @Test
     fun future_rules_and_snapshots_preserve_previous_period() {
         val state = AttentionState().addTarget("项目")
         val target = state.targets.single()
@@ -1359,10 +1368,40 @@ class AttentionEngineTest {
             ),
         )
 
-        val stopped = state.stopTimerAndAwardEligibleMilestones(date.atStartOfDay(utc).toInstant(), utc)
+        val stopped = state.stopTimerAndAwardEligibleMilestones(date.atTime(3, 0).atZone(utc).toInstant(), utc)
 
         assertEquals(1, stopped.state.milestones.count { it.kind == "one_time_goal" })
         assertEquals(10_030L, stopped.state.experience)
+    }
+
+    @Test
+    fun stopping_before_the_planning_boundary_awards_streak_for_the_previous_planning_day() {
+        val target = Target("planning-boundary-stop-target", title = "规划日目标")
+        val settings = StoredSettings(planningDayBoundaryMinutes = 180)
+        val entries = (1..7).map { offset ->
+            TimeEntry(
+                id = "planning-boundary-entry-$offset",
+                planningDate = date.minusDays((8 - offset).toLong()).toString(),
+                durationMinutes = 1,
+                targetId = target.id,
+            )
+        }
+        val state = AttentionState(
+            settings = settings,
+            targets = listOf(target),
+            timeEntries = entries,
+            activeTimer = ActiveTimer(
+                targetId = target.id,
+                startedAtEpochMillis = 0,
+                paused = true,
+                lastPlanningDate = date.minusDays(1).toString(),
+            ),
+        )
+
+        val stop = Instant.parse("2026-10-08T02:30:00Z")
+        val stopped = state.stopTimerAndAwardEligibleMilestones(stop, utc)
+
+        assertTrue(stopped.state.milestones.any { it.kind == "streak" && it.instanceKey == "streak:${target.id}:7" })
     }
 
     @Test
