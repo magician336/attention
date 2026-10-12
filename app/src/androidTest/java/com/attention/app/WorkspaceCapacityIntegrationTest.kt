@@ -9,8 +9,10 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.attention.app.data.RoomAttentionStateRepository
 import com.attention.app.data.room.AttentionDatabase
 import com.attention.app.data.room.RoomBusinessDataRepository
+import com.attention.app.data.settings.createSettingsStore
 import com.attention.domain.AttentionState
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.StoredSettings
@@ -75,12 +77,16 @@ class WorkspaceCapacityIntegrationTest {
         @BeforeClass
         fun seedScheduleBeforeActivityStarts() {
             val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-            val date = AttentionState(settings = StoredSettings()).planningDate(Instant.now(), ZoneId.systemDefault()).toString()
+            val state = AttentionState(settings = StoredSettings())
+            val date = state.planningDate(Instant.now(), ZoneId.systemDefault()).toString()
             val database = AttentionDatabase.create(context)
             try {
                 runBlocking {
-                    RoomBusinessDataRepository(database).replace(
-                        AttentionState(
+                    RoomAttentionStateRepository(
+                        business = RoomBusinessDataRepository(database),
+                        settings = context.createSettingsStore(),
+                    ).replace(
+                        state.copy(
                             schedules = listOf(ScheduleEntry(SCHEDULE_ID, date, "UI-容量", estimatedMinutes = 90)),
                         ),
                     )
