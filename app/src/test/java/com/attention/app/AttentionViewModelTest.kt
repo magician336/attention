@@ -31,6 +31,32 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class AttentionViewModelTest {
     @Test
+    fun exporting_schedules_csv_returns_current_schedule_snapshot() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val schedule = ScheduleEntry(
+                id = "export-schedule",
+                planningDate = "2026-10-12",
+                title = "复习,章节",
+                estimatedMinutes = 45,
+                note = "分析备注",
+            )
+            val viewModel = AttentionViewModel(FakeRepository(AttentionState(schedules = listOf(schedule))), ZoneOffset.UTC)
+            var exported: String? = null
+
+            viewModel.exportSchedulesCsv { exported = it }
+            advanceUntilIdle()
+
+            assertTrue(exported?.contains("planning_date,title,completed") == true)
+            assertTrue(exported?.contains("\"复习,章节\"") == true)
+            assertTrue(exported?.contains("45") == true)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
     fun editing_a_historical_entry_does_not_award_a_future_stage_milestone() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         Dispatchers.setMain(dispatcher)
@@ -134,6 +160,61 @@ class AttentionViewModelTest {
             advanceUntilIdle()
             assertEquals("2026-10-09", repository.state.value.schedules.single().planningDate)
             assertTrue(!viewModel.error.value.isNullOrBlank())
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun time_entry_csv_export_uses_one_state_snapshot_and_reports_csv() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val target = Target("csv-target", title = "学习")
+            val repository = FakeRepository(
+                AttentionState(
+                    targets = listOf(target),
+                    timeEntries = listOf(TimeEntry("csv-entry", "2026-10-08", 45, target.id, note = "带,逗号")),
+                ),
+            )
+            val viewModel = AttentionViewModel(repository, ZoneOffset.UTC)
+            var exported: String? = null
+
+            viewModel.exportTimeEntriesCsv { exported = it }
+            advanceUntilIdle()
+
+            assertEquals(
+                "\uFEFFplanning_date,duration_minutes,target_id,target_title,source,note\n" +
+                    "2026-10-08,45,csv-target,学习,MANUAL,\"带,逗号\"\n",
+                exported,
+            )
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun combined_csv_export_returns_both_files_from_one_snapshot() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val target = Target("bundle-target", title = "学习")
+            val schedule = ScheduleEntry("bundle-schedule", "2026-10-08", "复习", estimatedMinutes = 30)
+            val repository = FakeRepository(
+                AttentionState(
+                    targets = listOf(target),
+                    timeEntries = listOf(TimeEntry("bundle-entry", "2026-10-08", 45, target.id)),
+                    schedules = listOf(schedule),
+                ),
+            )
+            val viewModel = AttentionViewModel(repository, ZoneOffset.UTC)
+            var exported: AttentionViewModel.CsvExportBundle? = null
+
+            viewModel.exportCsvBundle { exported = it }
+            advanceUntilIdle()
+
+            assertTrue(exported?.timeEntries?.contains("2026-10-08,45,bundle-target,学习,MANUAL") == true)
+            assertTrue(exported?.schedules?.contains("2026-10-08,复习,false,30") == true)
         } finally {
             Dispatchers.resetMain()
         }

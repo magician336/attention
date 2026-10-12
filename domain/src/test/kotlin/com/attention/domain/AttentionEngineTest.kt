@@ -2017,6 +2017,16 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun time_entry_csv_keeps_header_for_empty_data_and_unknown_target_ids() {
+        val empty = AttentionState().timeEntriesCsv()
+        assertEquals("\uFEFFplanning_date,duration_minutes,target_id,target_title,source,note\n", empty)
+
+        val unknown = AttentionState(timeEntries = listOf(TimeEntry("orphan", date.toString(), 5, "removed-target")))
+            .timeEntriesCsv()
+        assertTrue(unknown.contains("${date},5,removed-target,,MANUAL,"))
+    }
+
+    @Test
     fun future_target_move_does_not_rewrite_historical_parent_rollup() {
         val state = AttentionState().addTarget("旧父目标").addTarget("新父目标")
         val oldParent = state.targets.first()

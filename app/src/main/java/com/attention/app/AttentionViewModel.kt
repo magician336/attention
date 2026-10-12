@@ -70,6 +70,10 @@ class AttentionViewModel(
     private val repository: AttentionStateRepository,
     private val zone: ZoneId = ZoneId.systemDefault(),
 ) : ViewModel() {
+    data class CsvExportBundle(
+        val timeEntries: String,
+        val schedules: String,
+    )
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val state: StateFlow<AttentionState> = repository.state.stateIn(
         scope,
@@ -202,6 +206,29 @@ class AttentionViewModel(
             val current = repository.state.first()
             current.timeEntriesCsv() to current.schedulesCsv()
         }.onSuccess { (timeEntries, schedules) -> onResult(timeEntries, schedules) }
+            .onFailure { _error.value = it.message ?: "CSV 导出失败" }
+    }
+
+    /** Returns the analysis-only time-entry CSV from one consistent state snapshot. */
+    fun exportTimeEntriesCsv(onResult: (String) -> Unit) = scope.launch {
+        runCatching {
+            repository.state.first().timeEntriesCsv()
+        }.onSuccess(onResult)
+            .onFailure { _error.value = it.message ?: "时间记录 CSV 导出失败" }
+    }
+
+    fun exportSchedulesCsv(onResult: (String) -> Unit) = scope.launch {
+        runCatching { repository.state.first().schedulesCsv() }
+            .onSuccess(onResult)
+            .onFailure { _error.value = it.message ?: "日程 CSV 导出失败" }
+    }
+
+    /** Builds both analysis CSVs from the same immutable repository snapshot. */
+    fun exportCsvBundle(onResult: (CsvExportBundle) -> Unit) = scope.launch {
+        runCatching {
+            val current = repository.state.first()
+            CsvExportBundle(current.timeEntriesCsv(), current.schedulesCsv())
+        }.onSuccess(onResult)
             .onFailure { _error.value = it.message ?: "CSV 导出失败" }
     }
 

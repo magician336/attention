@@ -3,10 +3,12 @@ package com.attention.app
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.net.Uri
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.widget.Toast
+import java.io.OutputStreamWriter
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -137,7 +139,33 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     }
     var selectedAgendaDate by remember { mutableStateOf(openScheduleDate) }
     var jsonPreview by remember { mutableStateOf<String?>(null) }
+    var pendingTimeEntriesCsv by remember { mutableStateOf<String?>(null) }
+    var pendingCsvBundle by remember { mutableStateOf<AttentionViewModel.CsvExportBundle?>(null) }
+    var csvBundleMessage by remember { mutableStateOf<String?>(null) }
+    val timeEntriesCsvLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/csv"),
+    ) { uri: Uri? ->
+        val csv = pendingTimeEntriesCsv
+        pendingTimeEntriesCsv = null
+        if (uri == null) {
+            Toast.makeText(context, "已取消保存时间记录 CSV", Toast.LENGTH_SHORT).show()
+        } else if (csv == null) {
+            Toast.makeText(context, "时间记录 CSV 导出失败", Toast.LENGTH_SHORT).show()
+        } else {
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.use { output ->
+                    writeUtf8Csv(csv, output)
+                } ?: error("无法打开保存位置")
+            }.onSuccess {
+                Toast.makeText(context, "时间记录 CSV 已保存", Toast.LENGTH_SHORT).show()
+            }.onFailure {
+                Toast.makeText(context, "时间记录 CSV 保存失败：${it.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
     var csvPreview by remember { mutableStateOf<String?>(null) }
+    var pendingScheduleCsv by remember { mutableStateOf<String?>(null) }
+    var scheduleExportMessage by remember { mutableStateOf<String?>(null) }
     var pendingImport by remember { mutableStateOf<String?>(null) }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -146,6 +174,66 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             }.getOrNull()
             if (!encoded.isNullOrBlank()) {
                 pendingImport = encoded
+            }
+        }
+    }
+    val scheduleExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
+        val csv = pendingScheduleCsv
+        pendingScheduleCsv = null
+        if (uri == null) {
+            scheduleExportMessage = "已取消日程 CSV 导出"
+        } else if (csv == null) {
+            scheduleExportMessage = "日程 CSV 导出失败：没有可保存的数据"
+        } else {
+            runCatching {
+                val output = context.contentResolver.openOutputStream(uri)
+                    ?: error("无法打开保存位置")
+                output.use { stream ->
+                    OutputStreamWriter(stream, Charsets.UTF_8).use { writer -> writer.write(csv) }
+                }
+            }.onSuccess {
+                scheduleExportMessage = "日程 CSV 已保存"
+            }.onFailure {
+                scheduleExportMessage = "日程 CSV 保存失败：${it.message ?: "无法写入文件"}"
+            }
+        }
+    }
+    val combinedScheduleExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
+        val bundle = pendingCsvBundle
+        pendingCsvBundle = null
+        if (uri == null) {
+            csvBundleMessage = "时间记录 CSV 已保存；已取消保存日程 CSV"
+        } else if (bundle == null) {
+            csvBundleMessage = "时间记录 CSV 已保存；日程 CSV 导出失败"
+        } else {
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.use { output -> writeUtf8Csv(bundle.schedules, output) }
+                    ?: error("无法打开保存位置")
+            }.onSuccess {
+                csvBundleMessage = "时间记录 CSV 和日程 CSV 已保存"
+            }.onFailure {
+                csvBundleMessage = "时间记录 CSV 已保存；日程 CSV 保存失败：${it.message ?: "未知错误"}"
+            }
+        }
+    }
+    val combinedTimeExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
+        val bundle = pendingCsvBundle
+        if (uri == null) {
+            csvBundleMessage = "已取消保存时间记录 CSV；未开始保存日程 CSV"
+            pendingCsvBundle = null
+        } else if (bundle == null) {
+            csvBundleMessage = "时间记录 CSV 导出失败；未开始保存日程 CSV"
+            pendingCsvBundle = null
+        } else {
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.use { output -> writeUtf8Csv(bundle.timeEntries, output) }
+                    ?: error("无法打开保存位置")
+            }.onSuccess {
+                csvBundleMessage = "时间记录 CSV 已保存；请选择日程 CSV 的保存位置"
+                combinedScheduleExportLauncher.launch("attention-schedules.csv")
+            }.onFailure {
+                csvBundleMessage = "时间记录 CSV 保存失败：${it.message ?: "未知错误"}；未开始保存日程 CSV"
+                pendingCsvBundle = null
             }
         }
     }
@@ -187,12 +275,34 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                     state = state,
                     viewModel = viewModel,
                     onExportJson = { viewModel.exportJson { jsonPreview = it.take(800) } },
+                    onExportTimeEntriesCsv = {
+                        viewModel.exportTimeEntriesCsv { csv ->
+                            pendingTimeEntriesCsv = csv
+                            timeEntriesCsvLauncher.launch("time_entries.csv")
+                        }
+                    },
                     onExportCsv = { viewModel.exportCsv { time, schedules -> csvPreview = "时间记录\n$time\n日程\n$schedules" } },
+                    onExportSchedulesCsv = {
+                        scheduleExportMessage = null
+                        viewModel.exportSchedulesCsv { csv ->
+                            pendingScheduleCsv = csv
+                            scheduleExportLauncher.launch("attention-schedules.csv")
+                        }
+                    },
+                    onExportCsvBundle = {
+                        csvBundleMessage = null
+                        viewModel.exportCsvBundle { bundle ->
+                            pendingCsvBundle = bundle
+                            combinedTimeExportLauncher.launch("time_entries.csv")
+                        }
+                    },
                     onImportJson = { importLauncher.launch(arrayOf("application/json", "text/plain")) },
                 )
             }
             jsonPreview?.let { Text("JSON 预览：\n$it", modifier = Modifier.padding(16.dp)) }
             csvPreview?.let { Text("CSV 预览：\n${it.take(800)}", modifier = Modifier.padding(16.dp)) }
+            scheduleExportMessage?.let { Text(it, modifier = Modifier.padding(horizontal = 16.dp)) }
+            csvBundleMessage?.let { Text(it, modifier = Modifier.padding(horizontal = 16.dp)) }
         }
     }
     pendingImport?.let { encoded ->
@@ -1524,7 +1634,10 @@ private fun StatisticsScreen(
     state: AttentionState,
     viewModel: AttentionViewModel,
     onExportJson: () -> Unit,
+    onExportTimeEntriesCsv: () -> Unit,
     onExportCsv: () -> Unit,
+    onExportSchedulesCsv: () -> Unit,
+    onExportCsvBundle: () -> Unit,
     onImportJson: () -> Unit,
 ) {
     var selectedDate by remember { mutableStateOf(state.planningDate(Instant.now())) }
@@ -1613,7 +1726,10 @@ private fun StatisticsScreen(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onExportJson) { Text("预览 JSON 备份") }
             OutlinedButton(onClick = onImportJson) { Text("导入 JSON") }
+            OutlinedButton(onClick = onExportTimeEntriesCsv) { Text("导出时间记录 CSV") }
             OutlinedButton(onClick = onExportCsv) { Text("预览 CSV") }
+            OutlinedButton(onClick = onExportSchedulesCsv) { Text("导出日程 CSV") }
+            OutlinedButton(onClick = onExportCsvBundle) { Text("导出两个 CSV 文件") }
         }
         Text("首屏入口", style = MaterialTheme.typography.titleMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
