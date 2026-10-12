@@ -101,10 +101,19 @@ class RoomAttentionStateRepository(
         val incoming = AttentionBackupCodec.decode(encoded)
         return mutex.withLock {
             val current = state.first()
-            backupStore.write(AttentionBackupCodec.encode(current))
             val result = if (clearExisting) incoming else AttentionBackupCodec.merge(current, incoming)
             result.validateActiveTimerTarget()
-            replaceWithRollback(current, result)
+            AttentionBackupCodec.validate(result)
+            val previousBackup = backupStore.read()
+            try {
+                backupStore.write(AttentionBackupCodec.encode(current))
+                replaceWithRollback(current, result)
+            } catch (error: Throwable) {
+                runCatching {
+                    if (previousBackup == null) backupStore.clear() else backupStore.write(previousBackup)
+                }.onFailure(error::addSuppressed)
+                throw error
+            }
         }
     }
 

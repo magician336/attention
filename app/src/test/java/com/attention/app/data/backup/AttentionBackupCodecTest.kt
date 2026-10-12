@@ -58,6 +58,23 @@ class AttentionBackupCodecTest {
         assertEquals(1, preview.targetMoves)
         assertEquals(1, preview.milestones)
         assertFalse(preview.hasActiveTimer)
+        assertTrue(preview.hasSettings)
+    }
+
+    @Test
+    fun decoder_rejects_cross_entity_references_before_import() {
+        val invalid = AttentionState(
+            goalStages = listOf(GoalStage("stage", "missing-target", GoalCadence.WEEKLY, 30, "2026-10-01")),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            AttentionBackupCodec.decode(AttentionBackupCodec.encode(invalid))
+        }
+    }
+
+    @Test
+    fun preview_reports_missing_settings_field() {
+        val encoded = """{"version":1,"targets":[],"goalStages":[],"timeEntries":[],"schedules":[],"recurrenceRules":[],"migrations":[],"futureGoalRules":[],"periodSnapshots":[],"targetMoves":[],"milestones":[],"experience":0,"activeTimer":null,"onboardingCompleted":false,"launchDestination":"TODAY","lastOpenedDestination":"TODAY","notificationsEnabled":true}"""
+        assertFalse(AttentionBackupCodec.preview(encoded).hasSettings)
     }
 
     @Test

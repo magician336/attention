@@ -388,6 +388,8 @@ private fun backupPreviewText(preview: BackupPreview, current: AttentionState, m
     append("目标 ${preview.targets}，阶段 ${preview.goalStages}，时间记录 ${preview.timeEntries}，日程 ${preview.schedules}\n")
     append("重复规则 ${preview.recurrenceRules}，迁移 ${preview.migrations}，未来目标规则 ${preview.futureGoalRules}\n")
     append("周期快照 ${preview.periodSnapshots}，目标移动 ${preview.targetMoves}，里程碑 ${preview.milestones}\n")
+    append(if (preview.hasSettings) "包含设置。" else "不包含设置。")
+    append(" ")
     append(if (preview.hasActiveTimer) "包含活动计时器。" else "不包含活动计时器。")
     if (merged != null) {
         val currentCount = current.targets.size + current.goalStages.size + current.timeEntries.size + current.schedules.size +

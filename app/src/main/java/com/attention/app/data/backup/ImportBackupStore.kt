@@ -12,6 +12,9 @@ import kotlinx.coroutines.withContext
 interface ImportBackupStore {
     suspend fun write(encoded: String)
     suspend fun read(): String?
+
+    /** Removes a snapshot when an import fails before a snapshot existed. */
+    suspend fun clear() = Unit
 }
 
 /** Persists the most recent pre-import snapshot outside the runtime settings store. */
@@ -52,6 +55,12 @@ class FileImportBackupStore(
         File(directory, fileName).takeIf(File::isFile)?.readText(StandardCharsets.UTF_8)
     }
 
+    override suspend fun clear() = withContext(Dispatchers.IO) {
+        File(directory, fileName).delete()
+        File(directory, "$fileName.tmp").delete()
+        Unit
+    }
+
     companion object {
         const val DEFAULT_FILE_NAME = "attention_import_backup.json"
     }
@@ -65,4 +74,8 @@ class InMemoryImportBackupStore : ImportBackupStore {
     }
 
     override suspend fun read(): String? = value
+
+    override suspend fun clear() {
+        value = null
+    }
 }
