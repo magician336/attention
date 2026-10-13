@@ -112,6 +112,7 @@ import com.attention.domain.timerSettlementPreview
 import com.attention.domain.timerTargetLabel
 import java.time.Instant
 import java.time.LocalDate
+import kotlinx.coroutines.flow.first
 
 private class WorkspaceViewModelFactory(
     private val repository: AttentionStateRepository,
@@ -142,6 +143,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     }
     var destinationChosen by remember { mutableStateOf(hasExternalScheduleRequest) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var persistedSettingsLoaded by remember { mutableStateOf(false) }
     var selectedAgendaDate by remember { mutableStateOf(openScheduleDate) }
     var jsonPreview by remember { mutableStateOf<String?>(null) }
     var pendingJsonBackup by remember { mutableStateOf<String?>(null) }
@@ -274,8 +276,12 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             destination = resolveLaunchDestination(state.launchDestination, state.lastOpenedDestination)
         }
     }
-    androidx.compose.runtime.LaunchedEffect(destination, settingsOpen) {
-        if (!settingsOpen) viewModel.saveLastOpened(destination)
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        context.createSettingsStore().settings.first()
+        persistedSettingsLoaded = true
+    }
+    androidx.compose.runtime.LaunchedEffect(destination, settingsOpen, persistedSettingsLoaded) {
+        if (shouldPersistLastOpened(persistedSettingsLoaded, settingsOpen)) viewModel.saveLastOpened(destination)
     }
     androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.restoreReminders() }
 
@@ -2097,6 +2103,9 @@ internal fun initialLaunchDestination(
 } else {
     resolveLaunchDestination(requested, lastOpened)
 }
+
+internal fun shouldPersistLastOpened(settingsLoaded: Boolean, settingsOpen: Boolean): Boolean =
+    settingsLoaded && !settingsOpen
 
 private fun shiftStatisticsDate(date: LocalDate, cadence: GoalCadence, amount: Long): LocalDate = when (cadence) {
     GoalCadence.DAILY -> date.plusDays(amount)

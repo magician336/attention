@@ -40,4 +40,11 @@ class WorkspaceNavigationTest {
             initialLaunchDestination(false, LaunchDestination.STATISTICS, LaunchDestination.TARGETS),
         )
     }
+
+    @Test
+    fun last_opened_is_not_written_until_persisted_settings_are_loaded() {
+        assertEquals(false, shouldPersistLastOpened(false, false))
+        assertEquals(false, shouldPersistLastOpened(true, true))
+        assertEquals(true, shouldPersistLastOpened(true, false))
+    }
 }
