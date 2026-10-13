@@ -29,6 +29,87 @@ import org.junit.Test
 
 class AttentionBackupCodecTest {
     @Test
+    fun preview_reports_version_and_all_record_counts_without_writing() {
+        val target = Target("target", title = "学习")
+        val state = AttentionState(
+            targets = listOf(target),
+            goalStages = listOf(GoalStage("stage", target.id, GoalCadence.WEEKLY, 30, "2026-10-01")),
+            timeEntries = listOf(TimeEntry("entry", "2026-10-02", 5)),
+            schedules = listOf(ScheduleEntry("schedule", "2026-10-02", "阅读")),
+            recurrenceRules = listOf(RecurrenceRule("rule", "阅读", "2026-10-01", ScheduleFrequency.DAILY)),
+            migrations = listOf(Migration("migration", target.id, "stage", 10, "2026-10-01")),
+            futureGoalRules = listOf(com.attention.domain.FutureGoalRule("future", target.id, cadence = GoalCadence.WEEKLY, targetMinutes = 10, effectiveFrom = "2026-10-01")),
+            periodSnapshots = listOf(PeriodSnapshot("period", target.id, GoalCadence.WEEKLY, "2026-10-01", "2026-10-07", 10, 5, 5, 0, false)),
+            targetMoves = listOf(TargetMove("move", target.id, null, "2026-10-01")),
+            milestones = listOf(Milestone("milestone", "kind", "instance", 10, 1)),
+        )
+
+        val preview = AttentionBackupCodec.preview(AttentionBackupCodec.encode(state))
+
+        assertEquals(AttentionBackup.CURRENT_VERSION, preview.version)
+        assertEquals(1, preview.targets)
+        assertEquals(1, preview.goalStages)
+        assertEquals(1, preview.timeEntries)
+        assertEquals(1, preview.schedules)
+        assertEquals(1, preview.recurrenceRules)
+        assertEquals(1, preview.migrations)
+        assertEquals(1, preview.futureGoalRules)
+        assertEquals(1, preview.periodSnapshots)
+        assertEquals(1, preview.targetMoves)
+        assertEquals(1, preview.milestones)
+        assertFalse(preview.hasActiveTimer)
+        assertTrue(preview.hasSettings)
+    }
+
+    @Test
+    fun decoder_rejects_cross_entity_references_before_import() {
+        val invalid = AttentionState(
+            goalStages = listOf(GoalStage("stage", "missing-target", GoalCadence.WEEKLY, 30, "2026-10-01")),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            AttentionBackupCodec.decode(AttentionBackupCodec.encode(invalid))
+        }
+    }
+
+    @Test
+    fun decoder_rejects_active_timer_target_when_target_row_is_missing() {
+        val invalid = AttentionState(activeTimer = ActiveTimer("missing", 1L, lastPlanningDate = "2026-10-01"))
+        assertThrows(IllegalArgumentException::class.java) {
+            AttentionBackupCodec.decode(AttentionBackupCodec.encode(invalid))
+        }
+    }
+
+    @Test
+    fun decoder_rejects_period_snapshot_stage_owned_by_another_target() {
+        val encoded = AttentionBackupCodec.encode(
+            AttentionState(
+                targets = listOf(Target("a", title = "A"), Target("b", title = "B")),
+                goalStages = listOf(GoalStage("stage", "a", GoalCadence.WEEKLY, 10, "2026-10-01")),
+                periodSnapshots = listOf(PeriodSnapshot("snapshot", "b", GoalCadence.WEEKLY, "2026-10-01", "2026-10-07", 10, 0, 10, 0, false, stageId = "stage")),
+            ),
+        )
+        assertThrows(IllegalArgumentException::class.java) { AttentionBackupCodec.decode(encoded) }
+    }
+
+    @Test
+    fun archived_target_history_round_trips_without_dropping_references() {
+        val archived = Target("archived", title = "已归档", archived = true)
+        val expected = AttentionState(
+            targets = listOf(archived),
+            timeEntries = listOf(TimeEntry("entry", "2026-10-01", 15, archived.id)),
+            recurrenceRules = listOf(RecurrenceRule("rule", "历史规则", "2026-10-01", ScheduleFrequency.DAILY, targetId = archived.id)),
+            experience = 15L,
+        )
+        assertEquals(expected, AttentionBackupCodec.decode(AttentionBackupCodec.encode(expected)))
+    }
+
+    @Test
+    fun preview_reports_missing_settings_field() {
+        val encoded = """{"version":1,"targets":[],"goalStages":[],"timeEntries":[],"schedules":[],"recurrenceRules":[],"migrations":[],"futureGoalRules":[],"periodSnapshots":[],"targetMoves":[],"milestones":[],"experience":0,"activeTimer":null,"onboardingCompleted":false,"launchDestination":"TODAY","lastOpenedDestination":"TODAY","notificationsEnabled":true}"""
+        assertFalse(AttentionBackupCodec.preview(encoded).hasSettings)
+    }
+
+    @Test
     fun versioned_backup_round_trip_preserves_every_domain_field() {
         val target = Target("target", title = "学习")
         val expected = AttentionState(
@@ -323,9 +404,11 @@ class AttentionBackupCodecTest {
 
     @Test
     fun backup_round_trip_preserves_running_timer_context() {
+        val target = Target("target", title = "计时目标")
         val expected = AttentionState(
+            targets = listOf(target),
             activeTimer = ActiveTimer(
-                targetId = "target",
+                targetId = target.id,
                 startedAtEpochMillis = 2_000L,
                 accumulatedMillis = 60_000L,
                 paused = false,

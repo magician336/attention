@@ -220,8 +220,26 @@ class AttentionViewModelTest {
         }
     }
 
+    @Test
+    fun restoring_last_import_backup_replaces_current_state() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val repository = FakeRepository(AttentionState())
+            repository.savedBackup = "{\"version\":1}"
+            val viewModel = AttentionViewModel(repository, ZoneOffset.UTC)
+            viewModel.restoreLastImportBackup()
+            advanceUntilIdle()
+            assertEquals("{\"version\":1}", repository.importedBackup)
+            assertEquals(true, repository.importedClearExisting)
+        } finally { Dispatchers.resetMain() }
+    }
+
     private class FakeRepository(initial: AttentionState) : AttentionStateRepository {
         private val values = MutableStateFlow(initial)
+        var savedBackup: String? = null
+        var importedBackup: String? = null
+        var importedClearExisting: Boolean? = null
         override val state: StateFlow<AttentionState> = values
 
         override suspend fun updateBusiness(transform: (AttentionState) -> AttentionState) {
@@ -243,7 +261,11 @@ class AttentionViewModelTest {
         override suspend fun replace(state: AttentionState) { values.value = state }
         override suspend fun restoreReminders() = Unit
         override suspend fun exportJson(): String = ""
-        override suspend fun importJson(encoded: String, clearExisting: Boolean): AttentionState = values.value
-        override suspend fun lastImportBackup(): String? = null
+        override suspend fun importJson(encoded: String, clearExisting: Boolean): AttentionState {
+            importedBackup = encoded
+            importedClearExisting = clearExisting
+            return values.value
+        }
+        override suspend fun lastImportBackup(): String? = savedBackup
     }
 }

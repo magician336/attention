@@ -57,6 +57,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.attention.app.data.AttentionStateRepository
 import com.attention.app.data.RoomAttentionStateRepository
 import com.attention.app.data.backup.AttentionBackupCodec
+import com.attention.app.data.backup.BackupPreview
 import com.attention.app.data.backup.FileImportBackupStore
 import com.attention.app.data.room.AttentionDatabase
 import com.attention.app.data.room.RoomBusinessDataRepository
@@ -140,6 +141,8 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     }
     var selectedAgendaDate by remember { mutableStateOf(openScheduleDate) }
     var jsonPreview by remember { mutableStateOf<String?>(null) }
+    var pendingJsonBackup by remember { mutableStateOf<String?>(null) }
+    var jsonExportMessage by remember { mutableStateOf<String?>(null) }
     var pendingTimeEntriesCsv by remember { mutableStateOf<String?>(null) }
     var pendingCsvBundle by remember { mutableStateOf<AttentionViewModel.CsvExportBundle?>(null) }
     var csvBundleMessage by remember { mutableStateOf<String?>(null) }
@@ -164,17 +167,42 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             }
         }
     }
+    val jsonExportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri: Uri? ->
+        val json = pendingJsonBackup
+        pendingJsonBackup = null
+        if (uri == null) {
+            jsonExportMessage = "已取消保存 JSON 备份"
+        } else if (json == null) {
+            jsonExportMessage = "JSON 备份导出失败：没有可保存的数据"
+        } else {
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.let { output ->
+                    writeUtf8Json(json, output)
+                } ?: error("无法打开保存位置")
+            }.onSuccess {
+                jsonExportMessage = "JSON 备份已保存"
+            }.onFailure {
+                jsonExportMessage = "JSON 备份保存失败：${it.message ?: "无法写入文件"}"
+            }
+        }
+    }
     var csvPreview by remember { mutableStateOf<String?>(null) }
     var pendingScheduleCsv by remember { mutableStateOf<String?>(null) }
     var scheduleExportMessage by remember { mutableStateOf<String?>(null) }
     var pendingImport by remember { mutableStateOf<String?>(null) }
+    var pendingClearImport by remember { mutableStateOf<String?>(null) }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            val encoded = runCatching {
+            val result = runCatching {
                 context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-            }.getOrNull()
-            if (!encoded.isNullOrBlank()) {
-                pendingImport = encoded
+                ?: error("无法读取所选文件")
+            }
+            result.onSuccess { encoded ->
+                if (encoded.isNotBlank()) pendingImport = encoded else jsonExportMessage = "导入失败：文件为空"
+            }.onFailure {
+                jsonExportMessage = "导入失败：${it.message ?: "无法读取文件"}"
             }
         }
     }
@@ -275,7 +303,14 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                 LaunchDestination.STATISTICS -> StatisticsScreen(
                     state = state,
                     viewModel = viewModel,
-                    onExportJson = { viewModel.exportJson { jsonPreview = it.take(800) } },
+                    onExportJson = {
+                        jsonExportMessage = null
+                        viewModel.exportJson {
+                            jsonPreview = it.take(800)
+                            pendingJsonBackup = it
+                            jsonExportLauncher.launch("attention-backup.json")
+                        }
+                    },
                     onExportTimeEntriesCsv = {
                         viewModel.exportTimeEntriesCsv { csv ->
                             pendingTimeEntriesCsv = csv
@@ -298,22 +333,26 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                         }
                     },
                     onImportJson = { importLauncher.launch(arrayOf("application/json", "text/plain")) },
+                    onRestoreImportBackup = { viewModel.restoreLastImportBackup() },
                 )
             }
             jsonPreview?.let { Text("JSON 预览：\n$it", modifier = Modifier.padding(16.dp)) }
+            jsonExportMessage?.let { Text(it, modifier = Modifier.padding(horizontal = 16.dp)) }
             csvPreview?.let { Text("CSV 预览：\n${it.take(800)}", modifier = Modifier.padding(16.dp)) }
             scheduleExportMessage?.let { Text(it, modifier = Modifier.padding(horizontal = 16.dp)) }
             csvBundleMessage?.let { Text(it, modifier = Modifier.padding(horizontal = 16.dp)) }
         }
     }
     pendingImport?.let { encoded ->
-        val preview = runCatching { AttentionBackupCodec.decode(encoded) }.getOrNull()
+        val preview = runCatching { AttentionBackupCodec.preview(encoded) }.getOrNull()
+        val incoming = runCatching { AttentionBackupCodec.decode(encoded) }.getOrNull()
+        val merged = incoming?.let { AttentionBackupCodec.merge(state, it) }
         AlertDialog(
             onDismissRequest = { pendingImport = null },
             title = { Text("导入预览") },
             text = {
                 Text(
-                    preview?.let { "目标 ${it.targets.size} 个，阶段 ${it.goalStages.size} 个，时间记录 ${it.timeEntries.size} 条，日程 ${it.schedules.size} 条。导入前会自动备份当前数据。" }
+                    preview?.let { backupPreviewText(it, state, merged) }
                         ?: "JSON 无法解析，现有数据不会改变。",
                 )
             },
@@ -322,12 +361,46 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             },
             dismissButton = {
                 Row {
-                    TextButton(onClick = { if (preview != null) viewModel.importJson(encoded, true); pendingImport = null }) { Text("清空后恢复") }
+                    TextButton(onClick = { if (preview != null) { pendingClearImport = encoded; pendingImport = null } }) { Text("清空后恢复") }
                     TextButton(onClick = { pendingImport = null }) { Text("取消") }
                 }
             },
         )
     }
+    pendingClearImport?.let { encoded ->
+        AlertDialog(
+            onDismissRequest = { pendingClearImport = null },
+            title = { Text("确认清空后恢复") },
+            text = { Text("这会清空当前全部数据，并在导入前保存保护性备份。确定继续吗？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.importJson(encoded, clearExisting = true)
+                    pendingClearImport = null
+                }) { Text("确认清空并恢复") }
+            },
+            dismissButton = { TextButton(onClick = { pendingClearImport = null }) { Text("取消") } },
+        )
+    }
+}
+
+private fun backupPreviewText(preview: BackupPreview, current: AttentionState, merged: AttentionState?): String = buildString {
+    append("版本 ${preview.version}，共 ${preview.totalRecords} 条记录\n")
+    append("目标 ${preview.targets}，阶段 ${preview.goalStages}，时间记录 ${preview.timeEntries}，日程 ${preview.schedules}\n")
+    append("重复规则 ${preview.recurrenceRules}，迁移 ${preview.migrations}，未来目标规则 ${preview.futureGoalRules}\n")
+    append("周期快照 ${preview.periodSnapshots}，目标移动 ${preview.targetMoves}，里程碑 ${preview.milestones}\n")
+    append(if (preview.hasSettings) "包含设置。" else "不包含设置。")
+    append(" ")
+    append(if (preview.hasActiveTimer) "包含活动计时器。" else "不包含活动计时器。")
+    if (merged != null) {
+        val currentCount = current.targets.size + current.goalStages.size + current.timeEntries.size + current.schedules.size +
+            current.recurrenceRules.size + current.migrations.size + current.futureGoalRules.size + current.periodSnapshots.size +
+            current.targetMoves.size + current.milestones.size
+        val mergedCount = merged.targets.size + merged.goalStages.size + merged.timeEntries.size + merged.schedules.size +
+            merged.recurrenceRules.size + merged.migrations.size + merged.futureGoalRules.size + merged.periodSnapshots.size +
+            merged.targetMoves.size + merged.milestones.size
+        append("\n合并后预计 ${mergedCount} 条，可能新增约 ${mergedCount - currentCount} 条。")
+    }
+    append("\n导入前会自动备份当前数据。")
 }
 
 @Composable
@@ -1685,6 +1758,7 @@ private fun StatisticsScreen(
     onExportSchedulesCsv: () -> Unit,
     onExportCsvBundle: () -> Unit,
     onImportJson: () -> Unit,
+    onRestoreImportBackup: () -> Unit,
 ) {
     var selectedDate by remember { mutableStateOf(state.planningDate(Instant.now())) }
     var cadence by remember { mutableStateOf(GoalCadence.DAILY) }
@@ -1754,6 +1828,7 @@ private fun StatisticsScreen(
             },
         )
         Button(onClick = viewModel::awardMilestones) { Text("结算可达成里程碑") }
+        OutlinedButton(onClick = onRestoreImportBackup) { Text("恢复最近一次导入前备份") }
         Text("累计投入里程碑", style = MaterialTheme.typography.titleMedium)
         val cumulativeMilestones = state.milestones
             .filter { it.kind == "cumulative" }
