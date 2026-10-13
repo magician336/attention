@@ -1,5 +1,8 @@
 package com.attention.app
 
+import android.app.Activity
+import android.app.Instrumentation
+import android.content.Intent
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
@@ -11,6 +14,12 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.core.app.ApplicationProvider
+import androidx.test.espresso.intent.Intents
+import androidx.test.espresso.intent.Intents.intended
+import androidx.test.espresso.intent.Intents.intending
+import androidx.test.espresso.intent.matcher.IntentMatchers.hasAction
+import androidx.test.espresso.intent.matcher.IntentMatchers.hasExtra
+import androidx.test.espresso.intent.matcher.IntentMatchers.hasType
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.attention.app.data.room.AttentionDatabase
 import com.attention.app.data.room.RoomBusinessDataRepository
@@ -21,6 +30,9 @@ import com.attention.domain.RecurrenceRule
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.ScheduleFrequency
 import kotlinx.coroutines.runBlocking
+import org.hamcrest.Matchers.allOf
+import org.junit.After
+import org.junit.Before
 import org.junit.BeforeClass
 import org.junit.Rule
 import org.junit.Test
@@ -30,6 +42,18 @@ import org.junit.runner.RunWith
 class WorkspaceCapacityAcceptanceIntegrationTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
+
+    @Before
+    fun stubDocumentPickerIntents() {
+        Intents.init()
+        intending(hasAction(Intent.ACTION_CREATE_DOCUMENT))
+            .respondWith(Instrumentation.ActivityResult(Activity.RESULT_CANCELED, null))
+    }
+
+    @After
+    fun releaseIntentStubs() {
+        Intents.release()
+    }
 
     @Test
     fun user_can_observe_and_adjust_capacity_across_agenda_and_workbench() {
@@ -100,8 +124,17 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
 
         composeRule.onNode(hasText("统计") and hasClickAction()).performClick()
         composeRule.onNodeWithText("预览 JSON 备份").performScrollTo().performClick()
-        composeRule.waitForIdle()
-        composeRule.onNodeWithText("JSON 预览：", substring = true).assertExists()
+        // The export launches the system document picker in its own process; the stubbed
+        // intent keeps the round trip in-process so the Compose hierarchy stays alive.
+        waitForText("JSON 预览：")
+        waitForText("已取消保存 JSON 备份")
+        intended(
+            allOf(
+                hasAction(Intent.ACTION_CREATE_DOCUMENT),
+                hasType("application/json"),
+                hasExtra(Intent.EXTRA_TITLE, "attention-backup.json"),
+            ),
+        )
     }
 
     private fun openAgenda() {
