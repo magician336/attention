@@ -1845,7 +1845,7 @@ private fun StatisticsScreen(
             Text("里程碑 ${milestone.kind}：+${milestone.reward}（${milestone.instanceKey}）")
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onExportJson) { Text("保存 JSON 备份") }
+            Button(onClick = onExportJson) { Text("预览 JSON 备份") }
             OutlinedButton(onClick = onImportJson) { Text("导入 JSON") }
             OutlinedButton(onClick = onExportTimeEntriesCsv) { Text("导出时间记录 CSV") }
             OutlinedButton(onClick = onExportCsv) { Text("预览 CSV") }

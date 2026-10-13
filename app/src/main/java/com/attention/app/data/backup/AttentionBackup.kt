@@ -237,7 +237,7 @@ object AttentionBackupCodec {
             require(rule.targetId == null || rule.targetId in targets) { "重复规则目标不存在" }
             when (rule.frequency) {
                 com.attention.domain.ScheduleFrequency.DAILY -> require(rule.weekdays.isEmpty() && rule.dayOfMonth == null) { "每日规则参数无效" }
-                com.attention.domain.ScheduleFrequency.WEEKLY -> require(rule.weekdays.isNotEmpty() && rule.weekdays.all { it in 1..7 } && rule.dayOfMonth == null) { "每周规则参数无效" }
+                com.attention.domain.ScheduleFrequency.WEEKLY -> require(rule.weekdays.all { it in 1..7 } && rule.dayOfMonth == null) { "每周规则参数无效" }
                 com.attention.domain.ScheduleFrequency.MONTHLY -> require(rule.weekdays.isEmpty() && rule.dayOfMonth in 1..31) { "每月规则参数无效" }
             }
         }

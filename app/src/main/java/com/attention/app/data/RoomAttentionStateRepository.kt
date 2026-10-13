@@ -109,9 +109,10 @@ class RoomAttentionStateRepository(
                 backupStore.write(AttentionBackupCodec.encode(current))
                 replaceWithRollback(current, result)
             } catch (error: Throwable) {
-                runCatching {
-                    if (previousBackup == null) backupStore.clear() else backupStore.write(previousBackup)
-                }.onFailure(error::addSuppressed)
+                if (previousBackup != null) {
+                    runCatching { backupStore.write(previousBackup) }
+                        .onFailure(error::addSuppressed)
+                }
                 throw error
             }
         }
