@@ -663,17 +663,25 @@ private fun OnboardingCard(state: AttentionState, viewModel: AttentionViewModel)
     var capacity by remember(state.settings.dailyCapacityMinutes) {
         mutableStateOf(state.settings.dailyCapacityMinutes?.toString() ?: "")
     }
+    var planTitle by remember { mutableStateOf("") }
+    var scheduleTitle by remember { mutableStateOf("") }
+    var scheduleDate by remember { mutableStateOf(state.planningDate(Instant.now()).toString()) }
+    var scheduleEstimate by remember { mutableStateOf("") }
+    var scheduleStart by remember { mutableStateOf("") }
+    var scheduleEnd by remember { mutableStateOf("") }
+    var scheduleNote by remember { mutableStateOf("") }
+    var scheduleTargetId by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
 
     fun nextOrFinish() {
         error = null
-        if (step == 2) viewModel.finishOnboarding() else step += 1
+        if (step == 4) viewModel.finishOnboarding() else step += 1
     }
 
     Card(Modifier.fillMaxWidth().testTag("onboarding-card")) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("首次设置", style = MaterialTheme.typography.titleMedium)
-            Text("第 ${step + 1} 步，共 3 步")
+            Text("第 ${step + 1} 步，共 5 步")
             when (step) {
                 0 -> {
                     Text("设置规划日界线")
@@ -699,7 +707,7 @@ private fun OnboardingCard(state: AttentionState, viewModel: AttentionViewModel)
                         }
                     }
                 }
-                else -> {
+                2 -> {
                     Text("设置每日容量")
                     Text("可留空；填写时必须是正整数分钟。")
                     OutlinedTextField(
@@ -710,6 +718,28 @@ private fun OnboardingCard(state: AttentionState, viewModel: AttentionViewModel)
                         singleLine = true,
                         isError = error != null,
                     )
+                }
+                3 -> {
+                    Text("创建首个计划")
+                    Text("可跳过；标题不能为空。")
+                    OutlinedTextField(planTitle, { planTitle = it; error = null }, label = { Text("计划标题") }, modifier = Modifier.fillMaxWidth().testTag("onboarding-plan-title"), singleLine = true, isError = error != null)
+                }
+                else -> {
+                    Text("创建第一条日程")
+                    Text("可跳过；标题和规划日必填。")
+                    OutlinedTextField(scheduleTitle, { scheduleTitle = it; error = null }, label = { Text("日程标题") }, modifier = Modifier.fillMaxWidth().testTag("onboarding-schedule-title"), singleLine = true, isError = error != null)
+                    OutlinedTextField(scheduleDate, { scheduleDate = it; error = null }, label = { Text("规划日（YYYY-MM-DD）") }, modifier = Modifier.fillMaxWidth().testTag("onboarding-schedule-date"), singleLine = true, isError = error != null)
+                    OutlinedTextField(scheduleEstimate, { scheduleEstimate = it.filter(Char::isDigit) }, label = { Text("预计分钟（可选）") }, modifier = Modifier.fillMaxWidth().testTag("onboarding-schedule-estimate"), singleLine = true)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(scheduleStart, { scheduleStart = it.filter(Char::isDigit) }, label = { Text("开始分钟") }, modifier = Modifier.weight(1f), singleLine = true)
+                        OutlinedTextField(scheduleEnd, { scheduleEnd = it.filter(Char::isDigit) }, label = { Text("结束分钟") }, modifier = Modifier.weight(1f), singleLine = true)
+                    }
+                    OutlinedTextField(scheduleNote, { scheduleNote = it }, label = { Text("备注（可选）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                    state.targets.filterNot { it.archived }.forEach { target ->
+                        if (target.id == scheduleTargetId) Button(onClick = {}, modifier = Modifier.testTag("onboarding-schedule-target-${target.id}")) { Text("关联：${target.title}") }
+                        else OutlinedButton(onClick = { scheduleTargetId = target.id }, modifier = Modifier.testTag("onboarding-schedule-target-${target.id}")) { Text("关联：${target.title}") }
+                    }
+                    TextButton(onClick = { scheduleTargetId = null }) { Text("不关联计划") }
                 }
             }
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("onboarding-error")) }
@@ -730,13 +760,38 @@ private fun OnboardingCard(state: AttentionState, viewModel: AttentionViewModel)
                                 viewModel.setSettings(StoredSettings(state.settings.planningDayBoundaryMinutes, weekStart, state.settings.dailyCapacityMinutes))
                                 nextOrFinish()
                             }
-                            else -> {
+                            2 -> {
                                 val input = capacity.trim()
                                 val value = input.toIntOrNull()
                                 if (input.isNotEmpty() && (value == null || value <= 0)) error = "每日容量必须是正整数，或留空"
                                 else {
                                     viewModel.setSettings(StoredSettings(state.settings.planningDayBoundaryMinutes, state.settings.weekStartDay, value))
                                     nextOrFinish()
+                                }
+                            }
+                            3 -> {
+                                if (planTitle.isBlank()) error = "计划标题不能为空"
+                                else viewModel.addTarget(planTitle.trim()) { nextOrFinish() }
+                            }
+                            else -> {
+                                val date = runCatching { LocalDate.parse(scheduleDate.trim()) }.getOrNull()
+                                if (scheduleTitle.isBlank()) error = "日程标题不能为空"
+                                else if (date == null) error = "请输入有效的规划日"
+                                else {
+                                    val start = scheduleStart.toIntOrNull()
+                                    val end = scheduleEnd.toIntOrNull()
+                                    val estimate = scheduleEstimate.toIntOrNull()
+                                    val invalidRange = start != null && end != null && (start !in 0..1439 || end !in 1..1440 || end <= start)
+                                    if ((start == null) != (end == null) || invalidRange) error = "时间段无效"
+                                    else if (estimate != null && estimate <= 0) error = "预计分钟必须为正整数"
+                                    else {
+                                        viewModel.addSchedule(ScheduleEntry(
+                                            planningDate = date.toString(), title = scheduleTitle.trim(),
+                                            startMinute = start, endMinute = end, estimatedMinutes = estimate,
+                                            note = scheduleNote, targetId = scheduleTargetId,
+                                        ))
+                                        nextOrFinish()
+                                    }
                                 }
                             }
                         }
