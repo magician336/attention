@@ -1,6 +1,8 @@
 package com.attention.app.data.settings
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
 import com.attention.domain.LaunchDestination
 import java.nio.file.Files
 import kotlinx.coroutines.CoroutineScope
@@ -93,6 +95,26 @@ class SettingsStoreTest {
         runCatching { store.setDailyCapacityMinutes(-15) }
 
         assertEquals(420, store.settings.first().dailyCapacityMinutes)
+        file.delete()
+        Unit
+    }
+
+    @Test
+    fun unknown_launch_value_falls_back_to_today_without_overwriting_other_settings() = runBlocking {
+        val file = Files.createTempFile("attention-settings", ".preferences_pb").toFile()
+        val dataStore = PreferenceDataStoreFactory.create { file }
+        dataStore.edit {
+            it[stringPreferencesKey("launch_destination")] = "REMOVED_DESTINATION"
+            it[stringPreferencesKey("last_opened_destination")] = LaunchDestination.TARGETS.name
+        }
+        val store = DataStoreSettingsStore(dataStore)
+
+        assertEquals(LaunchDestination.TODAY, store.settings.first().launchDestination)
+        assertEquals(LaunchDestination.TARGETS, store.settings.first().lastOpenedDestination)
+        store.setLaunchDestination(LaunchDestination.STATISTICS)
+        val updated = store.settings.first()
+        assertEquals(LaunchDestination.STATISTICS, updated.launchDestination)
+        assertEquals(LaunchDestination.TARGETS, updated.lastOpenedDestination)
         file.delete()
         Unit
     }

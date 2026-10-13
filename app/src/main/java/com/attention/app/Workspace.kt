@@ -139,6 +139,8 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     var destination by remember {
         mutableStateOf(if (openScheduleDate != null) LaunchDestination.ALL_DATES else resolveLaunchDestination(state.launchDestination, state.lastOpenedDestination))
     }
+    var destinationChosen by remember { mutableStateOf(openScheduleDate != null) }
+    var settingsOpen by remember { mutableStateOf(false) }
     var selectedAgendaDate by remember { mutableStateOf(openScheduleDate) }
     var jsonPreview by remember { mutableStateOf<String?>(null) }
     var pendingJsonBackup by remember { mutableStateOf<String?>(null) }
@@ -266,7 +268,14 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             }
         }
     }
-    androidx.compose.runtime.LaunchedEffect(destination) { viewModel.saveLastOpened(destination) }
+    androidx.compose.runtime.LaunchedEffect(state.launchDestination, state.lastOpenedDestination) {
+        if (!destinationChosen && openScheduleDate == null) {
+            destination = resolveLaunchDestination(state.launchDestination, state.lastOpenedDestination)
+        }
+    }
+    androidx.compose.runtime.LaunchedEffect(destination, settingsOpen) {
+        if (!settingsOpen) viewModel.saveLastOpened(destination)
+    }
     androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.restoreReminders() }
 
     Scaffold(
@@ -279,9 +288,11 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                     LaunchDestination.ALL_DATES to "所有日期",
                     LaunchDestination.STATISTICS to "统计",
                 ).forEach { (item, label) ->
-                    if (destination == item) Button(onClick = { destination = item }) { Text(label) }
-                    else OutlinedButton(onClick = { destination = item }) { Text(label) }
+                    if (destination == item && !settingsOpen) Button(onClick = { settingsOpen = false; destinationChosen = true }) { Text(label) }
+                    else OutlinedButton(onClick = { settingsOpen = false; destinationChosen = true; destination = item }) { Text(label) }
                 }
+                if (settingsOpen) Button(onClick = {}) { Text("设置") }
+                else OutlinedButton(onClick = { settingsOpen = true }) { Text("设置") }
             }
         },
     ) { padding ->
@@ -290,7 +301,9 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                 Text("$it", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp))
                 TextButton(onClick = viewModel::clearError) { Text("关闭提示") }
             }
-            when (destination) {
+            if (settingsOpen) {
+                SettingsScreen(state = state, viewModel = viewModel)
+            } else when (destination) {
                 LaunchDestination.TODAY, LaunchDestination.LAST_OPENED -> WorkspaceTodayScreen(state, viewModel)
                 LaunchDestination.TARGETS -> TargetsScreen(state, viewModel)
                 LaunchDestination.ALL_DATES -> AgendaScreen(
@@ -438,21 +451,7 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
         Text("今天工作台", style = MaterialTheme.typography.headlineMedium)
         Text("规划日界线 ${formatMinutes(state.settings.planningDayBoundaryMinutes)} · 每周从${weekName(state.settings.weekStartDay)}开始")
         Text("规划日：$date")
-        if (!state.onboardingCompleted) {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("欢迎使用 Attention", style = MaterialTheme.typography.titleMedium)
-                    Text("先创建一个计划，再记录实际投入。所有数据只保存在本机。")
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = {
-                            if (state.targets.isEmpty()) viewModel.addTarget("我的第一个计划")
-                            viewModel.finishOnboarding()
-                        }) { Text("创建第一个计划") }
-                        OutlinedButton(onClick = viewModel::finishOnboarding) { Text("跳过") }
-                    }
-                }
-            }
-        }
+        if (!state.onboardingCompleted) OnboardingCard(state, viewModel)
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("快速记录实际投入", style = MaterialTheme.typography.titleMedium)
@@ -644,6 +643,115 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
             onDismiss = { editingSchedule = null },
             onSave = { updated -> viewModel.updateSchedule(updated); editingSchedule = null },
         )
+    }
+}
+
+/**
+ * The first-run settings flow deliberately lives above the workbench.  It only
+ * writes through the public settings commands, so the same flow works offline
+ * and is restored from DataStore after the activity is recreated.
+ */
+@Composable
+private fun OnboardingCard(state: AttentionState, viewModel: AttentionViewModel) {
+    var step by remember { mutableStateOf(0) }
+    var boundary by remember(state.settings.planningDayBoundaryMinutes) {
+        mutableStateOf(state.settings.planningDayBoundaryMinutes.toString())
+    }
+    var weekStart by remember(state.settings.weekStartDay) {
+        mutableStateOf(state.settings.weekStartDay)
+    }
+    var capacity by remember(state.settings.dailyCapacityMinutes) {
+        mutableStateOf(state.settings.dailyCapacityMinutes?.toString() ?: "")
+    }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    fun nextOrFinish() {
+        error = null
+        if (step == 2) viewModel.finishOnboarding() else step += 1
+    }
+
+    Card(Modifier.fillMaxWidth().testTag("onboarding-card")) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("首次设置", style = MaterialTheme.typography.titleMedium)
+            Text("第 ${step + 1} 步，共 3 步")
+            when (step) {
+                0 -> {
+                    Text("设置规划日界线")
+                    Text("默认 03:00；请输入 0–1439 分钟。")
+                    OutlinedTextField(
+                        value = boundary,
+                        onValueChange = { boundary = it.filter(Char::isDigit); error = null },
+                        label = { Text("规划日界线（分钟）") },
+                        modifier = Modifier.fillMaxWidth().testTag("onboarding-boundary-input"),
+                        singleLine = true,
+                        isError = error != null,
+                    )
+                }
+                1 -> {
+                    Text("设置每周起始日")
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        (1..7).forEach { day ->
+                            if (day == weekStart) Button(onClick = {}, modifier = Modifier.testTag("onboarding-week-$day")) {
+                                Text(weekName(day))
+                            } else OutlinedButton(onClick = { weekStart = day }, modifier = Modifier.testTag("onboarding-week-$day")) {
+                                Text(weekName(day))
+                            }
+                        }
+                    }
+                }
+                else -> {
+                    Text("设置每日容量")
+                    Text("可留空；填写时必须是正整数分钟。")
+                    OutlinedTextField(
+                        value = capacity,
+                        onValueChange = { capacity = it; error = null },
+                        label = { Text("每日容量（分钟，可选）") },
+                        modifier = Modifier.fillMaxWidth().testTag("onboarding-capacity-input"),
+                        singleLine = true,
+                        isError = error != null,
+                    )
+                }
+            }
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("onboarding-error")) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    modifier = Modifier.testTag("onboarding-save-continue"),
+                    onClick = {
+                        when (step) {
+                            0 -> {
+                                val value = boundary.toIntOrNull()
+                                if (value == null || value !in 0 until 1440) error = "规划日界线必须是 0–1439 分钟"
+                                else {
+                                    viewModel.setSettings(StoredSettings(value, state.settings.weekStartDay, state.settings.dailyCapacityMinutes))
+                                    nextOrFinish()
+                                }
+                            }
+                            1 -> {
+                                viewModel.setSettings(StoredSettings(state.settings.planningDayBoundaryMinutes, weekStart, state.settings.dailyCapacityMinutes))
+                                nextOrFinish()
+                            }
+                            else -> {
+                                val input = capacity.trim()
+                                val value = input.toIntOrNull()
+                                if (input.isNotEmpty() && (value == null || value <= 0)) error = "每日容量必须是正整数，或留空"
+                                else {
+                                    viewModel.setSettings(StoredSettings(state.settings.planningDayBoundaryMinutes, state.settings.weekStartDay, value))
+                                    nextOrFinish()
+                                }
+                            }
+                        }
+                    },
+                ) { Text("保存并继续") }
+                OutlinedButton(
+                    modifier = Modifier.testTag("onboarding-skip-step"),
+                    onClick = { nextOrFinish() },
+                ) { Text("跳过当前步骤") }
+            }
+            TextButton(
+                modifier = Modifier.testTag("onboarding-skip-all"),
+                onClick = viewModel::finishOnboarding,
+            ) { Text("跳过剩余步骤") }
+        }
     }
 }
 
@@ -1746,6 +1854,42 @@ private fun validateScheduleForm(input: ScheduleFormInput): String? = when {
     input.estimateMinutes != null && input.estimateMinutes <= 0 -> "预计时长必须为正数"
     input.reminderText.isNotBlank() && input.reminderMinute == null -> "请输入有效的提醒时间 HH:mm"
     else -> null
+}
+
+@Composable
+private fun SettingsScreen(
+    state: AttentionState,
+    viewModel: AttentionViewModel,
+) {
+    val destinations = listOf(
+        LaunchDestination.TODAY to "今天",
+        LaunchDestination.TARGETS to "目标树",
+        LaunchDestination.ALL_DATES to "所有日期",
+        LaunchDestination.STATISTICS to "统计",
+        LaunchDestination.LAST_OPENED to "上次打开",
+    )
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("设置", style = MaterialTheme.typography.headlineMedium)
+        Text("启动入口", style = MaterialTheme.typography.titleMedium)
+        Text("应用下次启动时打开的页面")
+        destinations.forEach { (destination, label) ->
+            val selected = state.launchDestination == destination
+            if (selected) {
+                Button(
+                    onClick = {},
+                    modifier = Modifier.fillMaxWidth().testTag("launch-destination-$destination"),
+                ) { Text("$label（当前）") }
+            } else {
+                OutlinedButton(
+                    onClick = { viewModel.setLaunchDestination(destination) },
+                    modifier = Modifier.fillMaxWidth().testTag("launch-destination-$destination"),
+                ) { Text(label) }
+            }
+        }
+    }
 }
 
 @Composable
