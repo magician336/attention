@@ -98,21 +98,20 @@ class RoomAttentionStateRepository(
     override suspend fun exportJson(): String = AttentionBackupCodec.encode(state.first())
 
     override suspend fun importJson(encoded: String, clearExisting: Boolean): AttentionState {
-        val incoming = AttentionBackupCodec.decode(encoded)
         return mutex.withLock {
             val current = state.first()
-            val result = if (clearExisting) incoming else AttentionBackupCodec.merge(current, incoming)
-            result.validateActiveTimerTarget()
-            AttentionBackupCodec.validate(result)
             val previousBackup = backupStore.read()
             try {
+                val incoming = AttentionBackupCodec.decode(encoded)
+                val result = if (clearExisting) incoming else AttentionBackupCodec.merge(current, incoming)
+                result.validateActiveTimerTarget()
+                AttentionBackupCodec.validate(result)
                 backupStore.write(AttentionBackupCodec.encode(current))
                 replaceWithRollback(current, result)
             } catch (error: Throwable) {
-                if (previousBackup != null) {
-                    runCatching { backupStore.write(previousBackup) }
-                        .onFailure(error::addSuppressed)
-                }
+                runCatching {
+                    backupStore.write(previousBackup ?: AttentionBackupCodec.encode(current))
+                }.onFailure(error::addSuppressed)
                 throw error
             }
         }
