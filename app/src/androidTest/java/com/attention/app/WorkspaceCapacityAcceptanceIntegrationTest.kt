@@ -1,6 +1,5 @@
 package com.attention.app
 
-import android.accessibilityservice.AccessibilityService
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
@@ -12,7 +11,6 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.core.app.ApplicationProvider
-import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.attention.app.data.room.AttentionDatabase
 import com.attention.app.data.room.RoomBusinessDataRepository
@@ -102,10 +100,6 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
 
         composeRule.onNode(hasText("统计") and hasClickAction()).performClick()
         composeRule.onNodeWithText("预览 JSON 备份").performScrollTo().performClick()
-        // Export starts the system document picker; return to the app before
-        // asserting the preview that was populated before the picker launch.
-        InstrumentationRegistry.getInstrumentation().uiAutomation
-            .performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
         composeRule.waitForIdle()
         composeRule.onNodeWithText("JSON 预览：", substring = true).assertExists()
     }
