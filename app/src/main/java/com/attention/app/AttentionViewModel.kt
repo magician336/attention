@@ -86,7 +86,8 @@ class AttentionViewModel(
 
     fun clearError() { _error.value = null }
 
-    fun addTarget(title: String, parentId: String? = null) = runCommand { it.addTarget(title, parentId) }
+    fun addTarget(title: String, parentId: String? = null, onSuccess: () -> Unit = {}) =
+        runCommand(onSuccess = onSuccess) { it.addTarget(title, parentId) }
     fun renameTarget(id: String, title: String) = runCommand { it.renameTarget(id, title) }
     fun moveTarget(id: String, parentId: String?) = runCommand { it.moveTarget(id, parentId) }
     fun moveTargetFrom(id: String, parentId: String?, effectiveFrom: String) = runCommand {
