@@ -96,12 +96,13 @@ jobs:
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
+          emulator-build: 15261927
           target: default
           arch: x86_64
           profile: pixel_2
-          emulator-options: -no-window -gpu off -noaudio -no-boot-anim -camera-back none -no-snapshot
+          emulator-options: -no-window -gpu software -noaudio -no-boot-anim -camera-back none -no-snapshot
           disable-animations: true
-          script: status=0; ./gradlew --no-daemon connectedDebugAndroidTest || status=$?; timeout 30s adb logcat -d -b all -v threadtime > instrumentation-logcat.txt || true; exit $status
+          script: adb wait-for-device; until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do sleep 2; done; status=0; ./gradlew --no-daemon connectedDebugAndroidTest || status=$?; timeout 30s adb logcat -d -b all -v threadtime > instrumentation-logcat.txt || true; exit $status
 
       - name: Upload instrumentation reports
         if: ${{ !cancelled() }}
