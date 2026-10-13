@@ -136,10 +136,11 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     val viewModel: AttentionViewModel = viewModel(factory = WorkspaceViewModelFactory(repository))
     val state by viewModel.state.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
+    val hasExternalScheduleRequest = openScheduleDate != null || openScheduleId != null
     var destination by remember {
-        mutableStateOf(if (openScheduleDate != null) LaunchDestination.ALL_DATES else resolveLaunchDestination(state.launchDestination, state.lastOpenedDestination))
+        mutableStateOf(initialLaunchDestination(hasExternalScheduleRequest, state.launchDestination, state.lastOpenedDestination))
     }
-    var destinationChosen by remember { mutableStateOf(openScheduleDate != null) }
+    var destinationChosen by remember { mutableStateOf(hasExternalScheduleRequest) }
     var settingsOpen by remember { mutableStateOf(false) }
     var selectedAgendaDate by remember { mutableStateOf(openScheduleDate) }
     var jsonPreview by remember { mutableStateOf<String?>(null) }
@@ -269,7 +270,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         }
     }
     androidx.compose.runtime.LaunchedEffect(state.launchDestination, state.lastOpenedDestination) {
-        if (!destinationChosen && openScheduleDate == null) {
+        if (!destinationChosen && !hasExternalScheduleRequest) {
             destination = resolveLaunchDestination(state.launchDestination, state.lastOpenedDestination)
         }
     }
@@ -2075,9 +2076,26 @@ private fun StatisticsScreen(
     }
 }
 
-private fun resolveLaunchDestination(requested: LaunchDestination, lastOpened: LaunchDestination): LaunchDestination = when (requested) {
-    LaunchDestination.LAST_OPENED -> if (lastOpened == LaunchDestination.LAST_OPENED) LaunchDestination.TODAY else lastOpened
+internal fun resolveLaunchDestination(requested: LaunchDestination, lastOpened: LaunchDestination): LaunchDestination = when (requested) {
+    LaunchDestination.LAST_OPENED -> when (lastOpened) {
+        LaunchDestination.TODAY,
+        LaunchDestination.TARGETS,
+        LaunchDestination.ALL_DATES,
+        LaunchDestination.STATISTICS,
+        -> lastOpened
+        LaunchDestination.LAST_OPENED -> LaunchDestination.TODAY
+    }
     else -> requested
+}
+
+internal fun initialLaunchDestination(
+    hasExternalScheduleRequest: Boolean,
+    requested: LaunchDestination,
+    lastOpened: LaunchDestination,
+): LaunchDestination = if (hasExternalScheduleRequest) {
+    LaunchDestination.ALL_DATES
+} else {
+    resolveLaunchDestination(requested, lastOpened)
 }
 
 private fun shiftStatisticsDate(date: LocalDate, cadence: GoalCadence, amount: Long): LocalDate = when (cadence) {
