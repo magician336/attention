@@ -455,6 +455,38 @@ class RoomBusinessDataRepositoryTest {
     }
 
     @Test
+    fun failed_cumulative_transaction_rolls_back_time_entry_milestone_and_experience() = runBlocking {
+        val target = Target("cumulative-rollback-target", title = "累计回滚")
+        val date = LocalDate.parse("2026-10-08")
+        val repository = RoomBusinessDataRepository(database)
+        val awarded = AttentionState(
+            targets = listOf(target),
+            timeEntries = listOf(TimeEntry("cumulative-rollback-entry", date.toString(), 6_000, target.id)),
+        ).awardEligibleMilestones(date)
+
+        try {
+            repository.replace(
+                awarded.copy(
+                    activeTimer = ActiveTimer(
+                        targetId = "missing-target",
+                        startedAtEpochMillis = 1L,
+                        lastPlanningDate = date.toString(),
+                    ),
+                ),
+            )
+            fail("Expected the business transaction to fail")
+        } catch (_: SQLiteConstraintException) {
+            // The invalid timer is written after the cumulative feedback, so
+            // Room must roll back every preceding write in this transaction.
+        }
+
+        val loaded = repository.read()
+        assertTrue(loaded.timeEntries.isEmpty())
+        assertTrue(loaded.milestones.isEmpty())
+        assertEquals(0L, loaded.experience)
+    }
+
+    @Test
     fun appended_stage_keeps_previous_one_time_feedback_in_room() = runBlocking {
         val target = Target("feedback-target", title = "阶段目标")
         val first = GoalStage("feedback-first", target.id, GoalCadence.ONE_TIME, 30, "2026-10-08")
