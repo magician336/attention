@@ -1,5 +1,6 @@
 package com.attention.workspace.state
 
+import com.attention.domain.ActiveTimer
 import com.attention.domain.AttentionState
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.StoredSettings
@@ -245,5 +246,89 @@ class TodayScreenStateTest {
     fun the_onboarding_flow_is_still_signalled_by_the_projection() {
         assertEquals(false, project().onboardingCompleted)
         assertEquals(true, project(AttentionState(onboardingCompleted = true)).onboardingCompleted)
+    }
+
+    @Test
+    fun only_the_schedules_of_the_projected_planning_day_become_today_rows() {
+        // 别的规划日的条目不出现在今天工作台的「今日安排」里
+        val screenState = project(
+            AttentionState(
+                schedules = listOf(
+                    ScheduleEntry(id = "sc1", planningDate = "2026-03-05", title = "写稿", estimatedMinutes = 90),
+                    ScheduleEntry(id = "sc2", planningDate = "2026-03-04", title = "昨天的", estimatedMinutes = 300),
+                ),
+            ),
+        )
+
+        assertEquals(listOf("sc1"), screenState.scheduleRows.map { it.entry.id })
+    }
+
+    @Test
+    fun a_schedule_row_shows_its_time_target_estimate_and_completion() {
+        val screenState = project(
+            AttentionState(
+                targets = listOf(Target(id = "t1", title = "写书")),
+                schedules = listOf(
+                    ScheduleEntry(
+                        id = "sc1",
+                        planningDate = "2026-03-05",
+                        title = "写稿",
+                        startMinute = 600,
+                        endMinute = 660,
+                        estimatedMinutes = 60,
+                        targetId = "t1",
+                        note = "第一章",
+                    ),
+                ),
+            ),
+        )
+
+        val row = screenState.scheduleRows.single()
+        assertEquals("2026-03-05 · 10:00-11:00 · 60 分钟 · 写书 · 无提醒", row.detailLabel)
+        assertEquals("10:00", row.startText)
+        assertEquals("11:00", row.endText)
+        assertEquals("60", row.estimateText)
+        assertEquals("", row.reminderText)
+        assertEquals("第一章", row.note)
+    }
+
+    @Test
+    fun a_reminder_is_formatted_with_the_injected_zone_not_the_system_default() {
+        // 2026-03-05T00:30Z 在上海是 08:30，在洛杉矶是前一天 16:30
+        val entry = ScheduleEntry(
+            id = "sc1",
+            planningDate = "2026-03-05",
+            title = "写稿",
+            reminderEpochMillis = Instant.parse("2026-03-05T00:30:00Z").toEpochMilli(),
+        )
+
+        assertEquals(
+            "· 提醒 08:30",
+            project(AttentionState(schedules = listOf(entry))).scheduleRows.single().detailLabel.substringAfter("分钟 "),
+        )
+        assertEquals(
+            "· 提醒 16:30",
+            todayScreenState(
+                AttentionState(schedules = listOf(entry)),
+                beforeBoundary,
+                ZoneId.of("America/Los_Angeles"),
+            ).scheduleRows.single().detailLabel.substringAfter("分钟 "),
+        )
+    }
+
+    @Test
+    fun a_schedule_row_can_only_start_a_timer_while_none_is_running() {
+        val schedules = listOf(ScheduleEntry(id = "sc1", planningDate = "2026-03-05", title = "写稿"))
+        val running = ActiveTimer(
+            targetId = null,
+            startedAtEpochMillis = beforeBoundary.minusSeconds(20 * 60).toEpochMilli(),
+            lastPlanningDate = "2026-03-05",
+        )
+
+        assertEquals(true, project(AttentionState(schedules = schedules)).scheduleRows.single().canStartTimer)
+        assertEquals(
+            false,
+            project(AttentionState(schedules = schedules, activeTimer = running)).scheduleRows.single().canStartTimer,
+        )
     }
 }

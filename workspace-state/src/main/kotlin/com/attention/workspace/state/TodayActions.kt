@@ -1,12 +1,15 @@
 package com.attention.workspace.state
 
+import com.attention.domain.ScheduleEntry
+
 /**
  * 今天工作台的 intent 接口。页面只发出 intent，实际落地（写 Room / DataStore、
- * 展示可撤销提示）由组合根 adapter 完成；页面因此拿不到 `AttentionViewModel`，
- * 也拿不到仓储。
+ * 启动前台计时服务、申请通知权限、给出通知不可用的提示）由组合根 adapter 完成；
+ * 页面因此拿不到 `AttentionViewModel`，也拿不到仓储，更拿不到任何 Android API
+ * （ADR-0005 §45-47）。
  *
- * 计时相关的 intent 不在这里：计时器、前台服务与通知权限属于票 147 的迁移范围，
- * 今天工作台目前仍通过组合根侧的旧路径触发计时。
+ * 计时相关的 intent 在这里而不是另一套接口：ADR-0005 §28 规定每个页面只暴露一对
+ * `*ScreenState` / `*Actions`，今天工作台目前也没有第二个页面级入口需要拆分。
  */
 interface TodayActions {
     /**
@@ -29,4 +32,89 @@ interface TodayActions {
 
     /** 选择周起始日。 */
     fun selectWeekStartDay(day: Int)
+
+    /**
+     * 开始计时。[targetId] 为 null 表示开始一段未归属计时。
+     *
+     * 真正的平台动作（启动前台计时服务、撤掉恢复提示、在通知不可用时给出提示）
+     * 由组合根 adapter 在这次 intent 成功之后完成，页面不触达 Android API。
+     */
+    fun startTimer(targetId: String?)
+
+    /** 暂停计时。计时器生命周期本身不随暂停变化，前台服务仍在运行。 */
+    fun pauseTimer()
+
+    /** 恢复一段已暂停的计时。 */
+    fun resumeTimer()
+
+    /**
+     * 「从此刻继续」：放弃之前累计的时长，从现在重新开始计。
+     * 组合根 adapter 在成功之后重新启动前台计时服务并撤掉恢复提示。
+     */
+    fun recoverTimer()
+
+    /**
+     * 结束并保存计时。结算、投入经验与达成里程碑仍由领域层计算，页面不参与。
+     * 组合根 adapter 在成功之后停掉前台计时服务。
+     */
+    fun stopTimer()
+
+    /** 把正在计时的目标切换到 [targetId]（null 表示未归属活动）。 */
+    fun switchTimer(targetId: String?)
+
+    /**
+     * 申请通知权限。页面只在用户真的设置过提醒时刻时发出它，
+     * 真正的申请动作（找到 Activity、发起权限对话框）由组合根 adapter 完成。
+     */
+    fun requestNotificationPermission()
+
+    /** 完成首次设置流程：不再显示首次设置卡片。 */
+    fun finishOnboarding()
+
+    /**
+     * 保存首次设置里的一步规划设置。[dailyCapacityMinutes] 为 null 表示清除容量上限。
+     * 三个字段一起给出，因为这一流程写的就是整份规划设置。
+     */
+    fun saveOnboardingPlanningSettings(
+        boundaryMinutes: Int,
+        weekStartDay: Int,
+        dailyCapacityMinutes: Int?,
+    )
+
+    /**
+     * 创建首个计划。[onSuccess] 在创建成功后调用，页面据此进入下一步；
+     * 组合根 adapter 需要它是因为目标 id 由仓储生成，只有 adapter 知道保存是否成功。
+     */
+    fun createOnboardingTarget(title: String, onSuccess: () -> Unit)
+
+    /** 创建首次设置里的第一条日程。提醒留空时不带 [reminderMinuteOfDay]。 */
+    fun createOnboardingSchedule(draft: OnboardingScheduleDraft)
+
+    /**
+     * 更新「今日安排」里的一条日程。[reminderMinuteOfDay] 是提醒时刻在一天内的分钟数，
+     * 绝对时刻的换算由组合根 adapter 按注入的时区完成。
+     */
+    fun updateTodaySchedule(entry: ScheduleEntry, reminderMinuteOfDay: Int?)
+
+    /** 确认一条日程已完成并记入时间记录。 */
+    fun confirmScheduleCompleted(entryId: String)
+
+    /** 在已完成与未完成之间切换一条日程。 */
+    fun toggleScheduleCompleted(entryId: String)
 }
+
+/**
+ * 首次设置里「创建第一条日程」的那份草稿。
+ *
+ * 领域对象 `ScheduleEntry` 由组合根 adapter 构造：页面不碰领域类型，
+ * 也不决定一条日程在数据库里的样子。
+ */
+data class OnboardingScheduleDraft(
+    val planningDate: String,
+    val title: String,
+    val startMinute: Int?,
+    val endMinute: Int?,
+    val estimatedMinutes: Int?,
+    val note: String,
+    val targetId: String?,
+)

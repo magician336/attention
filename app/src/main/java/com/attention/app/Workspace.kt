@@ -14,26 +14,14 @@ import androidx.core.content.ContextCompat
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -43,11 +31,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.testTag
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -65,10 +51,8 @@ import com.attention.app.timer.AttentionBootReceiver
 import com.attention.app.reminder.AlarmReminderCoordinator
 import com.attention.app.reminder.ReminderScheduler
 import com.attention.app.ui.components.AttentionButton
-import com.attention.app.ui.components.AttentionFeedbackHostState
 import com.attention.app.ui.components.AttentionInlineError
 import com.attention.app.ui.components.AttentionOutlinedButton
-import com.attention.app.ui.components.AttentionPermissionState
 import com.attention.app.ui.components.AttentionSnackbarHost
 import com.attention.app.ui.components.AttentionTextButton
 import com.attention.app.ui.components.rememberAttentionFeedbackHostState
@@ -86,6 +70,7 @@ import com.attention.app.today.TodayScreen
 import com.attention.workspace.state.AgendaActions
 import com.attention.workspace.state.AgendaRecurrenceDraft
 import com.attention.workspace.state.AgendaScheduleDraft
+import com.attention.workspace.state.OnboardingScheduleDraft
 import com.attention.workspace.state.SettingsActions
 import com.attention.workspace.state.StatisticsActions
 import com.attention.workspace.state.TargetsActions
@@ -99,7 +84,6 @@ import com.attention.workspace.state.statisticsScreenState
 import com.attention.workspace.state.summaryLabel
 import com.attention.workspace.state.targetsScreenState
 import com.attention.workspace.state.todayScreenState
-import com.attention.workspace.state.weekDayLabel
 import com.attention.workspace.state.toRecurrenceRule
 import com.attention.domain.AttentionState
 import com.attention.domain.CapacitySummary
@@ -120,8 +104,6 @@ import com.attention.domain.agendaEntries
 import com.attention.domain.planningDate
 import com.attention.domain.reminderEpochMillis
 import com.attention.domain.resolveLaunchDestination
-import com.attention.domain.timerSettlementPreview
-import com.attention.domain.timerTargetLabel
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -130,15 +112,16 @@ import kotlinx.coroutines.launch
 
 /**
  * 今天工作台的 actions adapter，在组合根一侧组装：页面发出 intent，这里落到 ViewModel、
- * 设置存储与可撤销提示。ViewModel 因此只出现在组合根侧，页面拿不到它。
- *
- * 计时相关的能力（前台计时服务、恢复提示、通知可用性）也留在组合根这一侧，
- * 由 [TodayTimerSection] 直接使用；计时器迁移属于票 147。
+ * 设置存储、可撤销提示与所有 Android 平台能力。ViewModel、Room、`Context` 与前台计时服务
+ * 因此只出现在组合根侧，页面 module 一个都拿不到（ADR-0005 §24、§45-47）。
  */
 private class TodayActionsAdapter(
     private val viewModel: AttentionViewModel,
     private val currentWeekStartDay: () -> Int,
+    private val context: Context,
+    private val zone: ZoneId,
     private val onTimeRecordDeleted: (TimeEntry) -> Unit,
+    private val onFeedbackMessage: (String) -> Unit,
 ) : TodayActions {
     override fun recordTime(planningDate: String, minutes: Int, targetId: String?) {
         viewModel.addTime(planningDate, minutes, targetId)
@@ -159,6 +142,95 @@ private class TodayActionsAdapter(
 
     override fun selectWeekStartDay(day: Int) {
         viewModel.setWeekStart(day)
+    }
+
+    override fun startTimer(targetId: String?) {
+        viewModel.startTimer(targetId, onSuccess = ::startForegroundCounting)
+    }
+
+    override fun pauseTimer() {
+        viewModel.pauseTimer()
+    }
+
+    override fun resumeTimer() {
+        viewModel.resumeTimer()
+    }
+
+    override fun recoverTimer() {
+        viewModel.recoverTimer(onSuccess = ::startForegroundCounting)
+    }
+
+    override fun stopTimer() {
+        viewModel.stopTimer(onSuccess = {
+            AttentionBootReceiver.cancelRecoveryPrompt(context)
+            context.stopService(AttentionTimerService.intent(context))
+        })
+    }
+
+    override fun switchTimer(targetId: String?) {
+        viewModel.switchTimer(targetId)
+    }
+
+    override fun requestNotificationPermission() = requestReminderPermission(context)
+
+    override fun finishOnboarding() {
+        viewModel.finishOnboarding()
+    }
+
+    override fun saveOnboardingPlanningSettings(
+        boundaryMinutes: Int,
+        weekStartDay: Int,
+        dailyCapacityMinutes: Int?,
+    ) {
+        viewModel.setSettings(StoredSettings(boundaryMinutes, weekStartDay, dailyCapacityMinutes))
+    }
+
+    override fun createOnboardingTarget(title: String, onSuccess: () -> Unit) {
+        viewModel.addTarget(title) { onSuccess() }
+    }
+
+    override fun createOnboardingSchedule(draft: OnboardingScheduleDraft) {
+        viewModel.addSchedule(
+            ScheduleEntry(
+                planningDate = draft.planningDate,
+                title = draft.title,
+                startMinute = draft.startMinute,
+                endMinute = draft.endMinute,
+                estimatedMinutes = draft.estimatedMinutes,
+                note = draft.note,
+                targetId = draft.targetId,
+            ),
+        )
+    }
+
+    override fun updateTodaySchedule(entry: ScheduleEntry, reminderMinuteOfDay: Int?) {
+        viewModel.updateSchedule(
+            entry.copy(
+                reminderEpochMillis = reminderMinuteOfDay?.let { minute ->
+                    reminderEpochMillis(LocalDate.parse(entry.planningDate), minute, zone)
+                },
+            ),
+        )
+    }
+
+    override fun confirmScheduleCompleted(entryId: String) {
+        viewModel.confirmScheduleCompleted(entryId)
+    }
+
+    override fun toggleScheduleCompleted(entryId: String) {
+        viewModel.toggleScheduleCompleted(entryId)
+    }
+
+    /**
+     * 计时开始或「从此刻继续」成功之后的平台动作：撤掉恢复提示、在通知不可用时给出提示，
+     * 再启动前台计时服务。前台计时必须仍由可见 UI 触发（ADR-0001），因此这一步只在这条路径上。
+     */
+    private fun startForegroundCounting() {
+        AttentionBootReceiver.cancelRecoveryPrompt(context)
+        if (!notificationsEnabled(context)) {
+            onFeedbackMessage("通知权限未开启，计时仍会保存；通知栏控制不可用。")
+        }
+        ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
     }
 }
 
@@ -615,16 +687,20 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
 
     // 今天工作台的选择状态属于页面 module（TodaySelection），组合根只喂投影，不碰它的字段。
     // 今天工作台不导航规划日，因此投影除注入的时间与时区外不需要页面选择参数。
+    // 通知是否可用是平台事实，组合根查好后注入：页面与投影都不触达通知管理器。
     val todayState = todayScreenState(
         state = state,
         now = injectedNow,
         zone = injectedZone,
+        notificationsEnabled = notificationsEnabled(context),
     )
     val currentWeekStartDay by androidx.compose.runtime.rememberUpdatedState(state.settings.weekStartDay)
     val todayActions: TodayActions = remember(viewModel) {
         TodayActionsAdapter(
             viewModel = viewModel,
             currentWeekStartDay = { currentWeekStartDay },
+            context = context,
+            zone = injectedZone,
             // 删除的可撤销提示由组合根展示：撤销要用回被删掉的那条记录本身，
             // 页面因此不需要认识时间记录这个领域类型。
             onTimeRecordDeleted = { removed ->
@@ -635,6 +711,8 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                     )
                 }
             },
+            // 计时开始时的通知不可用提示同样由组合根展示，页面只发 intent。
+            onFeedbackMessage = { message -> feedbackScope.launch { feedback.showMessage(message) } },
         )
     }
     // 所有日期页的选中规划日由页面 module 提供类型与迁移语义，组合根只持有一个实例来喂投影。
@@ -787,9 +865,6 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                 LaunchDestination.TODAY, LaunchDestination.LAST_OPENED -> TodayScreen(
                     state = todayState,
                     actions = todayActions,
-                    onboardingSection = { OnboardingCard(state, viewModel) },
-                    timerSection = { TodayTimerSection(state, viewModel, feedback) },
-                    schedulesSection = { TodayScheduleSection(state, viewModel, todayState.planningDate.toString()) },
                 )
                 LaunchDestination.TARGETS -> TargetsScreen(
                     state = targetsState,
@@ -873,427 +948,6 @@ private fun backupPreviewText(preview: BackupPreview, current: AttentionState, m
     append("\n导入前会自动备份当前数据。")
 }
 
-/**
- * 今天工作台的计时卡片。
- *
- * 计时器、前台计时服务与通知权限都留在组合根这一侧（ADR-0005 第 4 节）。
- * 票 147 会把它们改成 intent；在那之前这里保持原来的调用路径、标签与文案不变，
- * 今天工作台只是把它作为一个插槽渲染在自己的原位置上。
- */
-@Composable
-private fun TodayTimerSection(
-    state: AttentionState,
-    viewModel: AttentionViewModel,
-    feedback: AttentionFeedbackHostState,
-) {
-    val context = LocalContext.current
-    val tokens = attentionTokens()
-    val feedbackScope = rememberCoroutineScope()
-    fun startTimer(targetId: String?) {
-        viewModel.startTimer(targetId) {
-            AttentionBootReceiver.cancelRecoveryPrompt(context)
-            if (!notificationsEnabled(context)) {
-                feedbackScope.launch {
-                    feedback.showMessage("通知权限未开启，计时仍会保存；通知栏控制不可用。")
-                }
-            }
-            ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
-        }
-    }
-    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
-        Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("计时器", style = tokens.typography.title)
-            val timer = state.activeTimer
-            if (timer == null) {
-                Text("计时结束时会按规划日界线自动切分时间记录。")
-                AttentionButton(onClick = {
-                    startTimer(null)
-                }) { Text("开始未归属计时") }
-                state.targets.filter { !it.archived }.forEach { target ->
-                    AttentionOutlinedButton(onClick = {
-                        startTimer(target.id)
-                    }) { Text("计时：${target.title}") }
-                }
-            } else {
-                Text(if (timer.paused) "计时已暂停" else "正在计时")
-                Text("当前目标：${state.timerTargetLabel(timer.targetId)}")
-                if (timer.completedSegments.isNotEmpty()) {
-                    Text("已完成片段：${timer.completedSegments.size}")
-                }
-                val settlementPreview = state.timerSettlementPreview(Instant.now())
-                val settlementScope = settlementPreview.entries.joinToString("；") {
-                    "${it.planningDate} ${it.durationMinutes} 分钟"
-                }
-                Text(
-                    if (settlementPreview.hasCompleteMinutes) {
-                        "结束范围预览：$settlementScope；共 ${settlementPreview.totalMinutes} 分钟"
-                    } else {
-                        "结束范围预览：当前片段不足 1 分钟，不会生成时间记录"
-                    },
-                    modifier = Modifier.testTag("timer-settlement-preview"),
-                )
-                if (!notificationsEnabled(context)) {
-                    AttentionPermissionState(
-                        label = "权限未开启",
-                        description = "通知权限未开启，计时数据仍会保存；通知栏暂停、继续和结束控制不可用。",
-                        required = true,
-                        modifier = Modifier.testTag("timer-notification-permission-warning"),
-                    )
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (timer.paused) AttentionButton(onClick = viewModel::resumeTimer) { Text("继续") }
-                    else AttentionButton(onClick = viewModel::pauseTimer) { Text("暂停") }
-                    AttentionOutlinedButton(onClick = {
-                        viewModel.recoverTimer {
-                            AttentionBootReceiver.cancelRecoveryPrompt(context)
-                            ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
-                        }
-                    }) { Text("从此刻继续") }
-                    AttentionOutlinedButton(onClick = {
-                        viewModel.stopTimer {
-                            AttentionBootReceiver.cancelRecoveryPrompt(context)
-                            context.stopService(AttentionTimerService.intent(context))
-                        }
-                    }) { Text("结束并保存") }
-                }
-                if (timer.targetId != null) {
-                    AttentionOutlinedButton(
-                        modifier = Modifier.testTag("switch-timer-unowned"),
-                        onClick = { viewModel.switchTimer(null) },
-                    ) { Text("切换到未归属活动") }
-                }
-                state.targets.filter { !it.archived && it.id != timer.targetId }.forEach { target ->
-                    AttentionOutlinedButton(onClick = { viewModel.switchTimer(target.id) }) { Text("切换到 ${target.title}") }
-                }
-            }
-        }
-    }
-}
-
-/**
- * 今天工作台「今日安排」里的日程行与它的编辑对话框。
- *
- * 日程行属于所有日期页的迁移范围（票 148/149）。在那之前它们保持原来的位置与行为，
- * 由组合根作为一个插槽交给今天工作台渲染。
- */
-@Composable
-private fun TodayScheduleSection(
-    state: AttentionState,
-    viewModel: AttentionViewModel,
-    planningDate: String,
-) {
-    var editingSchedule by remember { mutableStateOf<ScheduleEntry?>(null) }
-    state.schedules.filter { it.planningDate == planningDate }.forEach { entry ->
-        ScheduleRow(entry, state, viewModel, onEdit = { editingSchedule = it })
-    }
-    editingSchedule?.let { entry ->
-        ScheduleEditDialog(
-            entry = entry,
-            targets = state.targets.filterNot { it.archived },
-            onDismiss = { editingSchedule = null },
-            onSave = { updated -> viewModel.updateSchedule(updated); editingSchedule = null },
-        )
-    }
-}
-
-/**
- * The first-run settings flow deliberately lives above the workbench.  It only
- * writes through the public settings commands, so the same flow works offline
- * and is restored from DataStore after the activity is recreated.
- */
-@Composable
-private fun OnboardingCard(state: AttentionState, viewModel: AttentionViewModel) {
-    val tokens = attentionTokens()
-    var step by remember { mutableStateOf(0) }
-    var boundary by remember(state.settings.planningDayBoundaryMinutes) {
-        mutableStateOf(state.settings.planningDayBoundaryMinutes.toString())
-    }
-    var weekStart by remember(state.settings.weekStartDay) {
-        mutableStateOf(state.settings.weekStartDay)
-    }
-    var capacity by remember(state.settings.dailyCapacityMinutes) {
-        mutableStateOf(state.settings.dailyCapacityMinutes?.toString() ?: "")
-    }
-    var planTitle by remember { mutableStateOf("") }
-    var scheduleTitle by remember { mutableStateOf("") }
-    var scheduleDate by remember { mutableStateOf(state.planningDate(Instant.now()).toString()) }
-    var scheduleEstimate by remember { mutableStateOf("") }
-    var scheduleStart by remember { mutableStateOf("") }
-    var scheduleEnd by remember { mutableStateOf("") }
-    var scheduleNote by remember { mutableStateOf("") }
-    var scheduleTargetId by remember { mutableStateOf<String?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
-
-    fun nextOrFinish() {
-        error = null
-        if (step == 4) viewModel.finishOnboarding() else step += 1
-    }
-
-    Card(Modifier.fillMaxWidth().testTag("onboarding-card")) {
-        Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("首次设置", style = tokens.typography.title)
-            Text("第 ${step + 1} 步，共 5 步")
-            when (step) {
-                0 -> {
-                    Text("设置规划日界线")
-                    Text("默认 03:00；请输入 0–1439 分钟。")
-                    OutlinedTextField(
-                        value = boundary,
-                        onValueChange = { boundary = it.filter(Char::isDigit); error = null },
-                        label = { Text("规划日界线（分钟）") },
-                        modifier = Modifier.fillMaxWidth().testTag("onboarding-boundary-input"),
-                        singleLine = true,
-                        isError = error != null,
-                    )
-                }
-                1 -> {
-                    Text("设置每周起始日")
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        (1..7).forEach { day ->
-                            if (day == weekStart) AttentionButton(onClick = {}, modifier = Modifier.testTag("onboarding-week-$day")) {
-                                Text(weekDayLabel(day))
-                            } else AttentionOutlinedButton(onClick = { weekStart = day }, modifier = Modifier.testTag("onboarding-week-$day")) {
-                                Text(weekDayLabel(day))
-                            }
-                        }
-                    }
-                }
-                2 -> {
-                    Text("设置每日容量")
-                    Text("可留空；填写时必须是正整数分钟。")
-                    OutlinedTextField(
-                        value = capacity,
-                        onValueChange = { capacity = it; error = null },
-                        label = { Text("每日容量（分钟，可选）") },
-                        modifier = Modifier.fillMaxWidth().testTag("onboarding-capacity-input"),
-                        singleLine = true,
-                        isError = error != null,
-                    )
-                }
-                3 -> {
-                    Text("创建首个计划")
-                    Text("可跳过；标题不能为空。")
-                    OutlinedTextField(planTitle, { planTitle = it; error = null }, label = { Text("计划标题") }, modifier = Modifier.fillMaxWidth().testTag("onboarding-plan-title"), singleLine = true, isError = error != null)
-                }
-                else -> {
-                    Text("创建第一条日程")
-                    Text("可跳过；标题和规划日必填。")
-                    OutlinedTextField(scheduleTitle, { scheduleTitle = it; error = null }, label = { Text("日程标题") }, modifier = Modifier.fillMaxWidth().testTag("onboarding-schedule-title"), singleLine = true, isError = error != null)
-                    OutlinedTextField(scheduleDate, { scheduleDate = it; error = null }, label = { Text("规划日（YYYY-MM-DD）") }, modifier = Modifier.fillMaxWidth().testTag("onboarding-schedule-date"), singleLine = true, isError = error != null)
-                    OutlinedTextField(scheduleEstimate, { scheduleEstimate = it.filter(Char::isDigit) }, label = { Text("预计分钟（可选）") }, modifier = Modifier.fillMaxWidth().testTag("onboarding-schedule-estimate"), singleLine = true)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(scheduleStart, { scheduleStart = it.filter(Char::isDigit) }, label = { Text("开始分钟") }, modifier = Modifier.weight(1f), singleLine = true)
-                        OutlinedTextField(scheduleEnd, { scheduleEnd = it.filter(Char::isDigit) }, label = { Text("结束分钟") }, modifier = Modifier.weight(1f), singleLine = true)
-                    }
-                    OutlinedTextField(scheduleNote, { scheduleNote = it }, label = { Text("备注（可选）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                    state.targets.filterNot { it.archived }.forEach { target ->
-                        if (target.id == scheduleTargetId) AttentionButton(onClick = {}, modifier = Modifier.testTag("onboarding-schedule-target-${target.id}")) { Text("关联：${target.title}") }
-                        else AttentionOutlinedButton(onClick = { scheduleTargetId = target.id }, modifier = Modifier.testTag("onboarding-schedule-target-${target.id}")) { Text("关联：${target.title}") }
-                    }
-                    AttentionTextButton(onClick = { scheduleTargetId = null }) { Text("不关联计划") }
-                }
-            }
-            error?.let { AttentionInlineError(message = it, messageTag = "onboarding-error") }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                AttentionButton(
-                    modifier = Modifier.testTag("onboarding-save-continue"),
-                    onClick = {
-                        when (step) {
-                            0 -> {
-                                val value = boundary.toIntOrNull()
-                                if (value == null || value !in 0 until 1440) error = "规划日界线必须是 0–1439 分钟"
-                                else {
-                                    viewModel.setSettings(StoredSettings(value, state.settings.weekStartDay, state.settings.dailyCapacityMinutes))
-                                    nextOrFinish()
-                                }
-                            }
-                            1 -> {
-                                viewModel.setSettings(StoredSettings(state.settings.planningDayBoundaryMinutes, weekStart, state.settings.dailyCapacityMinutes))
-                                nextOrFinish()
-                            }
-                            2 -> {
-                                val input = capacity.trim()
-                                val value = input.toIntOrNull()
-                                if (input.isNotEmpty() && (value == null || value <= 0)) error = "每日容量必须是正整数，或留空"
-                                else {
-                                    viewModel.setSettings(StoredSettings(state.settings.planningDayBoundaryMinutes, state.settings.weekStartDay, value))
-                                    nextOrFinish()
-                                }
-                            }
-                            3 -> {
-                                if (planTitle.isBlank()) error = "计划标题不能为空"
-                                else viewModel.addTarget(planTitle.trim()) { nextOrFinish() }
-                            }
-                            else -> {
-                                val date = runCatching { LocalDate.parse(scheduleDate.trim()) }.getOrNull()
-                                if (scheduleTitle.isBlank()) error = "日程标题不能为空"
-                                else if (date == null) error = "请输入有效的规划日"
-                                else {
-                                    val start = scheduleStart.toIntOrNull()
-                                    val end = scheduleEnd.toIntOrNull()
-                                    val estimate = scheduleEstimate.toIntOrNull()
-                                    val invalidRange = start != null && end != null && (start !in 0..1439 || end !in 1..1440 || end <= start)
-                                    if ((start == null) != (end == null) || invalidRange) error = "时间段无效"
-                                    else if (estimate != null && estimate <= 0) error = "预计分钟必须为正整数"
-                                    else {
-                                        viewModel.addSchedule(ScheduleEntry(
-                                            planningDate = date.toString(), title = scheduleTitle.trim(),
-                                            startMinute = start, endMinute = end, estimatedMinutes = estimate,
-                                            note = scheduleNote, targetId = scheduleTargetId,
-                                        ))
-                                        nextOrFinish()
-                                    }
-                                }
-                            }
-                        }
-                    },
-                ) { Text("保存并继续") }
-                AttentionOutlinedButton(
-                    modifier = Modifier.testTag("onboarding-skip-step"),
-                    onClick = { nextOrFinish() },
-                ) { Text("跳过当前步骤") }
-            }
-            AttentionTextButton(
-                modifier = Modifier.testTag("onboarding-skip-all"),
-                onClick = viewModel::finishOnboarding,
-            ) { Text("跳过剩余步骤") }
-        }
-    }
-}
-
-@Composable
-private fun ScheduleRow(
-    entry: ScheduleEntry,
-    state: AttentionState,
-    viewModel: AttentionViewModel,
-    onEdit: (ScheduleEntry) -> Unit = {},
-    onStartTimer: (ScheduleEntry) -> Unit = {},
-) {
-    val tokens = attentionTokens()
-    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
-        Row(Modifier.padding(12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(entry.title, style = tokens.typography.body)
-                val start = entry.startMinute
-                val end = entry.endMinute
-                val time = if (start != null && end != null) " · ${formatScheduleMinute(start)}-${formatScheduleMinute(end)}" else ""
-                val target = entry.targetId?.let { id -> state.targets.firstOrNull { it.id == id }?.title }?.let { " · $it" } ?: ""
-                val reminder = entry.reminderEpochMillis?.let { " · 提醒 ${formatReminderEpoch(it)}" } ?: " · 无提醒"
-                Text("${entry.planningDate}$time · ${entry.estimatedMinutes ?: 0} 分钟$target$reminder${if (entry.completed) " · 已完成" else ""}")
-                if (entry.note.isNotBlank()) Text(entry.note)
-            }
-            AttentionTextButton(onClick = { onEdit(entry) }, modifier = Modifier.testTag("schedule-edit-${entry.id}")) { Text("编辑") }
-            AttentionTextButton(
-                onClick = { onStartTimer(entry) },
-                enabled = state.activeTimer == null,
-                modifier = Modifier.testTag("schedule-start-timer-${entry.id}"),
-            ) { Text("开始计时") }
-            AttentionTextButton(
-                onClick = {
-                    if (entry.completed) viewModel.toggleScheduleCompleted(entry.id)
-                    else viewModel.confirmScheduleCompleted(entry.id)
-                },
-                modifier = Modifier.testTag("schedule-completion-${entry.id}"),
-            ) { Text(if (entry.completed) "取消完成" else "完成并记录") }
-        }
-    }
-}
-
-@Composable
-private fun ScheduleEditDialog(
-    entry: ScheduleEntry,
-    targets: List<Target>,
-    onDismiss: () -> Unit,
-    onSave: (ScheduleEntry) -> Unit,
-) {
-    var date by remember(entry.id) { mutableStateOf(entry.planningDate) }
-    var title by remember(entry.id) { mutableStateOf(entry.title) }
-    var startTime by remember(entry.id) { mutableStateOf(entry.startMinute?.let(::formatScheduleMinute) ?: "") }
-    var endTime by remember(entry.id) { mutableStateOf(entry.endMinute?.let(::formatScheduleMinute) ?: "") }
-    var estimate by remember(entry.id) { mutableStateOf(entry.estimatedMinutes?.toString() ?: "") }
-    var note by remember(entry.id) { mutableStateOf(entry.note) }
-    val context = LocalContext.current
-    var reminderTime by remember(entry.id) { mutableStateOf(entry.reminderEpochMillis?.let(::formatReminderEpoch) ?: "") }
-    var targetId by remember(entry.id) { mutableStateOf(entry.targetId) }
-    var targetMenuExpanded by remember { mutableStateOf(false) }
-    var error by remember(entry.id) { mutableStateOf<String?>(null) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("编辑日程") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(date, { date = it }, label = { Text("规划日 YYYY-MM-DD") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                OutlinedTextField(title, { title = it }, label = { Text("日程标题") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(startTime, { startTime = it }, label = { Text("开始 HH:mm") }, modifier = Modifier.weight(1f), singleLine = true)
-                    OutlinedTextField(endTime, { endTime = it }, label = { Text("结束 HH:mm") }, modifier = Modifier.weight(1f), singleLine = true)
-                }
-                OutlinedTextField(estimate, { estimate = it }, label = { Text("预计分钟") }, modifier = Modifier.fillMaxWidth().testTag("schedule-edit-estimate-${entry.id}"), singleLine = true)
-                OutlinedTextField(reminderTime, { reminderTime = it }, label = { Text("提醒 HH:mm（可选）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                OutlinedTextField(note, { note = it }, label = { Text("备注（可选）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                Box {
-                    AttentionOutlinedButton(onClick = { targetMenuExpanded = true }) { Text(targets.firstOrNull { it.id == targetId }?.title ?: "关联计划（可选）") }
-                    DropdownMenu(expanded = targetMenuExpanded, onDismissRequest = { targetMenuExpanded = false }) {
-                        DropdownMenuItem(text = { Text("不关联计划") }, onClick = { targetId = null; targetMenuExpanded = false })
-                        targets.forEach { target -> DropdownMenuItem(text = { Text(target.title) }, onClick = { targetId = target.id; targetMenuExpanded = false }) }
-                    }
-                }
-                error?.let { AttentionInlineError(message = it) }
-            }
-        },
-        confirmButton = {
-            AttentionTextButton(modifier = Modifier.testTag("schedule-edit-save-${entry.id}"), onClick = {
-                val parsedDate = runCatching { LocalDate.parse(date) }.getOrNull()
-                val parsedStart = parseScheduleMinute(startTime)
-                val parsedEnd = parseScheduleMinute(endTime, allowEndOfDay = true)
-                val estimated = estimate.trim().takeIf(String::isNotEmpty)?.toIntOrNull()
-                val parsedReminder = parseScheduleMinute(reminderTime)
-                error = validateScheduleForm(
-                    ScheduleFormInput(
-                        title = title,
-                        date = parsedDate,
-                        startText = startTime,
-                        endText = endTime,
-                        estimateText = estimate,
-                        startMinute = parsedStart,
-                        endMinute = parsedEnd,
-                        estimateMinutes = estimated,
-                        reminderText = reminderTime,
-                        reminderMinute = parsedReminder,
-                    ),
-                )
-                if (error == null) onSave(entry.copy(
-                    planningDate = parsedDate.toString(),
-                    title = title,
-                    startMinute = parsedStart,
-                    endMinute = parsedEnd,
-                    estimatedMinutes = estimated,
-                    note = note,
-                    targetId = targetId,
-                    reminderEpochMillis = parsedReminder?.let { minute ->
-                        reminderEpochMillis(parsedDate!!, minute)
-                    },
-                ).also { if (parsedReminder != null) requestReminderPermission(context) })
-            }) { Text("保存") }
-        },
-        dismissButton = { AttentionTextButton(onClick = onDismiss) { Text("取消") } },
-    )
-}
-
-private fun parseScheduleMinute(value: String, allowEndOfDay: Boolean = false): Int? {
-    if (value.isBlank()) return null
-    val parts = value.trim().split(":")
-    if (parts.size != 2) return null
-    val hour = parts[0].toIntOrNull() ?: return null
-    val minute = parts[1].toIntOrNull() ?: return null
-    return if ((hour in 0..23 && minute in 0..59) || (allowEndOfDay && hour == 24 && minute == 0)) hour * 60 + minute else null
-}
-
-private fun formatScheduleMinute(value: Int): String = "%02d:%02d".format(value / 60, value % 60)
-
-private fun formatReminderEpoch(epochMillis: Long): String =
-    Instant.ofEpochMilli(epochMillis).atZone(java.time.ZoneId.systemDefault()).let { formatScheduleMinute(it.hour * 60 + it.minute) }
-
 private fun requestReminderPermission(context: Context) {
     if (Build.VERSION.SDK_INT < 33 ||
         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
@@ -1313,32 +967,6 @@ private fun Context.findActivity(): Activity? = when (this) {
 }
 
 private const val REMINDER_PERMISSION_REQUEST_CODE = 4101
-
-private data class ScheduleFormInput(
-    val title: String,
-    val date: LocalDate?,
-    val startText: String,
-    val endText: String,
-    val estimateText: String,
-    val startMinute: Int?,
-    val endMinute: Int?,
-    val estimateMinutes: Int?,
-    val reminderText: String = "",
-    val reminderMinute: Int? = null,
-)
-
-private fun validateScheduleForm(input: ScheduleFormInput): String? = when {
-    input.date == null -> "请输入有效的规划日"
-    input.title.isBlank() -> "日程标题不能为空"
-    input.startText.isNotBlank() && input.startMinute == null -> "请输入有效的开始时间 HH:mm"
-    input.endText.isNotBlank() && input.endMinute == null -> "请输入有效的结束时间 HH:mm"
-    (input.startMinute == null) != (input.endMinute == null) -> "时间段必须同时填写开始和结束时间"
-    input.startMinute != null && input.endMinute != null && input.endMinute <= input.startMinute -> "结束时间必须晚于开始时间"
-    input.estimateText.isNotBlank() && input.estimateMinutes == null -> "请输入有效的预计分钟"
-    input.estimateMinutes != null && input.estimateMinutes <= 0 -> "预计时长必须为正数"
-    input.reminderText.isNotBlank() && input.reminderMinute == null -> "请输入有效的提醒时间 HH:mm"
-    else -> null
-}
 
 internal fun initialLaunchDestination(
     hasExternalScheduleRequest: Boolean,
