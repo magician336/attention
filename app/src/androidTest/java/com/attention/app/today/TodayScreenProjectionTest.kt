@@ -19,12 +19,14 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.attention.app.ui.components.AttentionFeedbackTags
 import com.attention.app.ui.format.TimeRecordTags
 import com.attention.app.ui.theme.AttentionTheme
+import com.attention.domain.ActiveTimer
 import com.attention.domain.AttentionState
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.StoredSettings
 import com.attention.domain.Target
 import com.attention.domain.TimeEntry
 import com.attention.domain.TimeEntrySource
+import com.attention.workspace.state.OnboardingScheduleDraft
 import com.attention.workspace.state.TodayActions
 import com.attention.workspace.state.TodayScreenState
 import com.attention.workspace.state.todayScreenState
@@ -241,15 +243,101 @@ class TodayScreenProjectionTest {
     }
 
     @Test
-    fun the_timer_section_is_a_slot_the_page_does_not_own_yet() {
-        // 计时器属于票 147：页面不渲染它，也因此不发出任何计时 intent
+    fun the_timer_section_belongs_to_the_page_and_emits_no_intent_until_it_is_used() {
+        // 计时器已经迁进今天工作台：页面自己渲染它，不计时时也不发出任何计时 intent
         val intents = RecordingTodayActions()
         composeRule.setContent {
-            AttentionTheme { TodayScreen(state = screenState(), actions = intents, timerSection = {}) }
+            AttentionTheme { TodayScreen(state = screenState(), actions = intents) }
         }
 
-        composeRule.onNodeWithText("计时器").assertDoesNotExist()
-        assertEquals(emptyList<Triple<String, Int, String?>>(), intents.recorded)
+        composeRule.onNodeWithText("计时器").performScrollTo().assertIsDisplayed()
+        assertEquals(emptyList<String>(), intents.started)
+        assertEquals(emptyList<String>(), intents.paused)
+    }
+
+    @Test
+    fun starting_a_timer_emits_the_start_intent_with_the_chosen_target() {
+        // 开始计时只发 intent：启动前台服务、撤掉恢复提示都由组合根 adapter 完成
+        val intents = RecordingTodayActions()
+        mount(screenState(), intents)
+
+        click("开始未归属计时")
+        click("计时：写书")
+
+        assertEquals(listOf<String?>(null, "t1"), intents.started)
+    }
+
+    @Test
+    fun a_running_timer_shows_its_target_and_the_projected_settlement_preview() {
+        // 已用时与结束范围预览都由投影按注入的时刻算好，页面不读时钟
+        val intents = RecordingTodayActions()
+        mount(screenState(activeTimer = runningTimer()), intents)
+
+        composeRule.onNodeWithTag("timer-settlement-preview").performScrollTo().assertIsDisplayed()
+        at("当前目标：写书").assertIsDisplayed()
+        at("结束范围预览：2026-03-05 30 分钟；共 30 分钟").assertIsDisplayed()
+        assertEquals(emptyList<String>(), intents.started)
+    }
+
+    @Test
+    fun pausing_and_stopping_a_running_timer_emit_their_intents() {
+        val intents = RecordingTodayActions()
+        mount(screenState(activeTimer = runningTimer()), intents)
+
+        click("暂停")
+        click("结束并保存")
+
+        assertEquals(listOf("pause"), intents.paused)
+        assertEquals(listOf("stop"), intents.stopped)
+    }
+
+    @Test
+    fun switching_a_running_timer_emits_the_switch_intent() {
+        // 切到未归属活动与切到其它目标是同一个 intent，只是目标不同
+        val intents = RecordingTodayActions()
+        mount(screenState(activeTimer = runningTimer()), intents)
+
+        clickTag("switch-timer-unowned")
+        click("切换到 复盘")
+
+        assertEquals(listOf<String?>(null, "t3"), intents.switched)
+    }
+
+    @Test
+    fun resuming_a_paused_timer_emits_the_resume_intent() {
+        val intents = RecordingTodayActions()
+        mount(screenState(activeTimer = runningTimer(paused = true)), intents)
+
+        click("继续")
+
+        assertEquals(listOf("resume"), intents.resumed)
+    }
+
+    @Test
+    fun recovering_a_timer_emits_the_recover_intent() {
+        val intents = RecordingTodayActions()
+        mount(screenState(activeTimer = runningTimer()), intents)
+
+        click("从此刻继续")
+
+        assertEquals(listOf("recover"), intents.recovered)
+    }
+
+    @Test
+    fun the_notification_permission_warning_shows_when_the_root_reports_notifications_off() {
+        // 通知是否可用是平台事实：页面只按投影给的结论决定要不要显示警告
+        val intents = RecordingTodayActions()
+        mount(screenState(activeTimer = runningTimer(), notificationsEnabled = false), intents)
+
+        composeRule.onNodeWithTag("timer-notification-permission-warning").performScrollTo().assertExists()
+    }
+
+    @Test
+    fun the_notification_permission_warning_is_absent_when_notifications_are_available() {
+        val intents = RecordingTodayActions()
+        mount(screenState(activeTimer = runningTimer(), notificationsEnabled = true), intents)
+
+        composeRule.onNodeWithTag("timer-notification-permission-warning").assertDoesNotExist()
     }
 
     /** 今天工作台是可滚动长页：断言前先把节点滚进视口。 */
@@ -293,11 +381,16 @@ class TodayScreenProjectionTest {
         composeRule.onNodeWithTag(tag).performTextInput(value)
     }
 
+    /**
+     * 这里刻意让首次设置已完成：迁移前这些用例挂的是一个空的首次设置插槽，
+     * 它们断言的是快速记录、计时与容量的呈现。首次设置本身由 [TodayOnboardingCardTest] 直接测。
+     */
     private fun screenState(
         state: AttentionState = AttentionState(
             targets = listOf(
                 Target(id = "t1", title = "写书"),
                 Target(id = "t2", title = "旧计划", archived = true),
+                Target(id = "t3", title = "复盘"),
             ),
             schedules = listOf(
                 ScheduleEntry(id = "sc1", planningDate = "2026-03-05", title = "写稿", estimatedMinutes = 90),
@@ -309,8 +402,24 @@ class TodayScreenProjectionTest {
                 TimeEntry(id = "e3", planningDate = "2026-03-04", durationMinutes = 999, targetId = "t1"),
             ),
             settings = StoredSettings(dailyCapacityMinutes = 120),
+            onboardingCompleted = true,
         ),
-    ): TodayScreenState = todayScreenState(state = state, now = now, zone = zone)
+        activeTimer: ActiveTimer? = null,
+        notificationsEnabled: Boolean = true,
+    ): TodayScreenState = todayScreenState(
+        state = state.copy(activeTimer = activeTimer),
+        now = now,
+        zone = zone,
+        notificationsEnabled = notificationsEnabled,
+    )
+
+    /** 上海时间 00:30 起计，到投影时刻 [now]（01:00）正好 30 分钟，整段落在规划日 3 月 5 日内。 */
+    private fun runningTimer(targetId: String? = "t1", paused: Boolean = false) = ActiveTimer(
+        targetId = targetId,
+        startedAtEpochMillis = Instant.parse("2026-03-05T16:30:00Z").toEpochMilli(),
+        paused = paused,
+        lastPlanningDate = "2026-03-05",
+    )
 
     private fun mount(
         state: TodayScreenState,
@@ -336,6 +445,12 @@ class TodayScreenProjectionTest {
         val deleted = mutableListOf<String>()
         val settings = mutableListOf<PlanningSettings>()
         val weekStartDays = mutableListOf<Int>()
+        val started = mutableListOf<String?>()
+        val paused = mutableListOf<String>()
+        val resumed = mutableListOf<String>()
+        val recovered = mutableListOf<String>()
+        val stopped = mutableListOf<String>()
+        val switched = mutableListOf<String?>()
 
         override fun recordTime(planningDate: String, minutes: Int, targetId: String?) {
             recorded += Triple(planningDate, minutes, targetId)
@@ -356,5 +471,45 @@ class TodayScreenProjectionTest {
         override fun selectWeekStartDay(day: Int) {
             weekStartDays += day
         }
+
+        override fun startTimer(targetId: String?) {
+            started += targetId
+        }
+
+        override fun pauseTimer() {
+            paused += "pause"
+        }
+
+        override fun resumeTimer() {
+            resumed += "resume"
+        }
+
+        override fun recoverTimer() {
+            recovered += "recover"
+        }
+
+        override fun stopTimer() {
+            stopped += "stop"
+        }
+
+        override fun switchTimer(targetId: String?) {
+            switched += targetId
+        }
+
+        override fun requestNotificationPermission() = Unit
+
+        override fun finishOnboarding() = Unit
+
+        override fun saveOnboardingPlanningSettings(boundaryMinutes: Int, weekStartDay: Int, dailyCapacityMinutes: Int?) = Unit
+
+        override fun createOnboardingTarget(title: String, onSuccess: () -> Unit) = Unit
+
+        override fun createOnboardingSchedule(draft: OnboardingScheduleDraft) = Unit
+
+        override fun updateTodaySchedule(entry: ScheduleEntry, reminderMinuteOfDay: Int?) = Unit
+
+        override fun confirmScheduleCompleted(entryId: String) = Unit
+
+        override fun toggleScheduleCompleted(entryId: String) = Unit
     }
 }

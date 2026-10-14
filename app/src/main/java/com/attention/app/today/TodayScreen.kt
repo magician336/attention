@@ -37,21 +37,20 @@ import com.attention.workspace.state.TodayScreenState
 import com.attention.workspace.state.TodayTimeRecord
 
 /**
- * 今天工作台的只读呈现与手动时间账本。它只接收自己的 [TodayScreenState] 与
- * [TodayActions]：不读完整领域状态，不读 ViewModel，也不读系统时间——规划日、
- * 每日容量与可见记录都由组合根注入的投影算好。
+ * 今天工作台的呈现：手动时间账本、计时卡片、每日容量、今日安排与首次设置。
  *
- * 计时卡片与今日安排里的日程行仍然是组合根给的插槽：计时器与前台服务属于票 147，
- * 日程行与编辑对话框属于所有日期页（票 148/149），这两块都还没有迁移，
- * 这里保持它们原来的位置与行为，不顺手重排。
+ * 它只接收自己的 [TodayScreenState] 与 [TodayActions]：不读完整领域状态，不读 ViewModel，
+ * 也不读系统时间——规划日、每日容量、活动计时器的已用时与结束范围预览都由组合根
+ * 注入的投影算好。
+ *
+ * 计时与前台计时服务都经 intent 过 seam，页面 module 因此不触达任何 Android API
+ * （ADR-0005 §45-47）。首次设置的表单状态属于本 module（[TodaySelection]、
+ * [OnboardingDraft]），组合根既不声明它们，也不改写它们的字段（ADR-0005 §24）。
  */
 @Composable
 internal fun TodayScreen(
     state: TodayScreenState,
     actions: TodayActions,
-    onboardingSection: @Composable () -> Unit = {},
-    timerSection: @Composable () -> Unit = {},
-    schedulesSection: @Composable () -> Unit = {},
 ) {
     val tokens = attentionTokens()
     val selection = rememberTodaySelection()
@@ -69,7 +68,8 @@ internal fun TodayScreen(
                 "每周从${state.weekDayOptions.single { it.selected }.label}开始",
         )
         Text("规划日：${state.planningDate}")
-        if (!state.onboardingCompleted) onboardingSection()
+        // 首次设置刻意放在工作台之上：它只走公开设置命令，因此在离线与 Activity 重建后都一致。
+        if (!state.onboardingCompleted) TodayOnboardingCard(state = state, actions = actions)
 
         Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
             Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -121,7 +121,7 @@ internal fun TodayScreen(
             }
         }
 
-        timerSection()
+        TodayTimerCard(state = state, actions = actions)
 
         DailyCapacityCard(state = state, actions = actions, selection = selection)
 
@@ -153,7 +153,7 @@ internal fun TodayScreen(
                 selection = selection,
             )
         }
-        schedulesSection()
+        TodayScheduleSection(state = state, actions = actions)
     }
 
     val pendingDelete = state.records.firstOrNull { it.entryId == selection.pendingDeleteEntryId }

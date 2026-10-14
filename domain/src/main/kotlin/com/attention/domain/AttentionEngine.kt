@@ -291,6 +291,21 @@ fun AttentionState.timerTargetLabel(targetId: String?): String =
         ?.takeIf(String::isNotBlank)
         ?: "未归属活动"
 
+/**
+ * Milliseconds this timer has actually been running as of [now].
+ *
+ * Paused time freezes at the accumulated total; a running timer adds the segment
+ * opened when it was last resumed, and a clock that jumped backwards adds nothing.
+ * The caller supplies [now] so every projection and test reads the same value from
+ * the same rule instead of re-deriving it from the timer fields.
+ */
+fun ActiveTimer.elapsedMillis(now: Instant): Long =
+    if (paused) {
+        accumulatedMillis
+    } else {
+        accumulatedMillis + (now.toEpochMilli() - startedAtEpochMillis).coerceAtLeast(0)
+    }
+
 fun AttentionState.addTarget(title: String, parentId: String? = null): AttentionState {
     require(title.isNotBlank())
     require(parentId == null || targets.any { it.id == parentId })
