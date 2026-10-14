@@ -45,6 +45,51 @@ sealed interface AttentionCommand {
             )
         }
     }
+
+    /** Settles the active timer and evaluates every planning day it touched. */
+    data object StopTimer : AttentionCommand {
+        override fun execute(
+            state: AttentionState,
+            now: Instant,
+            zone: ZoneId,
+        ): AttentionCommandResult {
+            // Preserve the existing no-op semantics when no timer is active.
+            if (state.activeTimer == null) return AttentionCommandResult(state)
+            val stopped = state.stopTimer(now, zone)
+            return stopped.state.withMilestonesFor(
+                affectedPlanningDates = stopped.entries.map { LocalDate.parse(it.planningDate) },
+                achievedAtEpochMillis = now.toEpochMilli(),
+                generatedTimeEntries = stopped.entries,
+            )
+        }
+    }
+
+    /** Settles the previous timer, then starts a timer for a different target. */
+    data class SwitchTimer(
+        val targetId: String?,
+        val scheduleEntryId: String? = null,
+    ) : AttentionCommand {
+        override fun execute(
+            state: AttentionState,
+            now: Instant,
+            zone: ZoneId,
+        ): AttentionCommandResult {
+            require(state.validRecordTargetForCommand(targetId)) { "计时只能归入未归档目标" }
+            val active = state.activeTimer
+            if (active == null) {
+                return AttentionCommandResult(state.startTimer(targetId, now, zone, scheduleEntryId))
+            }
+            if (active.targetId == targetId) return AttentionCommandResult(state)
+
+            val stopped = state.stopTimer(now, zone)
+            val settled = stopped.state.withMilestonesFor(
+                affectedPlanningDates = stopped.entries.map { LocalDate.parse(it.planningDate) },
+                achievedAtEpochMillis = now.toEpochMilli(),
+                generatedTimeEntries = stopped.entries,
+            )
+            return settled.copy(state = settled.state.startTimer(targetId, now, zone, scheduleEntryId))
+        }
+    }
 }
 
 /** Result returned by every [AttentionCommand]. */
@@ -102,6 +147,10 @@ internal fun AttentionState.withMilestonesFor(
         milestones = candidates.toList(),
     )
 }
+
+/** Command-local access to the timer target invariant. */
+private fun AttentionState.validRecordTargetForCommand(targetId: String?): Boolean =
+    targetId == null || targets.any { it.id == targetId && !it.archived }
 
 /** Stable aliases for callers that want a top-level command type name. */
 typealias AddManualTimeEntryCommand = AttentionCommand.AddManualTimeEntry
