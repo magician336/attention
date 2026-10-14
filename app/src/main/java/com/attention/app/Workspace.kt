@@ -79,18 +79,26 @@ import com.attention.app.ui.format.DurationFormat
 import com.attention.app.ui.format.TimeEntrySourceFormat
 import com.attention.app.ui.format.TimeRecordTags
 import com.attention.app.ui.theme.attentionTokens
+import com.attention.app.agenda.AgendaScreen
+import com.attention.app.agenda.AgendaSelection
+import com.attention.app.agenda.rememberAgendaSelection
 import com.attention.app.settings.SettingsScreen
 import com.attention.app.statistics.StatisticsScreen
 import com.attention.app.statistics.StatisticsSelection
 import com.attention.app.statistics.rememberStatisticsSelection
+import com.attention.workspace.state.AgendaActions
+import com.attention.workspace.state.AgendaRecurrenceDraft
+import com.attention.workspace.state.AgendaScheduleDraft
 import com.attention.workspace.state.SettingsActions
 import com.attention.workspace.state.StatisticsActions
+import com.attention.workspace.state.agendaScreenState
 import com.attention.workspace.state.goalProgressLabel
 import com.attention.workspace.state.label
 import com.attention.workspace.state.settingsScreenState
 import com.attention.workspace.state.stageFeedbackLabels
 import com.attention.workspace.state.statisticsScreenState
 import com.attention.workspace.state.summaryLabel
+import com.attention.workspace.state.toRecurrenceRule
 import com.attention.domain.AttentionState
 import com.attention.domain.CapacitySummary
 import com.attention.domain.availableMigrationMinutes
@@ -145,6 +153,82 @@ private class SettingsActionsAdapter(
     override fun selectLaunchDestination(destination: LaunchDestination) {
         viewModel.setLaunchDestination(destination)
     }
+}
+
+/**
+ * 所有日期页的 actions adapter，在组合根一侧组装：页面发出 intent，这里落到 ViewModel、
+ * 提醒的绝对时刻换算与通知权限申请。ViewModel、`Activity`/`Context` 与平台能力
+ * 因此只出现在组合根侧（ADR-0005 §45-47）。
+ */
+private class AgendaActionsAdapter(
+    private val viewModel: AttentionViewModel,
+    private val selection: AgendaSelection,
+    private val currentDate: () -> LocalDate,
+    private val zone: ZoneId,
+    private val onStartTimerFromEntry: (ScheduleEntry) -> Unit,
+    private val onRequestReminderPermission: () -> Unit,
+) : AgendaActions {
+    override fun selectPlanningDate(date: LocalDate?) {
+        selection.selectDate(date)
+    }
+
+    override fun selectAllDates() {
+        selection.selectDate(null)
+    }
+
+    override fun shiftPlanningDay(days: Long) {
+        selection.shiftDays(days, currentDate())
+    }
+
+    override fun addSchedule(draft: AgendaScheduleDraft) {
+        val date = LocalDate.parse(draft.planningDate)
+        viewModel.addSchedule(
+            ScheduleEntry(
+                planningDate = draft.planningDate,
+                title = draft.title,
+                startMinute = draft.startMinute,
+                endMinute = draft.endMinute,
+                estimatedMinutes = draft.estimatedMinutes,
+                note = draft.note,
+                targetId = draft.targetId,
+                reminderEpochMillis = draft.reminderMinuteOfDay?.let { minute ->
+                    reminderEpochMillis(date, minute, zone)
+                },
+            ),
+        )
+    }
+
+    override fun updateSchedule(entry: ScheduleEntry, reminderMinuteOfDay: Int?) {
+        viewModel.updateSchedule(
+            entry.copy(
+                reminderEpochMillis = reminderMinuteOfDay?.let { minute ->
+                    reminderEpochMillis(LocalDate.parse(entry.planningDate), minute, zone)
+                },
+            ),
+        )
+    }
+
+    override fun confirmScheduleCompleted(entryId: String) {
+        viewModel.confirmScheduleCompleted(entryId)
+    }
+
+    override fun toggleScheduleCompleted(entryId: String) {
+        viewModel.toggleScheduleCompleted(entryId)
+    }
+
+    // 条目一起带出，因此产出的时间记录保留同一个来源关联。
+    override fun startTimerFromEntry(entry: ScheduleEntry) = onStartTimerFromEntry(entry)
+
+    override fun addRecurrenceAndMaterialize(draft: AgendaRecurrenceDraft) {
+        val rule = draft.toRecurrenceRule()
+        viewModel.addRecurrenceAndMaterialize(rule, LocalDate.parse(rule.startDate).plusDays(30))
+    }
+
+    override fun stopRecurrence(ruleId: String) {
+        viewModel.stopRecurrence(ruleId)
+    }
+
+    override fun requestReminderPermission() = onRequestReminderPermission()
 }
 
 private class WorkspaceViewModelFactory(
@@ -242,7 +326,6 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     var destinationChosen by remember { mutableStateOf(hasExternalScheduleRequest) }
     var settingsOpen by remember { mutableStateOf(false) }
     var persistedSettingsLoaded by remember { mutableStateOf(false) }
-    var selectedAgendaDate by remember { mutableStateOf(openScheduleDate) }
     var jsonPreview by remember { mutableStateOf<String?>(null) }
     var pendingJsonBackup by remember { mutableStateOf<String?>(null) }
     var jsonExportMessage by remember { mutableStateOf<String?>(null) }
@@ -387,6 +470,18 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     val injectedNow = Instant.now()
     val injectedZone = ZoneId.systemDefault()
 
+    // 所有日期页的选中规划日由页面 module 提供类型与迁移语义，组合根只持有一个实例来喂投影。
+    val agendaSelection = rememberAgendaSelection(
+        openScheduleDate?.let { value -> runCatching { LocalDate.parse(value) }.getOrNull() },
+    )
+    val agendaState = agendaScreenState(
+        state = state,
+        now = injectedNow,
+        zone = injectedZone,
+        selectedDate = agendaSelection.selectedDate,
+        openScheduleId = openScheduleId,
+    )
+
     // 统计页的周期选择由统计页 module 提供类型与迁移语义，组合根只持有一个实例来喂投影。
     val statisticsSelection = rememberStatisticsSelection()
     val statisticsState = statisticsScreenState(
@@ -451,6 +546,21 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         )
     }
 
+    // 所有日期页的 adapter 在组合根组装：计时服务启动与提醒权限申请都属于这里，页面只发 intent。
+    val currentAgendaDate by androidx.compose.runtime.rememberUpdatedState(
+        agendaState.selectedDate ?: agendaState.planningDate,
+    )
+    val agendaActions: AgendaActions = remember(viewModel) {
+        AgendaActionsAdapter(
+            viewModel = viewModel,
+            selection = agendaSelection,
+            currentDate = { currentAgendaDate },
+            zone = injectedZone,
+            onStartTimerFromEntry = ::startTimerFromSchedule,
+            onRequestReminderPermission = { requestReminderPermission(context) },
+        )
+    }
+
     Scaffold(
         topBar = { TopAppBar(title = { Text("Attention") }) },
         bottomBar = {
@@ -497,12 +607,9 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                 )
                 LaunchDestination.TARGETS -> TargetsScreen(state, viewModel)
                 LaunchDestination.ALL_DATES -> AgendaScreen(
-                    state = state,
-                    viewModel = viewModel,
-                    selectedDate = selectedAgendaDate,
-                    onSelectedDateChange = { selectedAgendaDate = it },
+                    state = agendaState,
+                    actions = agendaActions,
                     openScheduleId = openScheduleId,
-                    onStartTimer = ::startTimerFromSchedule,
                 )
                 LaunchDestination.STATISTICS -> StatisticsScreen(
                     state = statisticsState,
@@ -1593,333 +1700,6 @@ private fun TargetTree(
 }
 
 @Composable
-private fun AgendaScreen(
-    state: AttentionState,
-    viewModel: AttentionViewModel,
-    selectedDate: String?,
-    onSelectedDateChange: (String?) -> Unit,
-    openScheduleId: String? = null,
-    onStartTimer: (ScheduleEntry) -> Unit = {},
-) {
-    val context = LocalContext.current
-    val tokens = attentionTokens()
-    val today = state.planningDate(Instant.now())
-    var date by remember(selectedDate) { mutableStateOf(selectedDate ?: today.toString()) }
-    var title by remember { mutableStateOf("") }
-    var estimate by remember { mutableStateOf("") }
-    var startTime by remember { mutableStateOf("") }
-    var endTime by remember { mutableStateOf("") }
-    var reminderTime by remember { mutableStateOf("") }
-    var note by remember { mutableStateOf("") }
-    var targetId by remember { mutableStateOf<String?>(null) }
-    var targetMenuExpanded by remember { mutableStateOf(false) }
-    var formError by remember { mutableStateOf<String?>(null) }
-    var editingEntry by remember { mutableStateOf<ScheduleEntry?>(null) }
-    var notificationOpenHandled by remember(openScheduleId) { mutableStateOf(false) }
-    androidx.compose.runtime.LaunchedEffect(openScheduleId, state.schedules) {
-        if (!notificationOpenHandled && openScheduleId != null) {
-            state.schedules.firstOrNull { it.id == openScheduleId }?.let {
-                editingEntry = it
-                notificationOpenHandled = true
-            }
-        }
-    }
-    var recurrenceTitle by remember { mutableStateOf("") }
-    var recurrenceFrequency by remember { mutableStateOf(ScheduleFrequency.DAILY) }
-    var recurrenceUntilDate by remember { mutableStateOf("") }
-    var recurrenceEstimatedMinutes by remember { mutableStateOf("") }
-    var recurrenceReminderTime by remember { mutableStateOf("") }
-    var recurrenceWeekdays by remember { mutableStateOf(setOf<Int>()) }
-    var recurrenceDayOfMonth by remember { mutableStateOf("") }
-    var recurrenceTargetId by remember { mutableStateOf<String?>(null) }
-    var recurrenceTargetMenuExpanded by remember { mutableStateOf(false) }
-    var recurrenceError by remember { mutableStateOf<String?>(null) }
-    var dateMenuExpanded by remember { mutableStateOf(false) }
-    var dateError by remember { mutableStateOf(false) }
-    val availableDates = remember(state.schedules, today) {
-        (state.schedules.mapNotNull { runCatching { LocalDate.parse(it.planningDate) }.getOrNull() } + today)
-            .distinct()
-            .sorted()
-    }
-    val filteredDate = selectedDate?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
-    val agendaEntries = state.agendaEntries(filteredDate)
-    fun selectDate(value: String?) {
-        onSelectedDateChange(value)
-        date = value ?: today.toString()
-        dateError = false
-    }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(tokens.spacing.large), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(if (selectedDate == null) "所有日期" else "规划日 $selectedDate", style = tokens.typography.display, modifier = Modifier.testTag("agenda-filter"))
-        Text("日程条目可带预计时长；它不会自动变成实际投入。")
-        Box {
-            AttentionOutlinedButton(onClick = { dateMenuExpanded = true }, modifier = Modifier.testTag("agenda-date-menu")) {
-                Text(if (selectedDate == null) "筛选：所有日期" else "筛选：规划日 $selectedDate")
-            }
-            DropdownMenu(expanded = dateMenuExpanded, onDismissRequest = { dateMenuExpanded = false }) {
-                DropdownMenuItem(
-                    text = { Text("所有日期") },
-                    onClick = { selectDate(null); dateMenuExpanded = false },
-                    modifier = Modifier.testTag("agenda-all-dates"),
-                )
-                availableDates.forEach { availableDate ->
-                    DropdownMenuItem(
-                        text = { Text("规划日 $availableDate") },
-                        onClick = { selectDate(availableDate.toString()); dateMenuExpanded = false },
-                        modifier = Modifier.testTag("agenda-date-$availableDate"),
-                    )
-                }
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(date, { date = it; dateError = false }, label = { Text("新增日程规划日 YYYY-MM-DD") }, modifier = Modifier.weight(1f), singleLine = true, isError = dateError, supportingText = if (dateError) ({ Text("请输入有效的规划日") }) else null)
-            AttentionOutlinedButton(onClick = {
-                val parsed = runCatching { LocalDate.parse(date) }.getOrNull()
-                if (parsed == null) dateError = true else selectDate(parsed.toString())
-            }) { Text("打开规划日") }
-        }
-        if (selectedDate != null) {
-            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
-                Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("每日容量", style = tokens.typography.body)
-                    Text(
-                        capacitySummaryText(state.capacitySummary(selectedDate)),
-                        modifier = Modifier.testTag("agenda-capacity-summary"),
-                    )
-                }
-            }
-        }
-        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
-            Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("重复日程", style = tokens.typography.body)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OutlinedTextField(recurrenceTitle, { recurrenceTitle = it; recurrenceError = null }, label = { Text("重复标题") }, modifier = Modifier.weight(1f), singleLine = true)
-                    ScheduleFrequency.entries.forEach { value ->
-                        if (recurrenceFrequency == value) AttentionButton(onClick = {}) { Text(value.label()) }
-                        else AttentionOutlinedButton(onClick = {
-                            recurrenceFrequency = value
-                            recurrenceError = null
-                        }) { Text(value.label()) }
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        recurrenceUntilDate,
-                        { recurrenceUntilDate = it; recurrenceError = null },
-                        label = { Text("结束规划日（可选）") },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true,
-                    )
-                    OutlinedTextField(
-                        recurrenceEstimatedMinutes,
-                        { recurrenceEstimatedMinutes = it; recurrenceError = null },
-                        label = { Text("预计分钟（可选）") },
-                        modifier = Modifier.width(140.dp),
-                        singleLine = true,
-                    )
-                    OutlinedTextField(
-                        recurrenceReminderTime,
-                        { recurrenceReminderTime = it; recurrenceError = null },
-                        label = { Text("提醒 HH:mm（可选）") },
-                        modifier = Modifier.width(150.dp),
-                        singleLine = true,
-                    )
-                }
-                when (recurrenceFrequency) {
-                    ScheduleFrequency.WEEKLY -> {
-                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                            (1..7).forEach { weekday ->
-                                Row {
-                                    Checkbox(
-                                        checked = weekday in recurrenceWeekdays,
-                                        onCheckedChange = { checked ->
-                                            recurrenceWeekdays = if (checked) recurrenceWeekdays + weekday else recurrenceWeekdays - weekday
-                                            recurrenceError = null
-                                        },
-                                    )
-                                    Text(weekdayLabel(weekday), modifier = Modifier.padding(top = 12.dp))
-                                }
-                            }
-                        }
-                    }
-                    ScheduleFrequency.MONTHLY -> {
-                        OutlinedTextField(
-                            recurrenceDayOfMonth,
-                            { recurrenceDayOfMonth = it; recurrenceError = null },
-                            label = { Text("每月日期 1-31") },
-                            modifier = Modifier.width(160.dp),
-                            singleLine = true,
-                        )
-                    }
-                    ScheduleFrequency.DAILY -> Unit
-                }
-                Box {
-                    AttentionOutlinedButton(onClick = { recurrenceTargetMenuExpanded = true }) {
-                        Text(state.targets.firstOrNull { it.id == recurrenceTargetId }?.title ?: "关联计划（可选）")
-                    }
-                    DropdownMenu(expanded = recurrenceTargetMenuExpanded, onDismissRequest = { recurrenceTargetMenuExpanded = false }) {
-                        DropdownMenuItem(
-                            text = { Text("不关联计划") },
-                            onClick = { recurrenceTargetId = null; recurrenceTargetMenuExpanded = false },
-                        )
-                        state.targets.filterNot { it.archived }.forEach { target ->
-                            DropdownMenuItem(
-                                text = { Text(target.title) },
-                                onClick = { recurrenceTargetId = target.id; recurrenceTargetMenuExpanded = false },
-                            )
-                        }
-                    }
-                }
-                recurrenceError?.let { AttentionInlineError(message = it) }
-                AttentionButton(onClick = {
-                    val parsedDate = runCatching { LocalDate.parse(date) }.getOrNull()
-                    val parsedUntilDate = recurrenceUntilDate.trim().takeIf(String::isNotEmpty)?.let { value ->
-                        runCatching { LocalDate.parse(value) }.getOrNull()
-                    }
-                    val parsedEstimatedMinutes = recurrenceEstimatedMinutes.trim().takeIf(String::isNotEmpty)?.toIntOrNull()
-                    val parsedReminderMinute = parseScheduleMinute(recurrenceReminderTime)
-                    val parsedDayOfMonth = recurrenceDayOfMonth.trim().takeIf(String::isNotEmpty)?.toIntOrNull()
-                    recurrenceError = validateRecurrenceForm(
-                        recurrenceTitle,
-                        parsedDate,
-                        recurrenceUntilDate,
-                        parsedUntilDate,
-                        recurrenceFrequency,
-                        recurrenceWeekdays,
-                        parsedDayOfMonth,
-                        recurrenceEstimatedMinutes,
-                        parsedEstimatedMinutes,
-                        recurrenceReminderTime,
-                        parsedReminderMinute,
-                    )
-                    if (recurrenceError == null) {
-                        val rule = RecurrenceRule(
-                            title = recurrenceTitle,
-                            startDate = parsedDate.toString(),
-                            frequency = recurrenceFrequency,
-                            weekdays = recurrenceWeekdays.toList().sorted(),
-                            dayOfMonth = parsedDayOfMonth,
-                            untilDate = parsedUntilDate?.toString(),
-                            estimatedMinutes = parsedEstimatedMinutes,
-                            targetId = recurrenceTargetId,
-                            reminderMinuteOfDay = parsedReminderMinute,
-                        )
-                        viewModel.addRecurrenceAndMaterialize(rule, LocalDate.parse(rule.startDate).plusDays(30))
-                        if (parsedReminderMinute != null) requestReminderPermission(context)
-                        recurrenceTitle = ""
-                        recurrenceUntilDate = ""
-                        recurrenceEstimatedMinutes = ""
-                        recurrenceReminderTime = ""
-                        recurrenceWeekdays = emptySet()
-                        recurrenceDayOfMonth = ""
-                        recurrenceTargetId = null
-                    }
-                }) { Text("创建并生成未来 30 天") }
-                state.recurrenceRules.forEach { rule ->
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                        val detail = when (rule.frequency) {
-                            ScheduleFrequency.DAILY -> "每日"
-                            ScheduleFrequency.WEEKLY -> "每周 ${rule.weekdays.joinToString(",") { weekdayLabel(it) }}"
-                            ScheduleFrequency.MONTHLY -> "每月 ${rule.dayOfMonth} 日"
-                        }
-                        Text("${rule.title} · $detail · ${rule.startDate}${rule.untilDate?.let { " 至 $it" } ?: ""}", Modifier.weight(1f))
-                        if (rule.active) AttentionTextButton(onClick = { viewModel.stopRecurrence(rule.id) }) { Text("停止未来生成") }
-                        else Text("已停止")
-                    }
-                }
-            }
-        }
-        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
-            Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("新增日程", style = tokens.typography.body)
-                OutlinedTextField(title, { title = it; formError = null }, label = { Text("日程标题") }, modifier = Modifier.fillMaxWidth().testTag("agenda-title-input"), singleLine = true)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(startTime, { startTime = it; formError = null }, label = { Text("开始时间 HH:mm（可选）") }, modifier = Modifier.weight(1f).testTag("agenda-start-input"), singleLine = true)
-                    OutlinedTextField(endTime, { endTime = it; formError = null }, label = { Text("结束时间 HH:mm（可选）") }, modifier = Modifier.weight(1f).testTag("agenda-end-input"), singleLine = true)
-                    OutlinedTextField(estimate, { estimate = it; formError = null }, label = { Text("预计分钟") }, modifier = Modifier.width(110.dp).testTag("agenda-estimate-input"), singleLine = true)
-                }
-                OutlinedTextField(reminderTime, { reminderTime = it; formError = null }, label = { Text("提醒 HH:mm（可选）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                OutlinedTextField(note, { note = it }, label = { Text("备注（可选）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                Box {
-                    AttentionOutlinedButton(onClick = { targetMenuExpanded = true }) {
-                        Text(state.targets.firstOrNull { it.id == targetId }?.title ?: "关联计划（可选）")
-                    }
-                    DropdownMenu(expanded = targetMenuExpanded, onDismissRequest = { targetMenuExpanded = false }) {
-                        DropdownMenuItem(text = { Text("不关联计划") }, onClick = { targetId = null; targetMenuExpanded = false })
-                        state.targets.filterNot { it.archived }.forEach { target ->
-                            DropdownMenuItem(text = { Text(target.title) }, onClick = { targetId = target.id; targetMenuExpanded = false })
-                        }
-                    }
-                }
-                formError?.let { AttentionInlineError(message = it) }
-                AttentionButton(modifier = Modifier.testTag("agenda-add-submit"), onClick = {
-                    val parsedDate = runCatching { LocalDate.parse(date) }.getOrNull()
-                    val parsedStart = parseScheduleMinute(startTime)
-                    val parsedEnd = parseScheduleMinute(endTime, allowEndOfDay = true)
-                    val estimated = estimate.trim().takeIf(String::isNotEmpty)?.toIntOrNull()
-                    val parsedReminder = parseScheduleMinute(reminderTime)
-                    formError = validateScheduleForm(
-                        ScheduleFormInput(
-                            title = title,
-                            date = parsedDate,
-                            startText = startTime,
-                            endText = endTime,
-                            estimateText = estimate,
-                            startMinute = parsedStart,
-                            endMinute = parsedEnd,
-                            estimateMinutes = estimated,
-                            reminderText = reminderTime,
-                            reminderMinute = parsedReminder,
-                        ),
-                    )
-                    if (formError == null) {
-                        viewModel.addSchedule(ScheduleEntry(
-                            planningDate = parsedDate.toString(),
-                            title = title,
-                            startMinute = parsedStart,
-                            endMinute = parsedEnd,
-                            estimatedMinutes = estimated,
-                            note = note,
-                            targetId = targetId,
-                            reminderEpochMillis = parsedReminder?.let { minute ->
-                                reminderEpochMillis(parsedDate!!, minute)
-                            },
-                        ))
-                        if (parsedReminder != null) requestReminderPermission(context)
-                        title = ""; startTime = ""; endTime = ""; estimate = ""; reminderTime = ""; note = ""; targetId = null
-                    }
-                }) { Text("添加日程") }
-            }
-        }
-        if (agendaEntries.isEmpty()) {
-            Text(if (selectedDate == null) "所有日期暂无日程条目。" else "规划日 $selectedDate 暂无日程条目。", modifier = Modifier.testTag("agenda-empty"))
-        } else if (selectedDate == null) {
-            agendaEntries.groupBy { it.planningDate }.forEach { (planningDate, entries) ->
-                Text("规划日 $planningDate", style = tokens.typography.title)
-                Text(
-                    capacitySummaryText(state.capacitySummary(planningDate)),
-                    modifier = Modifier.testTag("agenda-capacity-summary-$planningDate"),
-                )
-                entries.forEach { entry ->
-                    ScheduleRow(entry, state, viewModel, onEdit = { editingEntry = it }, onStartTimer = onStartTimer)
-                }
-            }
-        } else {
-            agendaEntries.forEach { entry ->
-                ScheduleRow(entry, state, viewModel, onEdit = { editingEntry = it }, onStartTimer = onStartTimer)
-            }
-        }
-    }
-    editingEntry?.let { entry ->
-        ScheduleEditDialog(
-            entry = entry,
-            targets = state.targets.filterNot { it.archived },
-            onDismiss = { editingEntry = null },
-            onSave = { updated -> viewModel.updateSchedule(updated); editingEntry = null },
-        )
-    }
-}
-
-@Composable
 private fun ScheduleRow(
     entry: ScheduleEntry,
     state: AttentionState,
@@ -2078,43 +1858,6 @@ private fun Context.findActivity(): Activity? = when (this) {
 
 private const val REMINDER_PERMISSION_REQUEST_CODE = 4101
 
-private fun weekdayLabel(day: Int): String = when (day) {
-    1 -> "一"
-    2 -> "二"
-    3 -> "三"
-    4 -> "四"
-    5 -> "五"
-    6 -> "六"
-    7 -> "日"
-    else -> day.toString()
-}
-
-private fun validateRecurrenceForm(
-    title: String,
-    startDate: LocalDate?,
-    untilDateText: String,
-    untilDate: LocalDate?,
-    frequency: ScheduleFrequency,
-    weekdays: Set<Int>,
-    dayOfMonth: Int?,
-    estimatedMinutesText: String,
-    estimatedMinutes: Int?,
-    reminderText: String,
-    reminderMinute: Int?,
-): String? = when {
-    startDate == null -> "请输入有效的开始规划日"
-    title.isBlank() -> "重复日程标题不能为空"
-    untilDateText.isNotBlank() && untilDate == null -> "请输入有效的结束规划日"
-    untilDate != null && untilDate.isBefore(startDate) -> "结束规划日不能早于开始规划日"
-    estimatedMinutesText.isNotBlank() && estimatedMinutes == null -> "请输入有效的预计分钟"
-    estimatedMinutes != null && estimatedMinutes <= 0 -> "预计时长必须为正数"
-    reminderText.isNotBlank() && reminderMinute == null -> "请输入有效的提醒时间 HH:mm"
-    frequency == ScheduleFrequency.WEEKLY && weekdays.isEmpty() -> "每周规则至少选择一个星期"
-    frequency == ScheduleFrequency.MONTHLY && dayOfMonth !in 1..31 -> "月内日期必须在 1 到 31 之间"
-    frequency != ScheduleFrequency.MONTHLY && dayOfMonth != null -> "只有每月规则可以设置月内日期"
-    else -> null
-}
-
 private data class ScheduleFormInput(
     val title: String,
     val date: LocalDate?,
@@ -2164,12 +1907,6 @@ private fun AttentionState.targetPath(targetId: String, onDate: LocalDate? = nul
         current = parentId?.let { id -> targets.firstOrNull { it.id == id } }
     }
     return names.asReversed().joinToString(" / ")
-}
-
-private fun ScheduleFrequency.label(): String = when (this) {
-    ScheduleFrequency.DAILY -> "每日"
-    ScheduleFrequency.WEEKLY -> "每周"
-    ScheduleFrequency.MONTHLY -> "每月"
 }
 
 private fun formatMinutes(minutes: Int): String = "%02d:%02d".format(minutes / 60, minutes % 60)
