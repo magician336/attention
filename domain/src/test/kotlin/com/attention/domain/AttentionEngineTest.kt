@@ -1150,7 +1150,7 @@ class AttentionEngineTest {
         )
 
         assertEquals(25 * 60_000L, running.elapsedMillis(now))
-        // 时钟早于本次开始时刻时不能给出负的已用时
+        // 时钟早于本次开始时刻时不能给出负的实际投入
         assertEquals(0L, running.elapsedMillis(now.minusSeconds(30 * 60)))
     }
 

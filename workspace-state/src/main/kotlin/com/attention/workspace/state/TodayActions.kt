@@ -6,9 +6,9 @@ import com.attention.domain.ScheduleEntry
  * 今天工作台的 intent 接口。页面只发出 intent，实际落地（写 Room / DataStore、
  * 启动前台计时服务、申请通知权限、给出通知不可用的提示）由组合根 adapter 完成；
  * 页面因此拿不到 `AttentionViewModel`，也拿不到仓储，更拿不到任何 Android API
- * （ADR-0005 §45-47）。
+ * （ADR-0005 第 4 节「Android adapter 归属组合根」）。
  *
- * 计时相关的 intent 在这里而不是另一套接口：ADR-0005 §28 规定每个页面只暴露一对
+ * 计时相关的 intent 在这里而不是另一套接口：ADR-0005 第 2 节规定每个页面只暴露一对
  * `*ScreenState` / `*Actions`，今天工作台目前也没有第二个页面级入口需要拆分。
  */
 interface TodayActions {

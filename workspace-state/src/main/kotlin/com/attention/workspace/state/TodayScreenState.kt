@@ -6,6 +6,7 @@ import com.attention.domain.ScheduleEntry
 import com.attention.domain.TimeEntrySource
 import com.attention.domain.capacitySummary
 import com.attention.domain.elapsedMillis
+import com.attention.domain.formatMinuteOfDay
 import com.attention.domain.planningDate
 import com.attention.domain.timerSettlementPreview
 import com.attention.domain.timerTargetLabel
@@ -51,15 +52,15 @@ data class TodaySettlementPreview(
 )
 
 /**
- * 正在计时的那个计时器。目标名、已用时与结束范围预览都由注入的时间决定，
- * 页面因此不需要读系统时钟，也不需要知道「已用时」是怎么算出来的。
+ * 正在计时的那个计时器。目标名、实际投入与结束范围预览都由注入的时间决定，
+ * 页面因此不需要读系统时钟，也不需要知道「实际投入」是怎么算出来的。
  */
 data class TodayActiveTimer(
     val targetId: String?,
     val targetLabel: String,
     val paused: Boolean,
     val completedSegmentCount: Int,
-    /** 到注入时刻为止的整分钟已用时；不足 1 分钟为 0。 */
+    /** 到注入时刻为止的整分钟实际投入；不足 1 分钟为 0。 */
     val elapsedMinutes: Int,
     val settlementPreview: TodaySettlementPreview,
 )
@@ -121,14 +122,14 @@ data class TodayScreenState(
     val activeTimer: TodayActiveTimer?,
     /**
      * 通知是否可用。这是平台事实，由组合根查好后注入，投影与页面都不自己判断
-     * （页面不触达任何 Android API，见 ADR-0005 §45-47）。
+     * （页面不触达任何 Android API，见 ADR-0005 第 4 节「Android adapter 归属组合根」）。
      */
     val notificationsEnabled: Boolean,
     val scheduleRows: List<TodayScheduleRow>,
 )
 
 /** 规划日界线的定点表达，例如 180 分钟显示为「03:00」。这是展示约定，不是领域规则。 */
-fun planningDayBoundaryLabel(minutes: Int): String = "%02d:%02d".format(minutes / 60, minutes % 60)
+fun planningDayBoundaryLabel(minutes: Int): String = formatMinuteOfDay(minutes)
 
 /** 周起始日的名字。名字取自 `CONTEXT.md` 已有词汇，不新造领域词。 */
 fun weekDayLabel(day: Int): String = when (day) {
@@ -153,7 +154,7 @@ fun CapacitySummary.capacityLabel(): String = when {
 
 /**
  * 从领域状态投影出今天工作台的状态。领域规则（规划日、每日容量占用、未归档目标、
- * 计时结算与已用时）仍然只在 `:domain`，这里只把它们读成页面要显示的行。
+ * 计时结算与实际投入）仍然只在 `:domain`，这里只把它们读成页面要显示的行。
  *
  * 今天工作台不导航规划日，因此除了注入的 [now] 与 [zone] 之外没有页面选择需要喂进来：
  * 页面自己的输入草稿与对话框开关属于页面 module，不参与投影。
@@ -252,7 +253,7 @@ private fun todayScheduleRow(
 }
 
 /** 一天内的第几分钟显示为 HH:mm。这是展示约定，不是领域规则。 */
-private fun formatTodayMinute(minuteOfDay: Int): String = "%02d:%02d".format(minuteOfDay / 60, minuteOfDay % 60)
+private fun formatTodayMinute(minuteOfDay: Int): String = formatMinuteOfDay(minuteOfDay)
 
 /** 提醒的绝对时刻按注入的时区显示为一天内的 HH:mm。 */
 private fun formatTodayReminderEpoch(epochMillis: Long, zone: ZoneId): String =

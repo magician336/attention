@@ -2,20 +2,17 @@ package com.attention.app.settings
 
 import androidx.activity.compose.setContent
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.attention.app.MainActivity
 import com.attention.app.ui.theme.AttentionTheme
-import com.attention.domain.AttentionState
 import com.attention.domain.LaunchDestination
+import com.attention.workspace.state.LaunchDestinationOption
 import com.attention.workspace.state.SettingsActions
 import com.attention.workspace.state.SettingsScreenState
-import com.attention.workspace.state.settingsScreenState
-import java.time.Instant
-import java.time.ZoneId
+import java.time.LocalDate
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -24,12 +21,16 @@ import org.junit.runner.RunWith
 /**
  * 设置页的直接测试：只给它 fake screen state 与 fake actions，
  * 断言可见标签、选中状态与发出的 intent，不经过 ViewModel 与 Room。
+ *
+ * screen state 是手写的，不走 settingsScreenState 投影：页面测试只钉住页面自己要渲染的
+ * 标签与选中态，投影本身的规则由 workspace-state 的纯 Kotlin 测试负责。页面版本因此不需要
+ * Activity 宿主，用 [createComposeRule] 挂载即可，也不会把平台副作用拉起来。
  */
 @RunWith(AndroidJUnit4::class)
 class SettingsScreenTest {
 
     @get:Rule
-    val composeRule = createAndroidComposeRule<MainActivity>()
+    val composeRule = createComposeRule()
 
     @Test
     fun launch_destination_section_lists_every_entry() {
@@ -92,17 +93,25 @@ class SettingsScreenTest {
         assertEquals(emptyList<LaunchDestination>(), intents)
     }
 
-    private fun screenState(launchDestination: LaunchDestination): SettingsScreenState = settingsScreenState(
-        state = AttentionState(launchDestination = launchDestination),
-        now = Instant.parse("2026-03-05T10:00:00Z"),
-        zone = ZoneId.of("Asia/Shanghai"),
+    /** 手写的 fake screen state：标签与选中态由测试自己钉住，不经过投影。 */
+    private fun screenState(selected: LaunchDestination): SettingsScreenState = SettingsScreenState(
+        options = listOf(
+            LaunchDestinationOption(LaunchDestination.TODAY, "今天", selected == LaunchDestination.TODAY),
+            LaunchDestinationOption(LaunchDestination.TARGETS, "目标树", selected == LaunchDestination.TARGETS),
+            LaunchDestinationOption(LaunchDestination.ALL_DATES, "所有日期", selected == LaunchDestination.ALL_DATES),
+            LaunchDestinationOption(LaunchDestination.STATISTICS, "统计", selected == LaunchDestination.STATISTICS),
+            LaunchDestinationOption(LaunchDestination.LAST_OPENED, "上次打开", selected == LaunchDestination.LAST_OPENED),
+        ),
+        selectedDestination = selected,
+        resolvedDestination = selected,
+        planningDay = LocalDate.parse("2026-03-05"),
     )
 
     private fun mount(
         state: SettingsScreenState,
         actions: SettingsActions = RecordingSettingsActions(mutableListOf()),
     ) {
-        composeRule.activity.setContent {
+        composeRule.setContent {
             AttentionTheme { SettingsScreen(state = state, actions = actions) }
         }
     }

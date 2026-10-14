@@ -269,7 +269,7 @@ class TodayScreenProjectionTest {
 
     @Test
     fun a_running_timer_shows_its_target_and_the_projected_settlement_preview() {
-        // 已用时与结束范围预览都由投影按注入的时刻算好，页面不读时钟
+        // 实际投入与结束范围预览都由投影按注入的时刻算好，页面不读时钟
         val intents = RecordingTodayActions()
         mount(screenState(activeTimer = runningTimer()), intents)
 

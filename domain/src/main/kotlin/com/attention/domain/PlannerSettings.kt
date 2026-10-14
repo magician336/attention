@@ -18,7 +18,7 @@ data class PlannerSettings(
     }
 
     val planningDayBoundary: String
-        get() = "%02d:%02d".format(planningDayBoundaryMinutes / 60, planningDayBoundaryMinutes % 60)
+        get() = formatMinuteOfDay(planningDayBoundaryMinutes)
 
     companion object {
         const val DEFAULT_BOUNDARY_MINUTES = 3 * 60

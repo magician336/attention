@@ -79,7 +79,7 @@ SAF 文件读写、权限检查与申请、前台计时服务启动、恢复提�
 
 ### 复核中发现并修订的偏差
 
-1. 选择状态泄漏到组合根，违反第 24 节。合并后的 Workspace.kt 在组合根内声明 private class StatisticsSelectionHolder，持有统计页的 selectedDate 与 cadence，注释称「它只属于统计页，所以留在组合根的页面状态里」。修订：状态类型与迁移语义移到统计页 module（app 的 statistics 包内 StatisticsSelection.kt，提供 selectCadence 与 shiftPeriod），组合根只调用 rememberStatisticsSelection() 持有一个实例来喂投影，不再声明该类型也不再改它的字段。新增 PageSelectionOwnershipTest 守住这条约束，修订前两条断言为红、修订后为绿。
+1. 选择状态泄漏到组合根，违反本决策第 1 节。合并后的 Workspace.kt 在组合根内声明 private class StatisticsSelectionHolder，持有统计页的 selectedDate 与 cadence，注释称「它只属于统计页，所以留在组合根的页面状态里」。修订：状态类型与迁移语义移到统计页 module（app 的 statistics 包内 StatisticsSelection.kt，提供 selectCadence 与 shiftPeriod），组合根只调用 rememberStatisticsSelection() 持有一个实例来喂投影，不再声明该类型也不再改它的字段。当时另加了一条扫描 Workspace.kt 源码的 PageSelectionOwnershipTest 守住这条约束，修订前两条断言为红、修订后为绿；复核时该测试已删除——它断言的是文件布局与标识符命名而不是行为，组合根无法给页面传 AttentionViewModel 这件事已由第 2 节的函数签名与 Kotlin 类型系统保证。
 2. 投影 module 承载了领域规则。resolveLaunchDestination 是启动入口的领域语义，曾被放进投影 module，等于让展示层成为第二条规则来源。修订：移入 domain（LaunchDestinationResolution.kt），导航与设置页投影都从 domain 取。
 3. 里程碑 kind 与 instanceKey 格式泄漏。统计页投影自己按 kind 过滤、排序去重，并解析 instanceKey 里的累计小时数。修订：落到 domain 的 AttentionState.cumulativeMilestones() 与 Milestone.cumulativeHours()，投影只读结果；eligibleMilestones 改用同一个 kind 常量。
 

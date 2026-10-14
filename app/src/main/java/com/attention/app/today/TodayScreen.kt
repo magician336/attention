@@ -40,12 +40,12 @@ import com.attention.workspace.state.TodayTimeRecord
  * 今天工作台的呈现：手动时间账本、计时卡片、每日容量、今日安排与首次设置。
  *
  * 它只接收自己的 [TodayScreenState] 与 [TodayActions]：不读完整领域状态，不读 ViewModel，
- * 也不读系统时间——规划日、每日容量、活动计时器的已用时与结束范围预览都由组合根
+ * 也不读系统时间——规划日、每日容量、活动计时器的实际投入与结束范围预览都由组合根
  * 注入的投影算好。
  *
  * 计时与前台计时服务都经 intent 过 seam，页面 module 因此不触达任何 Android API
- * （ADR-0005 §45-47）。首次设置的表单状态属于本 module（[TodaySelection]、
- * [OnboardingDraft]），组合根既不声明它们，也不改写它们的字段（ADR-0005 §24）。
+ * （ADR-0005 第 4 节「Android adapter 归属组合根」）。首次设置的表单状态属于本 module（[TodaySelection]、
+ * [OnboardingDraft]），组合根既不声明它们，也不改写它们的字段（ADR-0005 第 1 节）。
  */
 @Composable
 internal fun TodayScreen(
