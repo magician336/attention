@@ -79,6 +79,10 @@ import com.attention.app.ui.format.DurationFormat
 import com.attention.app.ui.format.TimeEntrySourceFormat
 import com.attention.app.ui.format.TimeRecordTags
 import com.attention.app.ui.theme.attentionTokens
+import com.attention.app.settings.SettingsScreen
+import com.attention.workspace.state.SettingsActions
+import com.attention.workspace.state.resolveLaunchDestination
+import com.attention.workspace.state.settingsScreenState
 import com.attention.domain.AttentionState
 import com.attention.domain.CapacitySummary
 import com.attention.domain.availableMigrationMinutes
@@ -125,8 +129,21 @@ import com.attention.domain.timerSettlementPreview
 import com.attention.domain.timerTargetLabel
 import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+
+/**
+ * 设置页的 actions adapter，在组合根一侧组装：页面发出 intent，这里落到 ViewModel。
+ * ViewModel、Room 与 DataStore 因此只出现在组合根侧，页面拿不到它们。
+ */
+private class SettingsActionsAdapter(
+    private val viewModel: AttentionViewModel,
+) : SettingsActions {
+    override fun selectLaunchDestination(destination: LaunchDestination) {
+        viewModel.setLaunchDestination(destination)
+    }
+}
 
 private class WorkspaceViewModelFactory(
     private val repository: AttentionStateRepository,
@@ -149,6 +166,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         )
     }
     val viewModel: AttentionViewModel = viewModel(factory = WorkspaceViewModelFactory(repository))
+    val settingsActions: SettingsActions = remember(viewModel) { SettingsActionsAdapter(viewModel) }
     val state by viewModel.state.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val tokens = attentionTokens()
@@ -349,7 +367,15 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                 )
             }
             if (settingsOpen) {
-                SettingsScreen(state = state, viewModel = viewModel)
+                // 当前时间与时区只在组合根读一次，设置页拿到的是已经算好的投影。
+                SettingsScreen(
+                    state = settingsScreenState(
+                        state = state,
+                        now = Instant.now(),
+                        zone = ZoneId.systemDefault(),
+                    ),
+                    actions = settingsActions,
+                )
             } else when (destination) {
                 LaunchDestination.TODAY, LaunchDestination.LAST_OPENED -> WorkspaceTodayScreen(
                     state = state,
@@ -2034,43 +2060,6 @@ private fun validateScheduleForm(input: ScheduleFormInput): String? = when {
 }
 
 @Composable
-private fun SettingsScreen(
-    state: AttentionState,
-    viewModel: AttentionViewModel,
-) {
-    val tokens = attentionTokens()
-    val destinations = listOf(
-        LaunchDestination.TODAY to "今天",
-        LaunchDestination.TARGETS to "目标树",
-        LaunchDestination.ALL_DATES to "所有日期",
-        LaunchDestination.STATISTICS to "统计",
-        LaunchDestination.LAST_OPENED to "上次打开",
-    )
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(tokens.spacing.large),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("设置", style = tokens.typography.display)
-        Text("启动入口", style = tokens.typography.title)
-        Text("应用下次启动时打开的页面")
-        destinations.forEach { (destination, label) ->
-            val selected = state.launchDestination == destination
-            if (selected) {
-                AttentionButton(
-                    onClick = {},
-                    modifier = Modifier.fillMaxWidth().testTag("launch-destination-$destination"),
-                ) { Text("$label（当前）") }
-            } else {
-                AttentionOutlinedButton(
-                    onClick = { viewModel.setLaunchDestination(destination) },
-                    modifier = Modifier.fillMaxWidth().testTag("launch-destination-$destination"),
-                ) { Text(label) }
-            }
-        }
-    }
-}
-
-@Composable
 private fun StatisticsScreen(
     state: AttentionState,
     viewModel: AttentionViewModel,
@@ -2197,18 +2186,6 @@ private fun StatisticsScreen(
         }
         if (state.targets.isEmpty()) Text("创建计划后，这里会显示目标投入和阶段达成情况。")
     }
-}
-
-internal fun resolveLaunchDestination(requested: LaunchDestination, lastOpened: LaunchDestination): LaunchDestination = when (requested) {
-    LaunchDestination.LAST_OPENED -> when (lastOpened) {
-        LaunchDestination.TODAY,
-        LaunchDestination.TARGETS,
-        LaunchDestination.ALL_DATES,
-        LaunchDestination.STATISTICS,
-        -> lastOpened
-        LaunchDestination.LAST_OPENED -> LaunchDestination.TODAY
-    }
-    else -> requested
 }
 
 internal fun initialLaunchDestination(
