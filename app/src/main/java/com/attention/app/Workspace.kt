@@ -83,50 +83,32 @@ import com.attention.app.settings.SettingsScreen
 import com.attention.app.statistics.StatisticsScreen
 import com.attention.app.statistics.StatisticsSelection
 import com.attention.app.statistics.rememberStatisticsSelection
+import com.attention.app.targets.TargetsScreen
+import com.attention.app.targets.rememberTargetsSelection
 import com.attention.workspace.state.SettingsActions
 import com.attention.workspace.state.StatisticsActions
-import com.attention.workspace.state.goalProgressLabel
-import com.attention.workspace.state.label
+import com.attention.workspace.state.TargetsActions
 import com.attention.workspace.state.settingsScreenState
-import com.attention.workspace.state.stageFeedbackLabels
 import com.attention.workspace.state.statisticsScreenState
-import com.attention.workspace.state.summaryLabel
+import com.attention.workspace.state.targetsScreenState
 import com.attention.domain.AttentionState
 import com.attention.domain.CapacitySummary
-import com.attention.domain.availableMigrationMinutes
 import com.attention.domain.GoalCadence
 import com.attention.domain.FutureGoalRule
-import com.attention.domain.GoalStage
 import com.attention.domain.LaunchDestination
 import com.attention.domain.Migration
+import com.attention.domain.newId
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.ScheduleFrequency
 import com.attention.domain.RecurrenceRule
 import com.attention.domain.StoredSettings
 import com.attention.domain.Target
-import com.attention.domain.targetDeletionImpact
-import com.attention.domain.TargetMove
 import com.attention.domain.TimeEntry
 import com.attention.domain.capacitySummary
 import com.attention.domain.agendaEntries
-import com.attention.domain.directMinutes
-import com.attention.domain.descendantIds
-import com.attention.domain.futureTargetMoveParents
-import com.attention.domain.goalRulesAt
-import com.attention.domain.isFutureTargetMoveDate
-import com.attention.domain.isPending
-import com.attention.domain.goalStagesForTarget
-import com.attention.domain.goalSummary
-import com.attention.domain.parseTargetMoveDate
-import com.attention.domain.pendingTargetMoves
 import com.attention.domain.planningDate
-import com.attention.domain.parentAt
-import com.attention.domain.progress
-import com.attention.domain.progressRange
 import com.attention.domain.reminderEpochMillis
 import com.attention.domain.resolveLaunchDestination
-import com.attention.domain.subtreeMinutes
-import com.attention.domain.targetChildren
 import com.attention.domain.timerSettlementPreview
 import com.attention.domain.timerTargetLabel
 import java.time.Instant
@@ -212,6 +194,130 @@ private class StatisticsActionsAdapter(
     override fun exportSchedulesCsv() = onExportSchedulesCsv()
 
     override fun exportCsvBundle() = onExportCsvBundle()
+}
+
+/**
+ * 目标树页的 actions adapter，在组合根一侧组装：页面发出 intent，这里落到 ViewModel，
+ * 并在这里构造领域对象（`FutureGoalRule`、`Migration`）与生成 id。
+ * ViewModel、Room 与 id 生成器因此只出现在组合根侧。
+ */
+private class TargetsActionsAdapter(
+    private val viewModel: AttentionViewModel,
+    private val currentState: () -> AttentionState,
+) : TargetsActions {
+    override fun addTarget(title: String, parentId: String?) {
+        viewModel.addTarget(title, parentId)
+    }
+
+    override fun renameTarget(targetId: String, title: String) {
+        viewModel.renameTarget(targetId, title)
+    }
+
+    override fun addGoal(
+        targetId: String,
+        cadence: GoalCadence,
+        targetMinutes: Int,
+        startDate: String,
+        dueDate: String?,
+    ) {
+        viewModel.addGoal(targetId, cadence, targetMinutes, startDate, dueDate)
+    }
+
+    override fun assignUnowned(timeEntryIds: Set<String>, targetId: String) {
+        viewModel.assignUnowned(timeEntryIds, targetId)
+    }
+
+    override fun saveFutureGoal(
+        targetId: String,
+        ruleId: String?,
+        cadence: GoalCadence,
+        targetMinutes: Int,
+        effectiveFrom: String,
+        dueDate: String?,
+        onDate: LocalDate,
+    ) {
+        val rule = FutureGoalRule(
+            id = ruleId ?: newId(),
+            targetId = targetId,
+            cadence = cadence,
+            targetMinutes = targetMinutes,
+            effectiveFrom = effectiveFrom,
+            dueDate = dueDate,
+        )
+        if (ruleId == null) viewModel.addFutureGoal(rule, onDate) else viewModel.updateFutureGoal(rule, onDate)
+    }
+
+    override fun cancelFutureGoal(ruleId: String, onDate: LocalDate) {
+        viewModel.cancelFutureGoal(ruleId, onDate)
+    }
+
+    override fun appendOneTimeGoal(
+        targetId: String,
+        targetMinutes: Int,
+        startDate: String,
+        dueDate: String?,
+        onSuccess: () -> Unit,
+    ) {
+        viewModel.appendOneTimeGoal(targetId, targetMinutes, startDate, dueDate, onSuccess)
+    }
+
+    override fun saveMigration(
+        targetId: String,
+        migrationId: String?,
+        sourceStageId: String,
+        minutes: Int,
+        destinationStartDate: String,
+        destinationEndDate: String?,
+        onDate: LocalDate,
+    ) {
+        val migration = Migration(
+            id = migrationId ?: newId(),
+            targetId = targetId,
+            sourceStageId = sourceStageId,
+            minutes = minutes,
+            destinationStartDate = destinationStartDate,
+            destinationEndDate = destinationEndDate,
+            cancelled = false,
+        )
+        if (migrationId == null) viewModel.addMigration(migration, onDate) else viewModel.updateMigration(migration, onDate)
+    }
+
+    override fun cancelMigration(migrationId: String) {
+        viewModel.cancelMigration(migrationId)
+    }
+
+    override fun toggleTarget(targetId: String, expanded: Boolean) {
+        viewModel.toggleTarget(targetId, expanded)
+    }
+
+    override fun reorderTarget(targetId: String, newIndex: Int) {
+        viewModel.reorderTarget(targetId, newIndex)
+    }
+
+    override fun archiveTarget(targetId: String) {
+        viewModel.archiveTarget(targetId)
+    }
+
+    override fun restoreTargets(targetIds: Set<String>) {
+        viewModel.restoreTargets(targetIds)
+    }
+
+    override fun deleteTargetRelations(targetIds: Set<String>) {
+        viewModel.deleteTargetRelations(targetIds)
+    }
+
+    override fun moveTargetFrom(targetId: String, parentId: String?, effectiveFrom: String) {
+        viewModel.moveTargetFrom(targetId, parentId, effectiveFrom)
+    }
+
+    override fun updateFutureTargetMove(moveId: String, parentId: String?, effectiveFrom: String) {
+        val existing = currentState().targetMoves.firstOrNull { it.id == moveId } ?: return
+        viewModel.updateFutureTargetMove(existing.copy(parentId = parentId, effectiveFrom = effectiveFrom))
+    }
+
+    override fun cancelFutureTargetMove(moveId: String) {
+        viewModel.cancelFutureTargetMove(moveId)
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -435,6 +541,23 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         )
     }
 
+    // 目标树页的选择与表单草稿由目标树页 module 提供类型与迁移语义，
+    // 组合根只持有一个实例来喂投影，不改写它的字段。
+    val targetsSelection = rememberTargetsSelection(state.planningDate(injectedNow, injectedZone))
+    val targetsState = targetsScreenState(
+        state = state,
+        now = injectedNow,
+        zone = injectedZone,
+        selection = targetsSelection.snapshot(),
+    )
+    val currentAttentionState by androidx.compose.runtime.rememberUpdatedState(state)
+    val targetsActions: TargetsActions = remember(viewModel) {
+        TargetsActionsAdapter(
+            viewModel = viewModel,
+            currentState = { currentAttentionState },
+        )
+    }
+
     fun startTimerFromSchedule(entry: ScheduleEntry) {
         viewModel.startTimer(
             targetId = entry.targetId,
@@ -495,7 +618,11 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                     viewModel = viewModel,
                     feedback = feedback,
                 )
-                LaunchDestination.TARGETS -> TargetsScreen(state, viewModel)
+                LaunchDestination.TARGETS -> TargetsScreen(
+                    state = targetsState,
+                    actions = targetsActions,
+                    selection = targetsSelection,
+                )
                 LaunchDestination.ALL_DATES -> AgendaScreen(
                     state = state,
                     viewModel = viewModel,
@@ -1018,576 +1145,6 @@ private fun OnboardingCard(state: AttentionState, viewModel: AttentionViewModel)
                 modifier = Modifier.testTag("onboarding-skip-all"),
                 onClick = viewModel::finishOnboarding,
             ) { Text("跳过剩余步骤") }
-        }
-    }
-}
-
-@Composable
-private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) {
-    val tokens = attentionTokens()
-    val planningDate = state.planningDate(Instant.now())
-    var title by remember { mutableStateOf("") }
-    var parentId by remember { mutableStateOf<String?>(null) }
-    var goalMinutes by remember { mutableStateOf("") }
-    var goalCadence by remember { mutableStateOf(GoalCadence.DAILY) }
-    var goalStartDate by remember { mutableStateOf(state.planningDate(Instant.now()).toString()) }
-    var goalDueDate by remember { mutableStateOf("") }
-    var futureDate by remember { mutableStateOf(planningDate.plusDays(7).toString()) }
-    var selectedPlanningDate by remember { mutableStateOf(state.planningDate(Instant.now()).toString()) }
-    var futureMinutes by remember { mutableStateOf("") }
-    var futureDueDate by remember { mutableStateOf("") }
-    var futureCadence by remember { mutableStateOf(GoalCadence.WEEKLY) }
-    var editingFutureRuleId by remember { mutableStateOf<String?>(null) }
-    var appendGoalMinutes by remember { mutableStateOf("") }
-    var appendGoalDueDate by remember { mutableStateOf("") }
-    var migrationMinutes by remember { mutableStateOf("") }
-    var migrationStartDate by remember { mutableStateOf("") }
-    var migrationEndDate by remember { mutableStateOf("") }
-    var editingMigration by remember { mutableStateOf<Migration?>(null) }
-    var pendingDelete by remember { mutableStateOf<Target?>(null) }
-    var renameTarget by remember { mutableStateOf<Target?>(null) }
-    var renameText by remember { mutableStateOf("") }
-    var movingTarget by remember { mutableStateOf<Target?>(null) }
-    var editingMove by remember { mutableStateOf<TargetMove?>(null) }
-    var moveParentId by remember { mutableStateOf<String?>(null) }
-    var moveEffectiveDate by remember { mutableStateOf("") }
-    var selectedUnownedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var selectedArchivedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var pendingDeleteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(tokens.spacing.large), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("目标树", style = tokens.typography.display)
-        Text("父目标显示整个子树的实际投入；归档目标会从默认列表隐藏。")
-        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            OutlinedTextField(title, { title = it }, label = { Text(if (parentId == null) "新计划" else "新子计划") }, modifier = Modifier.weight(1f), singleLine = true)
-            Spacer(Modifier.width(8.dp))
-            AttentionButton(onClick = { if (title.isNotBlank()) { viewModel.addTarget(title, parentId); title = "" } }) { Text("添加") }
-        }
-        if (parentId != null) {
-            androidx.compose.runtime.LaunchedEffect(parentId) {
-                selectedPlanningDate = state.planningDate(Instant.now()).toString()
-            }
-            Text("当前父目标：${state.targets.firstOrNull { it.id == parentId }?.title ?: ""}")
-            AttentionTextButton(onClick = { parentId = null }) { Text("改为根计划") }
-            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
-                Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("为这个计划设置时间目标", style = tokens.typography.body)
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        GoalCadence.entries.forEach { value ->
-                            if (goalCadence == value) AttentionButton(onClick = {}) { Text(value.label()) }
-                            else AttentionOutlinedButton(onClick = { goalCadence = value }) { Text(value.label()) }
-                        }
-                    }
-                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                        OutlinedTextField(goalStartDate, { goalStartDate = it }, label = { Text("开始规划日") }, modifier = Modifier.width(145.dp), singleLine = true)
-                        if (goalCadence == GoalCadence.ONE_TIME) {
-                            Spacer(Modifier.width(8.dp))
-                            OutlinedTextField(goalDueDate, { goalDueDate = it }, label = { Text("截止规划日（可选）") }, modifier = Modifier.width(145.dp), singleLine = true)
-                        }
-                    }
-                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                        OutlinedTextField(goalMinutes, { goalMinutes = it.filter(Char::isDigit) }, label = { Text("目标分钟") }, modifier = Modifier.width(140.dp), singleLine = true)
-                        Spacer(Modifier.width(8.dp))
-                        AttentionButton(onClick = {
-                            goalMinutes.toIntOrNull()?.takeIf { it > 0 }?.let {
-                                val dueDate = if (goalCadence == GoalCadence.ONE_TIME) {
-                                    goalDueDate.trim().takeIf(String::isNotEmpty)
-                                } else {
-                                    null
-                                }
-                                viewModel.addGoal(parentId!!, goalCadence, it, goalStartDate, dueDate)
-                                goalMinutes = ""
-                            }
-                        }) { Text("保存目标") }
-                    }
-                    val unownedEntries = state.timeEntries.filter { it.targetId == null }
-                    if (unownedEntries.isNotEmpty()) {
-                        val visibleIds = unownedEntries.map { it.id }.toSet()
-                        val selected = selectedUnownedIds intersect visibleIds
-                        Text("未归属活动 ${unownedEntries.size} 条，已选 ${selected.size} 条")
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            AttentionOutlinedButton(onClick = { selectedUnownedIds = visibleIds }) { Text("全选") }
-                            AttentionTextButton(onClick = { selectedUnownedIds = emptySet() }) { Text("清除选择") }
-                            AttentionButton(
-                                enabled = selected.isNotEmpty(),
-                                onClick = {
-                                    viewModel.assignUnowned(selectedUnownedIds, parentId!!)
-                                    selectedUnownedIds = emptySet()
-                                },
-                            ) { Text("归入当前计划") }
-                        }
-                        unownedEntries.forEach { entry ->
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                                Checkbox(
-                                    checked = entry.id in selected,
-                                    onCheckedChange = { checked ->
-                                        selectedUnownedIds = if (checked) selectedUnownedIds + entry.id else selectedUnownedIds - entry.id
-                                    },
-                                )
-                                Text("${entry.planningDate} · ${entry.durationMinutes} 分钟")
-                            }
-                        }
-                    }
-                    Text("未来生效的目标规则", style = tokens.typography.body)
-                    val currentRule = state.goalRulesAt(parentId!!, planningDate)
-                        .lastOrNull { it.stageId.isBlank() }
-                    Text(
-                        currentRule?.let { "当前规则：${it.cadence.label()} ${it.targetMinutes} 分钟 · 生效于 ${it.effectiveFrom}" }
-                            ?: "当前规则：使用目标阶段的承诺",
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        OutlinedTextField(futureDate, { futureDate = it }, label = { Text("生效日") }, modifier = Modifier.width(145.dp), singleLine = true)
-                        OutlinedTextField(futureMinutes, { futureMinutes = it.filter(Char::isDigit) }, label = { Text("未来分钟") }, modifier = Modifier.width(120.dp), singleLine = true)
-                        if (futureCadence == GoalCadence.ONE_TIME) {
-                            OutlinedTextField(futureDueDate, { futureDueDate = it }, label = { Text("截止日（可选）") }, modifier = Modifier.width(145.dp), singleLine = true)
-                        }
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        GoalCadence.entries.forEach { value ->
-                            if (futureCadence == value) AttentionButton(onClick = {}) { Text(value.label()) }
-                            else AttentionOutlinedButton(onClick = { futureCadence = value }) { Text(value.label()) }
-                        }
-                    }
-                    AttentionButton(onClick = {
-                        futureMinutes.toIntOrNull()?.takeIf { it > 0 }?.let {
-                            val rule = FutureGoalRule(
-                                id = editingFutureRuleId ?: com.attention.domain.newId(),
-                                targetId = parentId!!,
-                                cadence = futureCadence,
-                                targetMinutes = it,
-                                effectiveFrom = futureDate,
-                                dueDate = futureDueDate.trim().takeIf { value -> futureCadence == GoalCadence.ONE_TIME && value.isNotEmpty() },
-                            )
-                            if (editingFutureRuleId == null) {
-                                viewModel.addFutureGoal(rule, planningDate)
-                            } else {
-                                viewModel.updateFutureGoal(rule, planningDate)
-                            }
-                            futureMinutes = ""
-                            futureDueDate = ""
-                            editingFutureRuleId = null
-                        }
-                    }) { Text(if (editingFutureRuleId == null) "保存未来规则" else "更新未来规则") }
-                    state.futureGoalRules.filter { it.targetId == parentId }.forEach { rule ->
-                        val pending = rule.isPending(planningDate)
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                            Text("${rule.effectiveFrom} · ${rule.cadence.label()} ${rule.targetMinutes} 分钟${rule.dueDate?.let { " · 截止 $it" } ?: ""}${if (pending) " · 待生效" else " · 当前/历史"}", Modifier.weight(1f))
-                            if (pending) {
-                                AttentionTextButton(onClick = {
-                                    editingFutureRuleId = rule.id
-                                    futureDate = rule.effectiveFrom
-                                    futureMinutes = rule.targetMinutes.toString()
-                                    futureCadence = rule.cadence
-                                    futureDueDate = rule.dueDate.orEmpty()
-                                }) { Text("编辑") }
-                                AttentionTextButton(onClick = { viewModel.cancelFutureGoal(rule.id, planningDate) }) { Text("取消") }
-                            }
-                        }
-                    }
-                    val parsedPlanningDate = runCatching { LocalDate.parse(selectedPlanningDate) }.getOrNull()
-                    val progressPlanningDate = parsedPlanningDate ?: planningDate
-                    val target = state.targets.firstOrNull { it.id == parentId }
-                    val stages = state.goalStagesForTarget(parentId!!)
-                    val oneTimeSummary = state.goalSummary(parentId!!, progressPlanningDate)
-                    if (stages.isNotEmpty()) {
-                        Text("当前目标进度", style = tokens.typography.body)
-                        OutlinedTextField(
-                            selectedPlanningDate,
-                            { selectedPlanningDate = it },
-                            label = { Text("当前规划日 YYYY-MM-DD") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                        )
-                        if (parsedPlanningDate == null) {
-                            AttentionInlineError(message = "规划日格式无效，请使用 YYYY-MM-DD")
-                        }
-                        if (oneTimeSummary.stageProgresses.isNotEmpty()) {
-                            Text(oneTimeSummary.summaryLabel())
-                        }
-                        stages.forEach { stage ->
-                            val detail = oneTimeSummary.stageProgresses.firstOrNull { it.stage.id == stage.id }
-                            val progress = state.progress(stage, progressPlanningDate)
-                            Text(detail?.let { state.goalProgressLabel(it, progressPlanningDate) } ?: state.goalProgressLabel(stage, progressPlanningDate))
-                            state.stageFeedbackLabels(stage).forEach { label ->
-                                Text(label, modifier = Modifier.padding(start = 16.dp))
-                            }
-                            val availableMigration = runCatching {
-                                state.availableMigrationMinutes(stage, progressPlanningDate)
-                            }.getOrDefault(0)
-                            if (progress.gapMinutes > 0 || state.migrations.any { it.sourceStageId == stage.id }) {
-                                Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
-                                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        Text("目标迁移：缺口 ${progress.gapMinutes} 分钟 · 仍可迁移 $availableMigration 分钟")
-                                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                                            OutlinedTextField(
-                                                migrationMinutes,
-                                                { migrationMinutes = it.filter(Char::isDigit) },
-                                                label = { Text("迁移分钟") },
-                                                modifier = Modifier.width(110.dp).testTag("migration-minutes-${stage.id}"),
-                                                singleLine = true,
-                                            )
-                                            Spacer(Modifier.width(6.dp))
-                                            OutlinedTextField(
-                                                migrationStartDate.ifBlank { state.progressRange(stage, progressPlanningDate).endInclusive.plusDays(1).toString() },
-                                                { migrationStartDate = it },
-                                                label = { Text("目的开始日") },
-                                                modifier = Modifier.width(145.dp),
-                                                singleLine = true,
-                                            )
-                                            Spacer(Modifier.width(6.dp))
-                                            OutlinedTextField(
-                                                migrationEndDate,
-                                                { migrationEndDate = it },
-                                                label = { Text("目的结束日（可选）") },
-                                                modifier = Modifier.width(155.dp),
-                                                singleLine = true,
-                                            )
-                                        }
-                                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                            AttentionButton(
-                                                enabled = migrationMinutes.toIntOrNull()?.let { it > 0 } == true,
-                                                modifier = Modifier.testTag("migration-submit-${stage.id}"),
-                                                onClick = {
-                                                    val minutes = migrationMinutes.toIntOrNull() ?: return@AttentionButton
-                                                    val start = migrationStartDate.ifBlank { state.progressRange(stage, progressPlanningDate).endInclusive.plusDays(1).toString() }
-                                                    val end = migrationEndDate.trim().takeIf(String::isNotEmpty)
-                                                    val current = editingMigration
-                                                    val migration = Migration(
-                                                        id = current?.id ?: com.attention.domain.newId(),
-                                                        targetId = parentId!!,
-                                                        sourceStageId = stage.id,
-                                                        minutes = minutes,
-                                                        destinationStartDate = start,
-                                                        destinationEndDate = end,
-                                                        cancelled = false,
-                                                    )
-                                                    if (current == null) viewModel.addMigration(migration, progressPlanningDate)
-                                                    else viewModel.updateMigration(migration, progressPlanningDate)
-                                                    migrationMinutes = ""
-                                                    migrationStartDate = ""
-                                                    migrationEndDate = ""
-                                                    editingMigration = null
-                                                },
-                                            ) { Text(if (editingMigration == null) "添加迁移" else "保存迁移") }
-                                            if (editingMigration != null) {
-                                                AttentionTextButton(onClick = {
-                                                    editingMigration = null
-                                                    migrationMinutes = ""
-                                                    migrationStartDate = ""
-                                                    migrationEndDate = ""
-                                                }) { Text("取消编辑") }
-                                            }
-                                        }
-                                        state.migrations.filter { it.sourceStageId == stage.id }.forEach { migration ->
-                                            Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                                                val range = migration.destinationEndDate?.let { "${migration.destinationStartDate} 至 $it" } ?: migration.destinationStartDate
-                                                Text("${migration.minutes} 分钟 · $range${if (migration.cancelled) " · 已取消" else ""}", Modifier.weight(1f))
-                                                if (!migration.cancelled) {
-                                                    AttentionTextButton(onClick = {
-                                                        editingMigration = migration
-                                                        migrationMinutes = migration.minutes.toString()
-                                                        migrationStartDate = migration.destinationStartDate
-                                                        migrationEndDate = migration.destinationEndDate.orEmpty()
-                                                    }) { Text("编辑") }
-                                                    AttentionTextButton(onClick = { viewModel.cancelMigration(migration.id) }) { Text("取消迁移") }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        val latest = stages.last()
-                        val latestProgress = state.progress(latest, progressPlanningDate)
-                        if (parsedPlanningDate != null && target?.archived == false && latest.cadence == GoalCadence.ONE_TIME && latestProgress.completed) {
-                            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
-                                Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Text("追加一次性阶段", style = tokens.typography.body)
-                                    Text("起始规划日：$progressPlanningDate")
-                                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                                        OutlinedTextField(
-                                            appendGoalMinutes,
-                                            { appendGoalMinutes = it.filter(Char::isDigit) },
-                                            label = { Text("目标分钟") },
-                                            modifier = Modifier.testTag("append-goal-minutes").width(140.dp),
-                                            singleLine = true,
-                                        )
-                                        Spacer(Modifier.width(8.dp))
-                                        OutlinedTextField(
-                                            appendGoalDueDate,
-                                            { appendGoalDueDate = it },
-                                            label = { Text("截止规划日（可选）") },
-                                            modifier = Modifier.width(155.dp),
-                                            singleLine = true,
-                                        )
-                                        Spacer(Modifier.width(8.dp))
-                                        AttentionButton(
-                                            modifier = Modifier.testTag("append-goal-submit"),
-                                            onClick = {
-                                            viewModel.appendOneTimeGoal(
-                                                targetId = parentId!!,
-                                                minutes = appendGoalMinutes.toIntOrNull() ?: 0,
-                                                startDate = progressPlanningDate.toString(),
-                                                dueDate = appendGoalDueDate.trim().takeIf(String::isNotEmpty),
-                                                onSuccess = {
-                                                    appendGoalMinutes = ""
-                                                    appendGoalDueDate = ""
-                                                },
-                                            )
-                                            },
-                                        ) { Text("追加阶段") }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if (target != null) {
-                        val futureMove = state.pendingTargetMoves(target.id, planningDate).firstOrNull()
-                        if (futureMove != null) {
-                            Text("待生效移动：${futureMove.effectiveFrom} → ${futureMove.parentId?.let { state.targetPath(it, parseTargetMoveDate(futureMove.effectiveFrom)) } ?: "根计划"}")
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                AttentionOutlinedButton(onClick = {
-                                    movingTarget = target
-                                    editingMove = futureMove
-                                    moveParentId = futureMove.parentId
-                                    moveEffectiveDate = futureMove.effectiveFrom
-                                }) { Text("编辑移动") }
-                                AttentionTextButton(onClick = { viewModel.cancelFutureTargetMove(futureMove.id) }) { Text("取消移动") }
-                            }
-                        }
-                        if (target.parentId != null) {
-                        AttentionOutlinedButton(onClick = { viewModel.moveTargetFrom(target.id, null, state.planningDate(Instant.now()).plusDays(1).toString()) }) { Text("从明日起移到根计划") }
-                        }
-                    }
-                }
-            }
-        }
-        renameTarget?.let { target ->
-            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                OutlinedTextField(renameText, { renameText = it }, label = { Text("重命名 ${target.title}") }, modifier = Modifier.weight(1f), singleLine = true)
-                Spacer(Modifier.width(8.dp))
-                AttentionButton(onClick = { if (renameText.isNotBlank()) viewModel.renameTarget(target.id, renameText); renameTarget = null }) { Text("保存") }
-            }
-        }
-        movingTarget?.let { target ->
-            val parsedEffectiveDate = parseTargetMoveDate(moveEffectiveDate)
-            val validEffectiveDate = isFutureTargetMoveDate(moveEffectiveDate, planningDate)
-            val candidateParents = state.futureTargetMoveParents(target.id, moveEffectiveDate, planningDate)
-            val pendingMoves = state.pendingTargetMoves(target.id, planningDate)
-            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
-                Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("移动 ${target.title}：选择新的父目标", style = tokens.typography.body)
-                    OutlinedTextField(
-                        moveEffectiveDate,
-                        { moveEffectiveDate = it },
-                        label = { Text("生效规划日") },
-                        modifier = Modifier.width(160.dp),
-                        singleLine = true,
-                    )
-                    if (!validEffectiveDate) {
-                        AttentionInlineError(message = "生效日必须晚于当前规划日 $planningDate")
-                    }
-                    if (moveParentId == null) AttentionButton(onClick = {}) { Text("移到根计划") }
-                    else AttentionOutlinedButton(onClick = { moveParentId = null }) { Text("移到根计划") }
-                    candidateParents
-                        .sortedBy { state.targetPath(it.id, parsedEffectiveDate ?: planningDate) }
-                        .forEach { candidate ->
-                            if (moveParentId == candidate.id) {
-                                AttentionButton(onClick = {}) { Text("移到：${state.targetPath(candidate.id, parsedEffectiveDate ?: planningDate)}") }
-                            } else {
-                                AttentionOutlinedButton(onClick = { moveParentId = candidate.id }) {
-                                    Text("移到：${state.targetPath(candidate.id, parsedEffectiveDate ?: planningDate)}")
-                                }
-                            }
-                        }
-                    AttentionButton(
-                        enabled = validEffectiveDate,
-                        onClick = {
-                            val effectiveFrom = parsedEffectiveDate?.toString() ?: return@AttentionButton
-                            val existing = editingMove
-                            if (existing == null) {
-                                viewModel.moveTargetFrom(target.id, moveParentId, effectiveFrom)
-                            } else {
-                                viewModel.updateFutureTargetMove(existing.copy(parentId = moveParentId, effectiveFrom = effectiveFrom))
-                            }
-                            movingTarget = null
-                            editingMove = null
-                        },
-                    ) { Text(if (editingMove == null) "保存未来移动" else "保存移动修改") }
-                    if (pendingMoves.isNotEmpty()) {
-                        Text("待生效移动", style = tokens.typography.body)
-                        pendingMoves.forEach { move ->
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                                Text(
-                                    "${move.effectiveFrom} → ${move.parentId?.let { state.targetPath(it, parseTargetMoveDate(move.effectiveFrom)) } ?: "根计划"}",
-                                    Modifier.weight(1f),
-                                )
-                                AttentionTextButton(onClick = {
-                                    editingMove = move
-                                    moveParentId = move.parentId
-                                    moveEffectiveDate = move.effectiveFrom
-                                }) { Text("编辑") }
-                                AttentionTextButton(onClick = { viewModel.cancelFutureTargetMove(move.id) }) { Text("取消") }
-                            }
-                        }
-                    }
-                    AttentionTextButton(onClick = { movingTarget = null }) { Text("取消移动") }
-                }
-            }
-        }
-        TargetTree(
-            state,
-            viewModel,
-            null,
-            0,
-            chooseParent = { parentId = it },
-            rename = { target -> renameTarget = target; renameText = target.title },
-            move = {
-                movingTarget = it
-                editingMove = null
-                moveParentId = state.parentAt(it.id, planningDate)
-                moveEffectiveDate = planningDate.plusDays(1).toString()
-            },
-        )
-        if (state.targets.none { !it.archived }) Text("还没有计划。")
-        val archivedTargets = state.targets.filter { it.archived }
-        if (archivedTargets.isNotEmpty()) {
-            Text("已归档目标", style = tokens.typography.title)
-            Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                Text("已选 ${selectedArchivedIds.size} 个", Modifier.weight(1f))
-                AttentionTextButton(onClick = { selectedArchivedIds = archivedTargets.map { it.id }.toSet() }) { Text("全选") }
-                AttentionTextButton(onClick = { selectedArchivedIds = emptySet() }) { Text("清除选择") }
-                AttentionButton(
-                    modifier = Modifier.testTag("restore-archived-selected"),
-                    enabled = selectedArchivedIds.isNotEmpty(),
-                    onClick = { viewModel.restoreTargets(selectedArchivedIds); selectedArchivedIds = emptySet() },
-                ) { Text("批量恢复") }
-                AttentionButton(
-                    modifier = Modifier.testTag("delete-archived-selected"),
-                    enabled = selectedArchivedIds.isNotEmpty(),
-                    onClick = { pendingDeleteIds = selectedArchivedIds },
-                ) { Text("批量安全删除") }
-            }
-            archivedTargets.forEach { target ->
-                Column(Modifier.fillMaxWidth()) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                        Checkbox(
-                            checked = target.id in selectedArchivedIds,
-                            onCheckedChange = { checked ->
-                                selectedArchivedIds = if (checked) selectedArchivedIds + target.id else selectedArchivedIds - target.id
-                            },
-                        )
-                        Text(target.title, Modifier.weight(1f))
-                        AttentionTextButton(onClick = { viewModel.restoreTargets(setOf(target.id)) }) { Text("恢复") }
-                        AttentionTextButton(onClick = { pendingDelete = target }) { Text("安全删除") }
-                    }
-                    Text("层级：${state.targetPath(target.id)}", modifier = Modifier.padding(start = 16.dp))
-                    val historicalMinutes = state.timeEntries
-                        .filter { it.targetId in state.descendantIds(target.id) }
-                        .sumOf { it.durationMinutes }
-                    Text("历史投入：$historicalMinutes 分钟", modifier = Modifier.padding(start = 16.dp))
-                    val planningDate = state.planningDate(Instant.now())
-                    val stages = state.goalStagesForTarget(target.id)
-                    val oneTimeSummary = state.goalSummary(target.id, planningDate)
-                    if (oneTimeSummary.stageProgresses.isNotEmpty()) {
-                        Text("历史进度：${oneTimeSummary.summaryLabel()}", modifier = Modifier.padding(start = 16.dp))
-                    }
-                    stages.forEach { stage ->
-                        val detail = oneTimeSummary.stageProgresses.firstOrNull { it.stage.id == stage.id }
-                        Text(
-                            "历史进度：${detail?.let { state.goalProgressLabel(it, planningDate) } ?: state.goalProgressLabel(stage, planningDate)}",
-                            modifier = Modifier.padding(start = 16.dp),
-                        )
-                        state.stageFeedbackLabels(stage).forEach { label ->
-                            Text(label, modifier = Modifier.padding(start = 32.dp))
-                        }
-                    }
-                }
-            }
-        } else {
-            Text("暂无归档目标", modifier = Modifier.testTag("archived-empty-state"))
-        }
-    }
-    val deleteIds = pendingDeleteIds.ifEmpty { pendingDelete?.let { setOf(it.id) } ?: emptySet() }
-    if (deleteIds.isNotEmpty()) {
-        val impact = state.targetDeletionImpact(deleteIds)
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { pendingDelete = null; pendingDeleteIds = emptySet() },
-            title = { Text(if (deleteIds.size == 1) "删除目标关系？" else "批量删除目标关系？") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("将删除所选目标及其后代，共 ${impact.targetCount} 个目标。")
-                    Text("影响：时间记录 ${impact.timeEntryCount} 条，日程 ${impact.scheduleEntryCount} 条，重复日程 ${impact.recurrenceRuleCount} 条。")
-                    Text("目标阶段 ${impact.goalStageCount} 个，未来规则 ${impact.futureGoalRuleCount} 条，迁移 ${impact.migrationCount} 条，未来移动 ${impact.targetMoveCount} 条。")
-                    Text("活动计时器 ${impact.activeTimerCount} 个。时间记录会转为未归属活动，日程保留但解除目标关联。投入经验和里程碑保留。")
-                }
-            },
-            confirmButton = {
-                AttentionTextButton(onClick = {
-                    viewModel.deleteTargetRelations(deleteIds)
-                    pendingDelete = null
-                    pendingDeleteIds = emptySet()
-                    selectedArchivedIds = emptySet()
-                }) { Text("确认删除") }
-            },
-            dismissButton = { AttentionTextButton(onClick = { pendingDelete = null; pendingDeleteIds = emptySet() }) { Text("取消") } },
-        )
-    }
-}
-
-@Composable
-private fun TargetTree(
-    state: AttentionState,
-    viewModel: AttentionViewModel,
-    parentId: String?,
-    depth: Int,
-    chooseParent: (String) -> Unit,
-    rename: (Target) -> Unit,
-    move: (Target) -> Unit,
-) {
-    val planningDate = state.planningDate(Instant.now())
-    state.targetChildren(parentId, planningDate).forEach { target ->
-        val children = state.targetChildren(target.id, planningDate)
-        val pendingMove = state.pendingTargetMoves(target.id, planningDate).firstOrNull()
-        Column(Modifier.padding(start = (depth * 16).dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                Text(if (children.isEmpty()) "•" else if (target.expanded) "▾" else "▸")
-                Spacer(Modifier.width(6.dp))
-                Text(target.title, modifier = Modifier.weight(1f))
-                Text("直接 ${state.directMinutes(target.id)} / 汇总 ${state.subtreeMinutes(target.id)} 分钟")
-            }
-            pendingMove?.let { move ->
-                Text(
-                    "待移动：${move.effectiveFrom} → ${move.parentId?.let { state.targetPath(it, parseTargetMoveDate(move.effectiveFrom)) } ?: "根计划"}",
-                    modifier = Modifier.padding(start = 22.dp),
-                )
-            }
-            val stages = state.goalStagesForTarget(target.id)
-            val oneTimeSummary = state.goalSummary(target.id, planningDate)
-            if (oneTimeSummary.stageProgresses.isNotEmpty()) {
-                Text(oneTimeSummary.summaryLabel(), modifier = Modifier.padding(start = 22.dp))
-            }
-            stages.forEach { stage ->
-                val detail = oneTimeSummary.stageProgresses.firstOrNull { it.stage.id == stage.id }
-                Text(
-                    detail?.let { state.goalProgressLabel(it, planningDate) } ?: state.goalProgressLabel(stage, planningDate),
-                    modifier = Modifier.padding(start = 22.dp),
-                )
-                state.stageFeedbackLabels(stage).forEach { label ->
-                    Text(label, modifier = Modifier.padding(start = 38.dp))
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                AttentionTextButton(onClick = { viewModel.toggleTarget(target.id, !target.expanded) }) { Text(if (target.expanded) "折叠" else "展开") }
-                AttentionTextButton(onClick = { chooseParent(target.id) }) { Text("添加子计划") }
-                AttentionTextButton(onClick = { rename(target) }) { Text("重命名") }
-                AttentionTextButton(onClick = { move(target) }) { Text("移动") }
-                val siblings = state.targetChildren(parentId, planningDate)
-                val index = siblings.indexOf(target)
-                if (index > 0) AttentionTextButton(onClick = { viewModel.reorderTarget(target.id, index - 1) }) { Text("上移") }
-                if (index < siblings.lastIndex) AttentionTextButton(onClick = { viewModel.reorderTarget(target.id, index + 1) }) { Text("下移") }
-                AttentionTextButton(onClick = { viewModel.archiveTarget(target.id) }) { Text("归档") }
-            }
-            if (target.expanded) TargetTree(state, viewModel, target.id, depth + 1, chooseParent, rename, move)
         }
     }
 }
@@ -2153,18 +1710,6 @@ internal fun initialLaunchDestination(
 
 internal fun shouldPersistLastOpened(settingsLoaded: Boolean, settingsOpen: Boolean): Boolean =
     settingsLoaded && !settingsOpen
-
-private fun AttentionState.targetPath(targetId: String, onDate: LocalDate? = null): String {
-    val names = mutableListOf<String>()
-    val seen = mutableSetOf<String>()
-    var current = targets.firstOrNull { it.id == targetId }
-    while (current != null && seen.add(current.id)) {
-        names += current.title
-        val parentId = onDate?.let { parentAt(current.id, it) } ?: current.parentId
-        current = parentId?.let { id -> targets.firstOrNull { it.id == id } }
-    }
-    return names.asReversed().joinToString(" / ")
-}
 
 private fun ScheduleFrequency.label(): String = when (this) {
     ScheduleFrequency.DAILY -> "每日"
