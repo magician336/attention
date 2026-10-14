@@ -25,12 +25,16 @@ import com.attention.app.ui.theme.attentionTokens
  * 内联错误：把校验错误显示在出错的位置附近，而不是只在页面顶部报错一次。
  *
  * 错误同时带图标与文案，色弱用户也能看懂哪里出了问题。
+ *
+ * [messageTag] 让已经对外承诺过标识的页面继续用它自己的标识：界面测试通常按标识定位错误文案，
+ * 让页面为了套用共用组件而改标识会让这些测试失效。默认仍然是用共用标识。
  */
 @Composable
 fun AttentionInlineError(
     message: String,
     retryLabel: String = "重试",
     onRetry: (() -> Unit)? = null,
+    messageTag: String = AttentionFeedbackTags.INLINE_ERROR_MESSAGE,
     modifier: Modifier = Modifier,
 ) {
     val tokens = attentionTokens()
@@ -54,7 +58,7 @@ fun AttentionInlineError(
                 text = message,
                 style = tokens.typography.caption,
                 color = tokens.brand.error.onContainer,
-                modifier = Modifier.testTag(AttentionFeedbackTags.INLINE_ERROR_MESSAGE),
+                modifier = Modifier.testTag(messageTag),
             )
         }
         if (onRetry != null) {
