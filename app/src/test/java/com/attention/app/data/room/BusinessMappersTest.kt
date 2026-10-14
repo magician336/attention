@@ -18,6 +18,7 @@ import com.attention.domain.TimeEntry
 import com.attention.domain.TimeEntrySource
 import com.attention.domain.TimerSegment
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class BusinessMappersTest {
@@ -60,5 +61,33 @@ class BusinessMappersTest {
         val stage = GoalStage("one-time", "target", GoalCadence.ONE_TIME, 240, "2026-10-10", "2026-10-12")
 
         assertEquals(stage, stage.toEntity().toDomain())
+    }
+
+    @Test
+    fun every_time_entry_source_round_trips_with_its_schedule_link() {
+        val backfilled = TimeEntry("manual", "2026-10-02", 30, "target", TimeEntrySource.MANUAL, note = "补记")
+        val confirmed = TimeEntry("confirmed", "2026-10-02", 45, "target", TimeEntrySource.SCHEDULE_CONFIRMED, scheduleEntryId = "schedule")
+        val imported = TimeEntry("imported", "2026-10-02", 20, "target", TimeEntrySource.IMPORT)
+        val timed = TimeEntry("timed", "2026-10-02", 60, "target", TimeEntrySource.TIMER, 123L, scheduleEntryId = "schedule")
+
+        listOf(backfilled, confirmed, imported, timed).forEach { entry ->
+            assertEquals(entry, entry.toEntity().toDomain())
+        }
+
+        val linked = confirmed.toEntity()
+        assertEquals("schedule", linked.scheduleEntryId)
+        assertNull(backfilled.toEntity().scheduleEntryId)
+        assertEquals(TimeEntrySource.SCHEDULE_CONFIRMED, TimeEntrySource.valueOf(linked.source))
+    }
+
+    @Test
+    fun active_timer_round_trips_with_and_without_a_schedule_link() {
+        val bound = ActiveTimer("target", 100L, 200L, paused = true, "2026-10-02", listOf(TimerSegment(100L, 200L)), scheduleEntryId = "schedule")
+        val global = ActiveTimer(null, 100L, 200L, paused = true, "2026-10-02", listOf(TimerSegment(100L, 200L)))
+
+        assertEquals(bound, bound.toEntity().toDomain())
+        assertEquals(global, global.toEntity().toDomain())
+        assertEquals("schedule", bound.toEntity().scheduleEntryId)
+        assertNull(global.toEntity().scheduleEntryId)
     }
 }

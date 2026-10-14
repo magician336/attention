@@ -42,9 +42,9 @@ fun GoalStage.toEntity() = GoalStageEntity(id, targetId, cadence.name, targetMin
 
 fun GoalStageEntity.toDomain() = GoalStage(id, targetId, GoalCadence.valueOf(cadence), targetMinutes, startDate, dueDate, completed)
 
-fun TimeEntry.toEntity() = TimeEntryEntity(id, planningDate, durationMinutes, targetId, source.name, occurredAtEpochMillis, note)
+fun TimeEntry.toEntity() = TimeEntryEntity(id, planningDate, durationMinutes, targetId, source.name, occurredAtEpochMillis, note, scheduleEntryId)
 
-fun TimeEntryEntity.toDomain() = TimeEntry(id, planningDate, durationMinutes, targetId, TimeEntrySource.valueOf(source), occurredAtEpochMillis, note)
+fun TimeEntryEntity.toDomain() = TimeEntry(id, planningDate, durationMinutes, targetId, TimeEntrySource.valueOf(source), occurredAtEpochMillis, note, scheduleEntryId)
 
 fun ScheduleEntry.toEntity() = ScheduleEntryEntity(id, planningDate, title, startMinute, endMinute, estimatedMinutes, note, targetId, completed, reminderEpochMillis, recurrenceRuleId)
 
@@ -131,6 +131,7 @@ fun ActiveTimer.toEntity() = ActiveTimerEntity(
     paused = paused,
     lastPlanningDate = lastPlanningDate,
     completedSegmentsJson = roomJson.encodeToString(timerSegmentListSerializer, completedSegments),
+    scheduleEntryId = scheduleEntryId,
 )
 
 fun ActiveTimerEntity.toDomain() = ActiveTimer(
@@ -140,4 +141,5 @@ fun ActiveTimerEntity.toDomain() = ActiveTimer(
     paused = paused,
     lastPlanningDate = lastPlanningDate,
     completedSegments = roomJson.decodeFromString(timerSegmentListSerializer, completedSegmentsJson),
+    scheduleEntryId = scheduleEntryId,
 )
