@@ -80,17 +80,24 @@ import com.attention.app.ui.format.TimeEntrySourceFormat
 import com.attention.app.ui.format.TimeRecordTags
 import com.attention.app.ui.theme.attentionTokens
 import com.attention.app.settings.SettingsScreen
+import com.attention.app.statistics.StatisticsScreen
 import com.attention.workspace.state.SettingsActions
+import com.attention.workspace.state.StatisticsActions
+import com.attention.workspace.state.cumulativeFeedbackLabel
+import com.attention.workspace.state.goalProgressLabel
+import com.attention.workspace.state.label
 import com.attention.workspace.state.resolveLaunchDestination
 import com.attention.workspace.state.settingsScreenState
+import com.attention.workspace.state.shiftStatisticsPeriod
+import com.attention.workspace.state.stageFeedbackLabels
+import com.attention.workspace.state.statisticsScreenState
+import com.attention.workspace.state.summaryLabel
 import com.attention.domain.AttentionState
 import com.attention.domain.CapacitySummary
 import com.attention.domain.availableMigrationMinutes
 import com.attention.domain.GoalCadence
 import com.attention.domain.FutureGoalRule
 import com.attention.domain.GoalStage
-import com.attention.domain.GoalStageSummary
-import com.attention.domain.GoalSummary
 import com.attention.domain.LaunchDestination
 import com.attention.domain.Migration
 import com.attention.domain.ScheduleEntry
@@ -105,26 +112,21 @@ import com.attention.domain.capacitySummary
 import com.attention.domain.agendaEntries
 import com.attention.domain.directMinutes
 import com.attention.domain.descendantIds
-import com.attention.domain.effectiveStage
 import com.attention.domain.futureTargetMoveParents
 import com.attention.domain.goalRulesAt
 import com.attention.domain.isFutureTargetMoveDate
 import com.attention.domain.isPending
 import com.attention.domain.goalStagesForTarget
 import com.attention.domain.goalSummary
-import com.attention.domain.levelProgressForExperience
 import com.attention.domain.parseTargetMoveDate
 import com.attention.domain.pendingTargetMoves
 import com.attention.domain.planningDate
-import com.attention.domain.periodStats
 import com.attention.domain.parentAt
 import com.attention.domain.progress
 import com.attention.domain.progressRange
-import com.attention.domain.recentMilestones
 import com.attention.domain.reminderEpochMillis
 import com.attention.domain.subtreeMinutes
 import com.attention.domain.targetChildren
-import com.attention.domain.oneTimeStageMilestones
 import com.attention.domain.timerSettlementPreview
 import com.attention.domain.timerTargetLabel
 import java.time.Instant
@@ -150,6 +152,75 @@ private class WorkspaceViewModelFactory(
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T = AttentionViewModel(repository) as T
+}
+
+/**
+ * 统计页的周期选择。null 表示还没选过，投影会跟随组合根注入的当前规划日。
+ * 它只属于统计页，所以留在组合根的页面状态里，页面自身仍然只渲染与发 intent。
+ */
+private class StatisticsSelectionHolder {
+    var selectedDate by mutableStateOf<LocalDate?>(null)
+    var cadence by mutableStateOf(GoalCadence.DAILY)
+}
+
+/**
+ * 统计页的 actions adapter，在组合根一侧组装：页面发出 intent，这里落到 ViewModel、
+ * 周期位移与 SAF 文件选择器。ViewModel 与平台能力因此只出现在组合根侧。
+ */
+private class StatisticsActionsAdapter(
+    private val viewModel: AttentionViewModel,
+    private val selection: StatisticsSelectionHolder,
+    private val currentDate: () -> LocalDate,
+    private val onPreviewJsonBackup: () -> Unit,
+    private val onImportJson: () -> Unit,
+    private val onExportTimeEntriesCsv: () -> Unit,
+    private val onPreviewCsv: () -> Unit,
+    private val onExportSchedulesCsv: () -> Unit,
+    private val onExportCsvBundle: () -> Unit,
+) : StatisticsActions {
+    override fun selectPreviousPeriod() = shift(-1)
+
+    override fun selectNextPeriod() = shift(1)
+
+    private fun shift(amount: Long) {
+        selection.selectedDate = shiftStatisticsPeriod(currentDate(), selection.cadence, amount)
+    }
+
+    override fun selectCadence(cadence: GoalCadence) {
+        selection.cadence = cadence
+    }
+
+    override fun settlePeriodSnapshots() {
+        viewModel.settlePeriodSnapshots()
+    }
+
+    override fun cancelMigration(migrationId: String) {
+        viewModel.cancelMigration(migrationId)
+    }
+
+    override fun awardMilestones() {
+        viewModel.awardMilestones()
+    }
+
+    override fun selectLaunchDestination(destination: LaunchDestination) {
+        viewModel.setLaunchDestination(destination)
+    }
+
+    override fun restoreLastImportBackup() {
+        viewModel.restoreLastImportBackup()
+    }
+
+    override fun previewJsonBackup() = onPreviewJsonBackup()
+
+    override fun importJson() = onImportJson()
+
+    override fun exportTimeEntriesCsv() = onExportTimeEntriesCsv()
+
+    override fun previewCsv() = onPreviewCsv()
+
+    override fun exportSchedulesCsv() = onExportSchedulesCsv()
+
+    override fun exportCsvBundle() = onExportCsvBundle()
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -321,6 +392,54 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     }
     androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.restoreReminders() }
 
+    // 统计页的周期选择挂在组合根，页面只渲染投影并发出 intent。
+    val statisticsSelection = remember { StatisticsSelectionHolder() }
+    val statisticsState = statisticsScreenState(
+        state = state,
+        now = Instant.now(),
+        zone = ZoneId.systemDefault(),
+        selectedDate = statisticsSelection.selectedDate,
+        cadence = statisticsSelection.cadence,
+    )
+    val currentStatisticsDate by androidx.compose.runtime.rememberUpdatedState(statisticsState.selectedDate)
+    val statisticsActions: StatisticsActions = remember(viewModel) {
+        StatisticsActionsAdapter(
+            viewModel = viewModel,
+            selection = statisticsSelection,
+            currentDate = { currentStatisticsDate },
+            onPreviewJsonBackup = {
+                jsonExportMessage = null
+                viewModel.exportJson {
+                    jsonPreview = it.take(800)
+                    pendingJsonBackup = it
+                    jsonExportLauncher.launch("attention-backup.json")
+                }
+            },
+            onImportJson = { importLauncher.launch(arrayOf("application/json", "text/plain")) },
+            onExportTimeEntriesCsv = {
+                viewModel.exportTimeEntriesCsv { csv ->
+                    pendingTimeEntriesCsv = csv
+                    timeEntriesCsvLauncher.launch("time_entries.csv")
+                }
+            },
+            onPreviewCsv = { viewModel.exportCsv { time, schedules -> csvPreview = "时间记录\n$time\n日程\n$schedules" } },
+            onExportSchedulesCsv = {
+                scheduleExportMessage = null
+                viewModel.exportSchedulesCsv { csv ->
+                    pendingScheduleCsv = csv
+                    scheduleExportLauncher.launch("attention-schedules.csv")
+                }
+            },
+            onExportCsvBundle = {
+                csvBundleMessage = null
+                viewModel.exportCsvBundle { bundle ->
+                    pendingCsvBundle = bundle
+                    combinedTimeExportLauncher.launch("time_entries.csv")
+                }
+            },
+        )
+    }
+
     fun startTimerFromSchedule(entry: ScheduleEntry) {
         viewModel.startTimer(
             targetId = entry.targetId,
@@ -392,39 +511,8 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                     onStartTimer = ::startTimerFromSchedule,
                 )
                 LaunchDestination.STATISTICS -> StatisticsScreen(
-                    state = state,
-                    viewModel = viewModel,
-                    onExportJson = {
-                        jsonExportMessage = null
-                        viewModel.exportJson {
-                            jsonPreview = it.take(800)
-                            pendingJsonBackup = it
-                            jsonExportLauncher.launch("attention-backup.json")
-                        }
-                    },
-                    onExportTimeEntriesCsv = {
-                        viewModel.exportTimeEntriesCsv { csv ->
-                            pendingTimeEntriesCsv = csv
-                            timeEntriesCsvLauncher.launch("time_entries.csv")
-                        }
-                    },
-                    onExportCsv = { viewModel.exportCsv { time, schedules -> csvPreview = "时间记录\n$time\n日程\n$schedules" } },
-                    onExportSchedulesCsv = {
-                        scheduleExportMessage = null
-                        viewModel.exportSchedulesCsv { csv ->
-                            pendingScheduleCsv = csv
-                            scheduleExportLauncher.launch("attention-schedules.csv")
-                        }
-                    },
-                    onExportCsvBundle = {
-                        csvBundleMessage = null
-                        viewModel.exportCsvBundle { bundle ->
-                            pendingCsvBundle = bundle
-                            combinedTimeExportLauncher.launch("time_entries.csv")
-                        }
-                    },
-                    onImportJson = { importLauncher.launch(arrayOf("application/json", "text/plain")) },
-                    onRestoreImportBackup = { viewModel.restoreLastImportBackup() },
+                    state = statisticsState,
+                    actions = statisticsActions,
                 )
             }
             jsonPreview?.let { Text("JSON 预览：\n$it", modifier = Modifier.padding(16.dp)) }
@@ -2059,135 +2147,6 @@ private fun validateScheduleForm(input: ScheduleFormInput): String? = when {
     else -> null
 }
 
-@Composable
-private fun StatisticsScreen(
-    state: AttentionState,
-    viewModel: AttentionViewModel,
-    onExportJson: () -> Unit,
-    onExportTimeEntriesCsv: () -> Unit,
-    onExportCsv: () -> Unit,
-    onExportSchedulesCsv: () -> Unit,
-    onExportCsvBundle: () -> Unit,
-    onImportJson: () -> Unit,
-    onRestoreImportBackup: () -> Unit,
-) {
-    val tokens = attentionTokens()
-    var selectedDate by remember { mutableStateOf(state.planningDate(Instant.now())) }
-    var cadence by remember { mutableStateOf(GoalCadence.DAILY) }
-    val stats = state.periodStats(selectedDate, cadence)
-    val visibleMigrations = state.migrations.filterNot { it.cancelled }.filter { migration ->
-        val start = LocalDate.parse(migration.destinationStartDate)
-        val end = migration.destinationEndDate?.let(LocalDate::parse) ?: start
-        start <= stats.range.endInclusive && end >= stats.range.start
-    }
-    val statisticsCadences = listOf(GoalCadence.DAILY, GoalCadence.WEEKLY, GoalCadence.MONTHLY)
-    val levelProgress = levelProgressForExperience(state.experience)
-    val levelSpan = levelProgress.nextLevelThreshold - levelProgress.currentLevelThreshold
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(tokens.spacing.large), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("统计与成长", style = tokens.typography.display)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            AttentionTextButton(onClick = { selectedDate = shiftStatisticsDate(selectedDate, cadence, -1) }) { Text("上一周期") }
-            Text("${stats.range.start} 至 ${stats.range.endInclusive}")
-            AttentionTextButton(onClick = { selectedDate = shiftStatisticsDate(selectedDate, cadence, 1) }) { Text("下一周期") }
-        }
-        Text("历史周期快照", style = tokens.typography.title)
-        Text("快照保存周期结束时的目标、实际投入、缺口和达成结果；重复结算不会新增记录。")
-        AttentionButton(onClick = viewModel::settlePeriodSnapshots) { Text("结算已结束周期") }
-        if (state.periodSnapshots.isEmpty()) {
-            Text("还没有已保存的周期快照。")
-        } else {
-            state.periodSnapshots.sortedWith(compareBy({ it.periodStart }, { it.id })).forEach { snapshot ->
-                val targetLabel = state.targets.firstOrNull { it.id == snapshot.targetId }?.title
-                    ?: "已删除目标 ${snapshot.targetId.take(8)}"
-                Text(
-                    "$targetLabel · ${snapshot.cadence.label()} ${snapshot.periodStart}～${snapshot.periodEnd}：" +
-                        "${snapshot.actualMinutes}/${snapshot.targetMinutes} 分钟" +
-                        if (snapshot.completed) " · 达成" else " · 缺口 ${snapshot.gapMinutes}",
-                )
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            statisticsCadences.forEach { value ->
-                if (cadence == value) AttentionButton(onClick = {}) { Text(value.label()) }
-                else AttentionOutlinedButton(onClick = { cadence = value }) { Text(value.label()) }
-            }
-        }
-        Text("实际 ${stats.actualMinutes} 分钟 · 目标 ${stats.targetMinutes} 分钟 · 缺口 ${stats.targetMinutes.minus(stats.actualMinutes).coerceAtLeast(0)} 分钟 · 超额 ${stats.excessMinutes} 分钟")
-        Text("未归属活动：${stats.unownedMinutes} 分钟")
-        Text("迁移目标：${stats.migrationMinutes} 分钟")
-        visibleMigrations.forEach { migration ->
-            Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                Text("主动迁移 ${migration.minutes} 分钟 · ${migration.destinationStartDate}", Modifier.weight(1f))
-                AttentionTextButton(onClick = { viewModel.cancelMigration(migration.id) }) { Text("取消") }
-            }
-        }
-        Text("目标树投入", style = tokens.typography.title)
-        state.targets.forEach { target ->
-            val direct = stats.byTargetMinutes[target.id] ?: 0
-            val subtree = stats.subtreeByTargetMinutes[target.id] ?: 0
-            val archivedLabel = if (target.archived) "（已归档）" else ""
-            Text("${target.title}$archivedLabel：$subtree 分钟 · 直接投入 $direct 分钟 · 子树汇总 $subtree 分钟")
-        }
-        Text("投入经验：${state.experience} · 等级 ${levelProgress.level}")
-        Text("当前等级区间进度：${levelProgress.progressExperience}/${levelSpan} 点")
-        Text("下一等级门槛：${levelProgress.nextLevelThreshold} 点")
-        Text("剩余经验：${levelProgress.remainingExperience} 点")
-        Text(
-            if (levelProgress.level > 1) {
-                "升级反馈：已达到等级 ${levelProgress.level}"
-            } else {
-                "升级反馈：达到下一等级门槛后会显示"
-            },
-        )
-        AttentionButton(onClick = viewModel::awardMilestones) { Text("结算可达成里程碑") }
-        AttentionOutlinedButton(onClick = onRestoreImportBackup) { Text("恢复最近一次导入前备份") }
-        Text("累计投入里程碑", style = tokens.typography.title)
-        val cumulativeMilestones = state.milestones
-            .filter { it.kind == "cumulative" }
-            .sortedWith(compareBy({ it.achievedAtEpochMillis }, { it.id }))
-            .distinctBy { it.instanceKey }
-        if (cumulativeMilestones.isEmpty()) {
-            Text("还没有累计投入里程碑。")
-        } else {
-            cumulativeMilestones.forEach { milestone ->
-                Text(milestone.cumulativeFeedbackLabel())
-            }
-        }
-        state.recentMilestones().forEach { milestone ->
-            Text("里程碑 ${milestone.kind}：+${milestone.reward}（${milestone.instanceKey}）")
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AttentionButton(onClick = onExportJson) { Text("预览 JSON 备份") }
-            AttentionOutlinedButton(onClick = onImportJson) { Text("导入 JSON") }
-            AttentionOutlinedButton(onClick = onExportTimeEntriesCsv) { Text("导出时间记录 CSV") }
-            AttentionOutlinedButton(onClick = onExportCsv) { Text("预览 CSV") }
-            AttentionOutlinedButton(onClick = onExportSchedulesCsv) { Text("导出日程 CSV") }
-            AttentionOutlinedButton(onClick = onExportCsvBundle) { Text("导出两个 CSV 文件") }
-        }
-        Text("首屏入口", style = tokens.typography.title)
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            listOf(LaunchDestination.TODAY to "今天", LaunchDestination.TARGETS to "目标树", LaunchDestination.ALL_DATES to "所有日期", LaunchDestination.STATISTICS to "统计", LaunchDestination.LAST_OPENED to "上次打开").forEach { (value, label) ->
-                AttentionOutlinedButton(onClick = { viewModel.setLaunchDestination(value) }) { Text(label) }
-            }
-        }
-        state.targets.filter { !it.archived }.forEach { target ->
-            val stages = state.goalStagesForTarget(target.id)
-            val oneTimeSummary = state.goalSummary(target.id, selectedDate)
-            if (oneTimeSummary.stageProgresses.isNotEmpty()) {
-                Text(oneTimeSummary.summaryLabel())
-            }
-            stages.forEach { stage ->
-                val detail = oneTimeSummary.stageProgresses.firstOrNull { it.stage.id == stage.id }
-                Text(detail?.let { state.goalProgressLabel(it, selectedDate) } ?: state.goalProgressLabel(stage, selectedDate))
-                state.stageFeedbackLabels(stage).forEach { label ->
-                    Text(label, modifier = Modifier.padding(start = 16.dp))
-                }
-            }
-        }
-        if (state.targets.isEmpty()) Text("创建计划后，这里会显示目标投入和阶段达成情况。")
-    }
-}
-
 internal fun initialLaunchDestination(
     hasExternalScheduleRequest: Boolean,
     requested: LaunchDestination,
@@ -2201,66 +2160,6 @@ internal fun initialLaunchDestination(
 internal fun shouldPersistLastOpened(settingsLoaded: Boolean, settingsOpen: Boolean): Boolean =
     settingsLoaded && !settingsOpen
 
-private fun shiftStatisticsDate(date: LocalDate, cadence: GoalCadence, amount: Long): LocalDate = when (cadence) {
-    GoalCadence.DAILY -> date.plusDays(amount)
-    GoalCadence.WEEKLY -> date.plusWeeks(amount)
-    GoalCadence.MONTHLY -> date.plusMonths(amount)
-    GoalCadence.ONE_TIME -> date
-}
-
-private fun AttentionState.goalProgressLabel(stage: GoalStage, planningDate: LocalDate): String =
-    goalProgressLabel(GoalStageSummary(stage, progress(stage, planningDate)), planningDate)
-
-private fun AttentionState.goalProgressLabel(detail: GoalStageSummary, planningDate: LocalDate): String {
-    val stage = detail.stage
-    val effectiveStage = effectiveStage(stage, planningDate)
-    val progress = detail.progress
-    val progressRange = progressRange(stage, planningDate)
-    val stageStart = LocalDate.parse(effectiveStage.startDate)
-    val rangeLabel = when (effectiveStage.cadence) {
-        GoalCadence.ONE_TIME -> {
-            val boundaryLabel = when {
-                effectiveStage.dueDate != null -> " · 截止 ${effectiveStage.dueDate}"
-                progressRange.endInclusive.isBefore(planningDate) -> " · 阶段封闭于 ${progressRange.endInclusive}"
-                else -> " · 开放"
-            }
-            "范围 ${progressRange.start} 至 ${progressRange.endInclusive}$boundaryLabel"
-        }
-        else -> "周期 ${progressRange.start} 至 ${progressRange.endInclusive}"
-    }
-    return if (planningDate.isBefore(stageStart)) {
-        "${effectiveStage.cadence.label()}目标 0/${effectiveStage.targetMinutes} 分钟 · 尚未开始 · 生效日 $stageStart · $rangeLabel"
-    } else {
-        val status = when {
-            progress.excessMinutes > 0 -> "达成 · 超额 ${progress.excessMinutes} 分钟"
-            progress.completed -> "达成"
-            else -> "缺口 ${progress.gapMinutes} 分钟"
-        }
-        "${effectiveStage.cadence.label()}目标 ${progress.actualMinutes}/${progress.targetMinutes} 分钟 · $rangeLabel · $status"
-    }
-}
-
-private fun GoalSummary.summaryLabel(): String =
-    "一次性阶段汇总：实际 ${actualMinutes}/${targetMinutes} 分钟 · 缺口 ${gapMinutes} 分钟 · 超额投入 ${excessMinutes} 分钟 · ${if (completed) "达成" else "未达成"}"
-
-private fun AttentionState.stageFeedbackLabels(stage: GoalStage): List<String> =
-    if (stage.cadence != GoalCadence.ONE_TIME) {
-        emptyList()
-    } else {
-        oneTimeStageMilestones(stage.id).map { milestone ->
-            "阶段达成反馈：${stage.startDate} · +${milestone.reward} 投入经验 · 来源：一次性阶段"
-        }
-    }
-
-private fun com.attention.domain.Milestone.cumulativeFeedbackLabel(): String {
-    val hours = instanceKey.substringAfter("cumulative:", "").toLongOrNull()
-    return if (hours != null) {
-        "累计投入里程碑：$hours 小时 · +$reward 投入经验"
-    } else {
-        "累计投入里程碑：+${reward} 投入经验"
-    }
-}
-
 private fun AttentionState.targetPath(targetId: String, onDate: LocalDate? = null): String {
     val names = mutableListOf<String>()
     val seen = mutableSetOf<String>()
@@ -2271,13 +2170,6 @@ private fun AttentionState.targetPath(targetId: String, onDate: LocalDate? = nul
         current = parentId?.let { id -> targets.firstOrNull { it.id == id } }
     }
     return names.asReversed().joinToString(" / ")
-}
-
-private fun GoalCadence.label(): String = when (this) {
-    GoalCadence.DAILY -> "每日"
-    GoalCadence.WEEKLY -> "每周"
-    GoalCadence.MONTHLY -> "每月"
-    GoalCadence.ONE_TIME -> "一次性"
 }
 
 private fun ScheduleFrequency.label(): String = when (this) {
