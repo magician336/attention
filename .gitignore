@@ -6,3 +6,4 @@ local.properties
 .idea/
 .codex-worktree-setup.log
 .Codex/environments/
+.kotlin/
