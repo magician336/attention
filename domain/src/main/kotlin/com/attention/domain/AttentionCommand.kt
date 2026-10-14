@@ -45,6 +45,26 @@ sealed interface AttentionCommand {
             )
         }
     }
+
+    /** Confirms one planned entry as actual invested time. */
+    data class ConfirmSchedule(
+        val entryId: String,
+        val durationMinutes: Int? = null,
+    ) : AttentionCommand {
+        override fun execute(
+            state: AttentionState,
+            now: Instant,
+            zone: ZoneId,
+        ): AttentionCommandResult {
+            val nextState = state.confirmScheduleCompleted(entryId, durationMinutes)
+            val entry = nextState.timeEntries.last()
+            return nextState.withMilestonesFor(
+                affectedPlanningDates = setOf(LocalDate.parse(entry.planningDate)),
+                achievedAtEpochMillis = now.toEpochMilli(),
+                generatedTimeEntries = listOf(entry),
+            )
+        }
+    }
 }
 
 /** Result returned by every [AttentionCommand]. */
@@ -106,3 +126,5 @@ internal fun AttentionState.withMilestonesFor(
 /** Stable aliases for callers that want a top-level command type name. */
 typealias AddManualTimeEntryCommand = AttentionCommand.AddManualTimeEntry
 typealias ManualTimeEntryCommand = AttentionCommand.AddManualTimeEntry
+typealias ConfirmScheduleCommand = AttentionCommand.ConfirmSchedule
+typealias ConfirmScheduleCompletedCommand = AttentionCommand.ConfirmSchedule
