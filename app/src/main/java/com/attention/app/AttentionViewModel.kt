@@ -2,6 +2,12 @@ package com.attention.app
 
 import androidx.lifecycle.ViewModel
 import com.attention.app.data.AttentionStateRepository
+import com.attention.app.data.backup.BackupCommitResult
+import com.attention.app.data.backup.BackupWorkflow
+import com.attention.app.data.backup.ExportBundle
+import com.attention.app.data.backup.ExportDocument
+import com.attention.app.data.backup.ImportMode
+import com.attention.app.data.backup.ImportPlan
 import com.attention.domain.AttentionState
 import com.attention.domain.FutureGoalRule
 import com.attention.domain.GoalCadence
@@ -47,8 +53,6 @@ import com.attention.domain.Migration
 import com.attention.domain.awardEligibleMilestones
 import com.attention.domain.switchTimer
 import com.attention.domain.confirmScheduleCompleted
-import com.attention.domain.schedulesCsv
-import com.attention.domain.timeEntriesCsv
 import com.attention.domain.setTargetExpanded
 import com.attention.domain.moveTarget
 import com.attention.domain.reorderTarget
@@ -66,9 +70,16 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+
+/** Typed errors exposed by backup commands for UI adapters. */
+sealed interface BackupViewModelError {
+    data class InvalidImport(val cause: Throwable) : BackupViewModelError
+    data class StalePlan(val expectedFingerprint: String, val actualFingerprint: String) : BackupViewModelError
+    data object NoImportBackup : BackupViewModelError
+    data class OperationFailed(val cause: Throwable) : BackupViewModelError
+}
 
 class AttentionViewModel(
     private val repository: AttentionStateRepository,
@@ -86,6 +97,15 @@ class AttentionViewModel(
     )
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
+    private val _backupResult = MutableStateFlow<BackupCommitResult?>(null)
+    /** Last typed commit/restore result, including stale and no-backup outcomes. */
+    val backupResult: StateFlow<BackupCommitResult?> = _backupResult
+    private val _backupError = MutableStateFlow<BackupViewModelError?>(null)
+    /** Structured backup errors for callers that do not want to parse [error]. */
+    val backupError: StateFlow<BackupViewModelError?> = _backupError
+
+    private val backupWorkflow: BackupWorkflow
+        get() = repository.backupWorkflow
 
     fun clearError() { _error.value = null }
 
@@ -233,56 +253,157 @@ class AttentionViewModel(
     fun awardMilestones() = runCommand { it.awardEligibleMilestones(java.time.LocalDate.now(zone)) }
     fun settlePeriodSnapshots() = runCommand { it.settlePeriodSnapshots(it.planningDate(Instant.now(), zone)) }
 
-    fun exportJson(onResult: (String) -> Unit) = scope.launch {
-        runCatching { repository.exportJson() }
+    /** Returns the typed JSON document produced by the backup workflow. */
+    fun exportJsonDocument(onResult: (ExportDocument) -> Unit) = scope.launch {
+        runCatching { backupWorkflow.exportJson() }
             .onSuccess(onResult)
-            .onFailure { _error.value = it.message ?: "导出失败" }
+            .onFailure { publishBackupFailure(it, "导出失败") }
+    }
+
+    /** Compatibility callback for the pre-workflow Workspace API. */
+    fun exportJson(onResult: (String) -> Unit) = scope.launch {
+        runCatching { backupWorkflow.exportJson().content }
+            .onSuccess(onResult)
+            .onFailure { publishBackupFailure(it, "导出失败") }
     }
 
     fun exportCsv(onResult: (timeEntries: String, schedules: String) -> Unit) = scope.launch {
-        runCatching {
-            val current = repository.state.first()
-            current.timeEntriesCsv() to current.schedulesCsv()
-        }.onSuccess { (timeEntries, schedules) -> onResult(timeEntries, schedules) }
-            .onFailure { _error.value = it.message ?: "CSV 导出失败" }
+        runCatching { backupWorkflow.exportCsvBundle() }
+            .onSuccess { bundle -> onResult(bundle.timeEntries.content, bundle.schedules.content) }
+            .onFailure { publishBackupFailure(it, "CSV 导出失败") }
     }
 
     /** Returns the analysis-only time-entry CSV from one consistent state snapshot. */
+    fun exportTimeEntriesCsvDocument(onResult: (ExportDocument) -> Unit) = scope.launch {
+        runCatching { backupWorkflow.exportTimeEntriesCsv() }
+            .onSuccess(onResult)
+            .onFailure { publishBackupFailure(it, "时间记录 CSV 导出失败") }
+    }
+
     fun exportTimeEntriesCsv(onResult: (String) -> Unit) = scope.launch {
-        runCatching {
-            repository.state.first().timeEntriesCsv()
-        }.onSuccess(onResult)
-            .onFailure { _error.value = it.message ?: "时间记录 CSV 导出失败" }
+        runCatching { backupWorkflow.exportTimeEntriesCsv().content }
+            .onSuccess(onResult)
+            .onFailure { publishBackupFailure(it, "时间记录 CSV 导出失败") }
+    }
+
+    fun exportSchedulesCsvDocument(onResult: (ExportDocument) -> Unit) = scope.launch {
+        runCatching { backupWorkflow.exportSchedulesCsv() }
+            .onSuccess(onResult)
+            .onFailure { publishBackupFailure(it, "日程 CSV 导出失败") }
     }
 
     fun exportSchedulesCsv(onResult: (String) -> Unit) = scope.launch {
-        runCatching { repository.state.first().schedulesCsv() }
+        runCatching { backupWorkflow.exportSchedulesCsv().content }
             .onSuccess(onResult)
-            .onFailure { _error.value = it.message ?: "日程 CSV 导出失败" }
+            .onFailure { publishBackupFailure(it, "日程 CSV 导出失败") }
     }
 
-    /** Builds both analysis CSVs from the same immutable repository snapshot. */
+    /** Returns both CSV documents from the workflow's one immutable snapshot. */
+    fun exportCsvBundleDocument(onResult: (ExportBundle) -> Unit) = scope.launch {
+        runCatching { backupWorkflow.exportCsvBundle() }
+            .onSuccess(onResult)
+            .onFailure { publishBackupFailure(it, "CSV 导出失败") }
+    }
+
     fun exportCsvBundle(onResult: (CsvExportBundle) -> Unit) = scope.launch {
         runCatching {
-            val current = repository.state.first()
-            CsvExportBundle(current.timeEntriesCsv(), current.schedulesCsv())
+            backupWorkflow.exportCsvBundle().let { bundle ->
+                CsvExportBundle(bundle.timeEntries.content, bundle.schedules.content)
+            }
         }.onSuccess(onResult)
-            .onFailure { _error.value = it.message ?: "CSV 导出失败" }
+            .onFailure { publishBackupFailure(it, "CSV 导出失败") }
+    }
+
+    /** Builds an immutable import plan without changing persisted state. */
+    fun prepareImport(
+        encoded: String,
+        clearExisting: Boolean,
+        onResult: (ImportPlan) -> Unit,
+        onFailure: (Throwable) -> Unit = {},
+    ) = scope.launch {
+        runCatching {
+            backupWorkflow.prepareImport(
+                encoded,
+                if (clearExisting) ImportMode.REPLACE else ImportMode.MERGE,
+            )
+        }.onSuccess(onResult)
+            .onFailure {
+                _backupError.value = BackupViewModelError.InvalidImport(it)
+                onFailure(it)
+                _error.value = it.message ?: "导入失败，现有数据未改变"
+            }
+    }
+
+    /** Commits exactly the plan returned by [prepareImport]. */
+    fun commitImport(
+        plan: ImportPlan,
+        onResult: (BackupCommitResult) -> Unit = {},
+        onComplete: () -> Unit = {},
+        onFailure: (Throwable) -> Unit = {},
+    ) = scope.launch {
+        runCatching { backupWorkflow.commit(plan) }
+            .onSuccess { result ->
+                publishBackupResult(result)
+                onResult(result)
+                if (result is BackupCommitResult.Committed) onComplete()
+            }
+            .onFailure {
+                _backupError.value = BackupViewModelError.OperationFailed(it)
+                onFailure(it)
+                _error.value = it.message ?: "导入失败，现有数据未改变"
+            }
     }
 
     fun importJson(encoded: String, clearExisting: Boolean, onComplete: () -> Unit = {}) = scope.launch {
-        runCatching { repository.importJson(encoded, clearExisting) }
-            .onSuccess { onComplete() }
-            .onFailure { _error.value = it.message ?: "导入失败，现有数据未改变" }
+        val plan = runCatching {
+            backupWorkflow.prepareImport(
+                encoded,
+                if (clearExisting) ImportMode.REPLACE else ImportMode.MERGE,
+            )
+        }.getOrElse {
+            _backupError.value = BackupViewModelError.InvalidImport(it)
+            _error.value = it.message ?: "导入失败，现有数据未改变"
+            return@launch
+        }
+        runCatching {
+            backupWorkflow.commit(plan)
+        }.onSuccess { result ->
+            publishBackupResult(result)
+            if (result is BackupCommitResult.Committed) onComplete()
+        }.onFailure {
+            _backupError.value = BackupViewModelError.OperationFailed(it)
+            _error.value = it.message ?: "导入失败，现有数据未改变"
+        }
     }
 
     /** Restores the snapshot captured immediately before the most recent import. */
     fun restoreLastImportBackup(onComplete: () -> Unit = {}) = scope.launch {
-        runCatching {
-            val backup = repository.lastImportBackup() ?: error("没有可恢复的导入前备份")
-            repository.importJson(backup, clearExisting = true)
-        }.onSuccess { onComplete() }
-            .onFailure { _error.value = it.message ?: "导入前备份恢复失败，现有数据未改变" }
+        runCatching { backupWorkflow.restoreLatestImportBackup() }
+            .onSuccess { result ->
+                publishBackupResult(result)
+                if (result is BackupCommitResult.Committed) onComplete()
+            }
+            .onFailure {
+                _backupError.value = BackupViewModelError.OperationFailed(it)
+                _error.value = it.message ?: "导入前备份恢复失败，现有数据未改变"
+            }
+    }
+
+    /** Typed restore command for pages that need to distinguish no-backup/stale outcomes. */
+    fun restoreLastImportBackupResult(
+        onResult: (BackupCommitResult) -> Unit,
+        onFailure: (Throwable) -> Unit = {},
+    ) = scope.launch {
+        runCatching { backupWorkflow.restoreLatestImportBackup() }
+            .onSuccess { result ->
+                publishBackupResult(result)
+                onResult(result)
+            }
+            .onFailure {
+                _backupError.value = BackupViewModelError.OperationFailed(it)
+                onFailure(it)
+                _error.value = it.message ?: "导入前备份恢复失败，现有数据未改变"
+            }
     }
 
     fun restoreReminders() = scope.launch {
@@ -302,6 +423,28 @@ class AttentionViewModel(
     private fun runSettingsCommand(command: suspend () -> Unit) = scope.launch {
         runCatching { command() }
             .onFailure { _error.value = it.message ?: "设置未保存" }
+    }
+
+    private fun publishBackupResult(result: BackupCommitResult) {
+        _backupResult.value = result
+        _backupError.value = when (result) {
+            is BackupCommitResult.StalePlan -> BackupViewModelError.StalePlan(
+                result.expectedFingerprint,
+                result.actualFingerprint,
+            )
+            BackupCommitResult.NoImportBackup -> BackupViewModelError.NoImportBackup
+            is BackupCommitResult.Committed -> null
+        }
+        when (result) {
+            is BackupCommitResult.StalePlan -> _error.value = "导入预览已过期，请重新预览"
+            BackupCommitResult.NoImportBackup -> _error.value = "没有可恢复的导入前备份"
+            is BackupCommitResult.Committed -> Unit
+        }
+    }
+
+    private fun publishBackupFailure(error: Throwable, fallback: String) {
+        _backupError.value = BackupViewModelError.OperationFailed(error)
+        _error.value = error.message ?: fallback
     }
 
     override fun onCleared() {

@@ -1,6 +1,13 @@
 package com.attention.app
 
 import com.attention.app.data.AttentionStateRepository
+import com.attention.app.data.backup.AttentionBackupCodec
+import com.attention.app.data.backup.BackupCommitResult
+import com.attention.app.data.backup.BackupStateSubmissionPort
+import com.attention.app.data.backup.BackupWorkflow
+import com.attention.app.data.backup.ExportBundle
+import com.attention.app.data.backup.ImportBackupStore
+import com.attention.app.data.backup.ImportMode
 import com.attention.domain.ActiveTimer
 import com.attention.domain.AttentionState
 import com.attention.domain.GoalCadence
@@ -221,25 +228,182 @@ class AttentionViewModelTest {
     }
 
     @Test
-    fun restoring_last_import_backup_replaces_current_state() = runTest {
+    fun import_preview_and_commit_use_the_same_typed_plan() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val repository = FakeRepository(AttentionState(targets = listOf(Target("current", title = "当前"))))
+            val incoming = AttentionBackupCodec.encode(AttentionState(targets = listOf(Target("incoming", title = "导入"))))
+            val viewModel = AttentionViewModel(repository, ZoneOffset.UTC)
+            var plan: com.attention.app.data.backup.ImportPlan? = null
+            var result: BackupCommitResult? = null
+
+            viewModel.prepareImport(incoming, clearExisting = false, onResult = { plan = it })
+            advanceUntilIdle()
+            viewModel.commitImport(requireNotNull(plan), onResult = { result = it })
+            advanceUntilIdle()
+
+            assertEquals(BackupCommitResult.Committed(repository.state.value), result)
+            assertEquals(listOf("current", "incoming"), repository.state.value.targets.map { it.id })
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun stale_import_plan_is_returned_as_typed_view_model_result() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val repository = FakeRepository(AttentionState(targets = listOf(Target("current", title = "当前"))))
+            val incoming = AttentionBackupCodec.encode(AttentionState(targets = listOf(Target("incoming", title = "导入"))))
+            val viewModel = AttentionViewModel(repository, ZoneOffset.UTC)
+            var plan: com.attention.app.data.backup.ImportPlan? = null
+            var result: BackupCommitResult? = null
+
+            viewModel.prepareImport(incoming, clearExisting = true, onResult = { plan = it })
+            advanceUntilIdle()
+            repository.updateBusiness { it.copy(targets = listOf(Target("edited", title = "后来修改"))) }
+            viewModel.commitImport(requireNotNull(plan), onResult = { result = it })
+            advanceUntilIdle()
+
+            assertTrue(result is BackupCommitResult.StalePlan)
+            assertTrue(viewModel.backupError.value is BackupViewModelError.StalePlan)
+            assertEquals(listOf("edited"), repository.state.value.targets.map { it.id })
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun invalid_import_is_reported_without_changing_state() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val repository = FakeRepository(AttentionState(targets = listOf(Target("current", title = "当前"))))
+            val viewModel = AttentionViewModel(repository, ZoneOffset.UTC)
+            var failure: Throwable? = null
+
+            viewModel.prepareImport("{not-json", clearExisting = false, onResult = {}, onFailure = { failure = it })
+            advanceUntilIdle()
+
+            assertTrue(failure != null)
+            assertTrue(viewModel.backupError.value is BackupViewModelError.InvalidImport)
+            assertEquals(listOf("current"), repository.state.value.targets.map { it.id })
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun restore_without_backup_returns_typed_no_backup_result() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val viewModel = AttentionViewModel(FakeRepository(AttentionState()), ZoneOffset.UTC)
+            var result: BackupCommitResult? = null
+
+            viewModel.restoreLastImportBackupResult(onResult = { result = it })
+            advanceUntilIdle()
+
+            assertEquals(BackupCommitResult.NoImportBackup, result)
+            assertEquals(BackupCommitResult.NoImportBackup, viewModel.backupResult.value)
+            assertEquals(BackupViewModelError.NoImportBackup, viewModel.backupError.value)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun restore_failure_is_exposed_as_typed_operation_error() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         Dispatchers.setMain(dispatcher)
         try {
             val repository = FakeRepository(AttentionState())
-            repository.savedBackup = "{\"version\":1}"
+            repository.savedBackup = AttentionBackupCodec.encode(AttentionState(targets = listOf(Target("saved", title = "已保存"))))
+            repository.failBackupCommit = true
+            val viewModel = AttentionViewModel(repository, ZoneOffset.UTC)
+            var failure: Throwable? = null
+
+            viewModel.restoreLastImportBackupResult(onResult = {}, onFailure = { failure = it })
+            advanceUntilIdle()
+
+            assertTrue(failure != null)
+            assertTrue(viewModel.backupError.value is BackupViewModelError.OperationFailed)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun typed_csv_bundle_is_returned_from_view_model_workflow() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val state = AttentionState(
+                targets = listOf(Target("bundle-typed-target", title = "学习")),
+                timeEntries = listOf(TimeEntry("bundle-typed-entry", "2026-10-08", 45, "bundle-typed-target")),
+            )
+            val viewModel = AttentionViewModel(FakeRepository(state), ZoneOffset.UTC)
+            var bundle: ExportBundle? = null
+
+            viewModel.exportCsvBundleDocument { bundle = it }
+            advanceUntilIdle()
+
+            assertEquals("time_entries.csv", bundle?.timeEntries?.suggestedFileName)
+            assertEquals("attention-schedules.csv", bundle?.schedules?.suggestedFileName)
+            assertTrue(bundle?.timeEntries?.content?.contains("bundle-typed-target") == true)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun restoring_last_import_backup_replaces_current_state() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+            Dispatchers.setMain(dispatcher)
+        try {
+            val repository = FakeRepository(AttentionState())
+            repository.savedBackup = AttentionBackupCodec.encode(
+                AttentionState(targets = listOf(Target("saved", title = "已保存"))),
+            )
             val viewModel = AttentionViewModel(repository, ZoneOffset.UTC)
             viewModel.restoreLastImportBackup()
             advanceUntilIdle()
-            assertEquals("{\"version\":1}", repository.importedBackup)
-            assertEquals(true, repository.importedClearExisting)
+            assertEquals(listOf("saved"), repository.state.value.targets.map { it.id })
         } finally { Dispatchers.resetMain() }
     }
 
     private class FakeRepository(initial: AttentionState) : AttentionStateRepository {
         private val values = MutableStateFlow(initial)
         var savedBackup: String? = null
+        var failBackupCommit: Boolean = false
         var importedBackup: String? = null
         var importedClearExisting: Boolean? = null
+        private val backupStore = object : ImportBackupStore {
+            override suspend fun write(encoded: String) { savedBackup = encoded }
+            override suspend fun read(): String? = savedBackup
+        }
+        override val backupWorkflow: BackupWorkflow by lazy {
+            BackupWorkflow(object : BackupStateSubmissionPort {
+                override suspend fun read(): AttentionState = values.value
+
+                override suspend fun submit(
+                    expectedFingerprint: String,
+                    next: AttentionState,
+                ): BackupCommitResult {
+                    val current = values.value
+                    val actual = BackupWorkflow.stateFingerprint(current)
+                    if (actual != expectedFingerprint) {
+                        return BackupCommitResult.StalePlan(expectedFingerprint, actual)
+                    }
+                    if (failBackupCommit) error("injected backup failure")
+                    backupStore.write(AttentionBackupCodec.encode(current))
+                    values.value = next
+                    return BackupCommitResult.Committed(next)
+                }
+            }, backupStore)
+        }
         override val state: StateFlow<AttentionState> = values
 
         override suspend fun updateBusiness(transform: (AttentionState) -> AttentionState) {

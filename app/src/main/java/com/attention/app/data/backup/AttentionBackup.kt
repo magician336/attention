@@ -69,12 +69,36 @@ data class AttentionBackup(
     companion object {
         const val CURRENT_VERSION = 1
 
-        fun fromDomain(state: AttentionState): AttentionBackup {
+        fun fromDomain(state: AttentionState): AttentionBackup = fromDomain(
+            state = state,
+            deduplicateMilestones = true,
+        )
+
+        /**
+         * Builds the same protocol document used by [AttentionBackupCodec],
+         * while retaining duplicate milestone rows for internal fingerprints.
+         * Duplicate instance keys are normalized when crossing the v1 backup
+         * wire boundary; a fingerprint must still distinguish valid persisted
+         * states that contain an extra row.
+         */
+        internal fun fromDomainForFingerprint(state: AttentionState): AttentionBackup = fromDomain(
+            state = state,
+            deduplicateMilestones = false,
+        )
+
+        private fun fromDomain(
+            state: AttentionState,
+            deduplicateMilestones: Boolean,
+        ): AttentionBackup {
             // Normalize the milestone ledger before deriving experience so the
             // serialized rows and the saved total are computed from the same
             // canonical set of instance keys.
             val canonical = state.copy(
-                milestones = state.milestones.distinctBy { it.instanceKey },
+                milestones = if (deduplicateMilestones) {
+                    state.milestones.distinctBy { it.instanceKey }
+                } else {
+                    state.milestones
+                },
             ).recalculateExperience()
             return AttentionBackup(
                 settings = canonical.settings,
@@ -127,6 +151,15 @@ object AttentionBackupCodec {
     }
 
     fun encode(state: AttentionState): String = json.encodeToString(AttentionBackup.fromDomain(state))
+
+    /**
+     * Encodes the canonical protocol shape for a state fingerprint. This is
+     * intentionally not a backup/export API: unlike [encode], it retains
+     * duplicate milestone rows so valid state changes cannot hash identically
+     * merely because v1 import/export normalizes their instance keys.
+     */
+    internal fun encodeForFingerprint(state: AttentionState): String =
+        json.encodeToString(AttentionBackup.fromDomainForFingerprint(state))
 
     fun decode(encoded: String): AttentionState {
         return parseValidated(encoded).toDomain()
