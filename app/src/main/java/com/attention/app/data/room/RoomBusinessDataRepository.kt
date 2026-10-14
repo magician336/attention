@@ -7,6 +7,7 @@ import com.attention.app.data.room.mapper.toEntity
 import com.attention.domain.AttentionState
 import com.attention.domain.AttentionCommand
 import com.attention.domain.AttentionCommandResult
+import com.attention.domain.StoredSettings
 import com.attention.domain.descendantIds
 import com.attention.domain.recalculateExperience
 import java.time.Instant
@@ -42,9 +43,10 @@ class RoomBusinessDataRepository(
     suspend fun execute(
         command: AttentionCommand,
         now: Instant,
-        zone: ZoneId = ZoneId.systemDefault(),
+        zone: ZoneId,
+        plannerSettings: StoredSettings,
     ): AttentionCommandResult = database.withTransaction {
-        val result = command.execute(readInTransaction(), now, zone)
+        val result = command.execute(readInTransaction().copy(settings = plannerSettings), now, zone)
         val canonicalState = result.state.recalculateExperience()
         replaceInTransaction(canonicalState)
         result.copy(state = canonicalState)

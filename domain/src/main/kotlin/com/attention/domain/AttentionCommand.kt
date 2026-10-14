@@ -124,22 +124,22 @@ sealed interface AttentionCommand {
 
     /** Removes one ledger record and leaves the milestone history untouched. */
     data class DeleteTimeEntry(val entryId: String) : AttentionCommand {
-        override fun execute(state: AttentionState, now: Instant, zone: ZoneId): AttentionCommandResult =
-            AttentionCommandResult(state.deleteTimeEntry(entryId))
+        override fun execute(state: AttentionState, now: Instant, zone: ZoneId): AttentionCommandResult {
+            val removed = state.timeEntries.firstOrNull { it.id == entryId }
+            return AttentionCommandResult(
+                state = state.deleteTimeEntry(entryId),
+                removedTimeEntries = removed?.let(::listOf).orEmpty(),
+            )
+        }
     }
 
     /** Restores a previously deleted record without rewriting any of its recorded facts. */
     data class RestoreTimeEntry(val entry: TimeEntry) : AttentionCommand {
         override fun execute(state: AttentionState, now: Instant, zone: ZoneId): AttentionCommandResult {
-            val planningDate = LocalDate.parse(entry.planningDate)
             require(entry.durationMinutes > 0) { "时间记录时长必须为正数" }
             if (state.timeEntries.any { it.id == entry.id }) return AttentionCommandResult(state.recalculateExperience())
             val restored = state.copy(timeEntries = state.timeEntries + entry).recalculateExperience()
-            return restored.withMilestonesFor(
-                affectedPlanningDates = setOf(planningDate),
-                achievedAtEpochMillis = now.toEpochMilli(),
-                generatedTimeEntries = listOf(entry),
-            )
+            return AttentionCommandResult(restored, timeEntries = listOf(entry))
         }
     }
 }
@@ -149,6 +149,7 @@ data class AttentionCommandResult(
     val state: AttentionState,
     val timeEntries: List<TimeEntry> = emptyList(),
     val milestones: List<Milestone> = emptyList(),
+    val removedTimeEntries: List<TimeEntry> = emptyList(),
 ) {
     val generatedTimeEntries: List<TimeEntry> get() = timeEntries
     val newMilestones: List<Milestone> get() = milestones

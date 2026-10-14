@@ -168,6 +168,23 @@ class AttentionCommandTest {
     }
 
     @Test
+    fun restore_time_command_never_awards_a_new_milestone() {
+        val target = Target("restore-without-reward-target", title = "恢复")
+        val entry = TimeEntry("restore-without-reward-entry", date.toString(), 30, target.id)
+        val state = AttentionState(targets = listOf(target))
+        val result = AttentionCommand.RestoreTimeEntry(entry).execute(
+            state,
+            Instant.parse("2026-10-14T12:00:00Z"),
+            utc,
+        )
+
+        assertEquals(listOf(entry), result.timeEntries)
+        assertTrue(result.milestones.isEmpty())
+        assertTrue(result.state.milestones.isEmpty())
+        assertEquals(30L, result.state.experience)
+    }
+
+    @Test
     fun stop_timer_command_returns_timer_entries_and_milestones_for_each_affected_planning_date() {
         val base = AttentionState(
             targets = listOf(Target("timer-target", title = "计时目标")),

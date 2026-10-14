@@ -18,6 +18,7 @@ import com.attention.domain.PeriodSnapshot
 import com.attention.domain.RecurrenceRule
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.ScheduleFrequency
+import com.attention.domain.StoredSettings
 import com.attention.domain.Target
 import com.attention.domain.TargetMove
 import com.attention.domain.TimeEntry
@@ -117,6 +118,7 @@ class RoomBusinessDataRepositoryTest {
             AttentionCommand.AddManualTimeEntry("2026-10-14", 30, target.id, "命令补记"),
             Instant.parse("2026-10-14T12:00:00Z"),
             ZoneId.of("UTC"),
+            StoredSettings(),
         )
 
         assertEquals(1, result.generatedTimeEntries.size)
@@ -133,8 +135,8 @@ class RoomBusinessDataRepositoryTest {
         val command = AttentionCommand.RestoreTimeEntry(entry)
         val now = Instant.parse("2026-10-14T12:00:00Z")
 
-        val first = repository.execute(command, now, ZoneId.of("UTC"))
-        val second = repository.execute(command, now, ZoneId.of("UTC"))
+        val first = repository.execute(command, now, ZoneId.of("UTC"), StoredSettings())
+        val second = repository.execute(command, now, ZoneId.of("UTC"), StoredSettings())
 
         assertEquals(listOf(entry), first.generatedTimeEntries)
         assertTrue(second.generatedTimeEntries.isEmpty())
@@ -157,6 +159,7 @@ class RoomBusinessDataRepositoryTest {
                     ),
                     Instant.parse("2026-10-14T12:00:00Z"),
                     ZoneId.of("UTC"),
+                    StoredSettings(),
                 )
             }
         }
