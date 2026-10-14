@@ -65,6 +65,87 @@ sealed interface AttentionCommand {
             )
         }
     }
+
+    /** Edits only mutable ledger fields and preserves the record's recorded facts. */
+    data class EditTimeEntry(
+        val entryId: String,
+        val durationMinutes: Int,
+        val targetId: String?,
+        val note: String = "",
+    ) : AttentionCommand {
+        override fun execute(
+            state: AttentionState,
+            now: Instant,
+            zone: ZoneId,
+        ): AttentionCommandResult {
+            val existing = state.timeEntries.firstOrNull { it.id == entryId }
+                ?: throw IllegalArgumentException("时间记录不存在")
+            val nextState = state.editTimeEntry(entryId, durationMinutes, targetId, note)
+            val edited = nextState.timeEntries.first { it.id == entryId }
+            return nextState.withMilestonesFor(
+                affectedPlanningDates = setOf(LocalDate.parse(existing.planningDate)),
+                achievedAtEpochMillis = now.toEpochMilli(),
+                generatedTimeEntries = listOf(edited),
+            )
+        }
+    }
+
+    /** Assigns a validated, all-or-nothing set of unowned records to one target. */
+    data class AssignUnowned(
+        val entryIds: Set<String>,
+        val targetId: String,
+    ) : AttentionCommand {
+        override fun execute(
+            state: AttentionState,
+            now: Instant,
+            zone: ZoneId,
+        ): AttentionCommandResult {
+            if (entryIds.isEmpty()) return AttentionCommandResult(state)
+            val selected = state.timeEntries.filter { it.id in entryIds }
+            val affectedDates = selected.map { LocalDate.parse(it.planningDate) }.toSet()
+            val nextState = state.assignUnowned(entryIds, targetId)
+            val assigned = nextState.timeEntries.filter { it.id in entryIds }
+            return nextState.withMilestonesFor(
+                affectedPlanningDates = affectedDates,
+                achievedAtEpochMillis = now.toEpochMilli(),
+                generatedTimeEntries = assigned,
+            )
+        }
+    }
+
+    /** Removes one ledger record and leaves the milestone history untouched. */
+    data class DeleteTimeEntry(
+        val entryId: String,
+    ) : AttentionCommand {
+        override fun execute(
+            state: AttentionState,
+            now: Instant,
+            zone: ZoneId,
+        ): AttentionCommandResult = AttentionCommandResult(state.deleteTimeEntry(entryId))
+    }
+
+    /** Restores a previously deleted record without rewriting any of its recorded facts. */
+    data class RestoreTimeEntry(
+        val entry: TimeEntry,
+    ) : AttentionCommand {
+        override fun execute(
+            state: AttentionState,
+            now: Instant,
+            zone: ZoneId,
+        ): AttentionCommandResult {
+            val planningDate = LocalDate.parse(entry.planningDate)
+            require(entry.durationMinutes > 0) { "时间记录时长必须为正数" }
+            if (state.timeEntries.any { it.id == entry.id }) {
+                return AttentionCommandResult(state.recalculateExperience())
+            }
+            val restored = state.copy(timeEntries = state.timeEntries + entry).recalculateExperience()
+            return restored.withMilestonesFor(
+                affectedPlanningDates = setOf(planningDate),
+                achievedAtEpochMillis = now.toEpochMilli(),
+                generatedTimeEntries = listOf(entry),
+            )
+        }
+    }
 }
 
 /** Result returned by every [AttentionCommand]. */
@@ -128,3 +209,8 @@ typealias AddManualTimeEntryCommand = AttentionCommand.AddManualTimeEntry
 typealias ManualTimeEntryCommand = AttentionCommand.AddManualTimeEntry
 typealias ConfirmScheduleCommand = AttentionCommand.ConfirmSchedule
 typealias ConfirmScheduleCompletedCommand = AttentionCommand.ConfirmSchedule
+typealias EditTimeEntryCommand = AttentionCommand.EditTimeEntry
+typealias AssignUnownedCommand = AttentionCommand.AssignUnowned
+typealias AssignUnownedTimeEntriesCommand = AttentionCommand.AssignUnowned
+typealias DeleteTimeEntryCommand = AttentionCommand.DeleteTimeEntry
+typealias RestoreTimeEntryCommand = AttentionCommand.RestoreTimeEntry
