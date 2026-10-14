@@ -23,6 +23,7 @@ import com.attention.domain.recalculateExperience
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertThrows
 import org.junit.Test
@@ -418,5 +419,75 @@ class AttentionBackupCodecTest {
         )
 
         assertEquals(expected, AttentionBackupCodec.decode(AttentionBackupCodec.encode(expected)))
+    }
+
+    @Test
+    fun backup_round_trip_preserves_every_time_entry_source_and_its_schedule_link() {
+        val target = Target("target", title = "阅读")
+        val schedule = ScheduleEntry("schedule", "2026-10-02", "阅读", estimatedMinutes = 45, targetId = target.id)
+        val expected = AttentionState(
+            targets = listOf(target),
+            schedules = listOf(schedule),
+            timeEntries = listOf(
+                TimeEntry("backfilled", "2026-10-02", 30, target.id, TimeEntrySource.MANUAL),
+                TimeEntry("confirmed", "2026-10-02", 45, target.id, TimeEntrySource.SCHEDULE_CONFIRMED, scheduleEntryId = schedule.id),
+                TimeEntry("timed", "2026-10-02", 60, target.id, TimeEntrySource.TIMER, 123L, scheduleEntryId = schedule.id),
+                TimeEntry("imported", "2026-10-02", 20, target.id, TimeEntrySource.IMPORT),
+            ),
+            experience = 155L,
+            activeTimer = ActiveTimer(target.id, 1_000L, lastPlanningDate = "2026-10-02", scheduleEntryId = schedule.id),
+        )
+
+        val restored = AttentionBackupCodec.decode(AttentionBackupCodec.encode(expected))
+
+        assertEquals(expected, restored)
+        assertEquals(
+            listOf(TimeEntrySource.MANUAL, TimeEntrySource.SCHEDULE_CONFIRMED, TimeEntrySource.TIMER, TimeEntrySource.IMPORT),
+            restored.timeEntries.map { it.source },
+        )
+        assertEquals(listOf(null, schedule.id, schedule.id, null), restored.timeEntries.map { it.scheduleEntryId })
+        assertNull(restored.timeEntries.first().occurredAtEpochMillis)
+        assertEquals(123L, restored.timeEntries[2].occurredAtEpochMillis)
+        assertEquals(schedule.id, restored.activeTimer?.scheduleEntryId)
+    }
+
+    @Test
+    fun backup_without_a_schedule_link_field_still_imports() {
+        val legacy = """
+            {"version":1,"settings":{"planningDayBoundaryMinutes":180},"targets":[{"id":"target","parentId":null,"title":"阅读","note":"","icon":null,"colorHex":null,"archived":false,"sortOrder":0,"expanded":true}],
+            "goalStages":[],"timeEntries":[{"id":"entry","planningDate":"2026-10-02","durationMinutes":30,"targetId":"target","source":"TIMER","occurredAtEpochMillis":123,"note":"历史计时"}],
+            "schedules":[],"recurrenceRules":[],"migrations":[],"futureGoalRules":[],"periodSnapshots":[],"targetMoves":[],"milestones":[],"experience":30,
+            "activeTimer":{"targetId":"target","startedAtEpochMillis":1000,"accumulatedMillis":0,"paused":false,"lastPlanningDate":"2026-10-02","completedSegments":[]},
+            "onboardingCompleted":true,"launchDestination":"TODAY","lastOpenedDestination":"TODAY","notificationsEnabled":true}
+        """.trimIndent()
+
+        val restored = AttentionBackupCodec.decode(legacy)
+
+        val entry = restored.timeEntries.single()
+        assertEquals(TimeEntrySource.TIMER, entry.source)
+        assertNull(entry.scheduleEntryId)
+        assertEquals(123L, entry.occurredAtEpochMillis)
+        assertNull(restored.activeTimer?.scheduleEntryId)
+        assertEquals(30L, restored.experience)
+    }
+
+    @Test
+    fun decoder_rejects_time_entry_and_timer_links_to_missing_schedules() {
+        val target = Target("target", title = "阅读")
+        val danglingEntry = AttentionState(
+            targets = listOf(target),
+            timeEntries = listOf(TimeEntry("entry", "2026-10-02", 30, target.id, TimeEntrySource.SCHEDULE_CONFIRMED, scheduleEntryId = "missing-schedule")),
+        )
+        val danglingTimer = AttentionState(
+            targets = listOf(target),
+            activeTimer = ActiveTimer(target.id, 1_000L, lastPlanningDate = "2026-10-02", scheduleEntryId = "missing-schedule"),
+        )
+
+        assertThrows(IllegalArgumentException::class.java) {
+            AttentionBackupCodec.decode(AttentionBackupCodec.encode(danglingEntry))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            AttentionBackupCodec.decode(AttentionBackupCodec.encode(danglingTimer))
+        }
     }
 }

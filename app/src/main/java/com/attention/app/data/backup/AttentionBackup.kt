@@ -208,10 +208,12 @@ object AttentionBackupCodec {
             require(due == null || !date(due).isBefore(start)) { "阶段截止日期不能早于开始日期" }
         }
         val stages = state.goalStages.map { it.id }.toSet()
+        val schedules = state.schedules.map { it.id }.toSet()
         state.timeEntries.forEach { entry ->
             date(entry.planningDate)
             require(entry.durationMinutes > 0) { "时间记录时长必须为正数" }
             require(entry.targetId == null || entry.targetId in targets) { "时间记录目标不存在" }
+            require(entry.scheduleEntryId == null || entry.scheduleEntryId in schedules) { "时间记录关联日程不存在" }
         }
         val rules = state.recurrenceRules.map { it.id }.toSet()
         state.schedules.forEach { entry ->
@@ -273,6 +275,8 @@ object AttentionBackupCodec {
         }
         val timerTargetId = state.activeTimer?.targetId
         require(timerTargetId == null || state.targets.any { it.id == timerTargetId }) { "活动计时器目标不存在" }
+        val timerScheduleId = state.activeTimer?.scheduleEntryId
+        require(timerScheduleId == null || timerScheduleId in schedules) { "活动计时器关联日程不存在" }
         state.validateActiveTimerTarget()
     }
 
