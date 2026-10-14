@@ -3,6 +3,7 @@ package com.attention.workspace.state
 import com.attention.domain.AttentionState
 import com.attention.domain.LaunchDestination
 import com.attention.domain.planningDate
+import com.attention.domain.resolveLaunchDestination
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -26,22 +27,6 @@ data class SettingsScreenState(
     val resolvedDestination: LaunchDestination,
     val planningDay: LocalDate,
 )
-
-/**
- * 「上次打开」解析为具体页面；其它入口解析为自身。这条规则属于启动入口语义，
- * 组合根导航与页面投影共用同一份实现，不在两侧各写一遍。
- */
-fun resolveLaunchDestination(requested: LaunchDestination, lastOpened: LaunchDestination): LaunchDestination = when (requested) {
-    LaunchDestination.LAST_OPENED -> when (lastOpened) {
-        LaunchDestination.TODAY,
-        LaunchDestination.TARGETS,
-        LaunchDestination.ALL_DATES,
-        LaunchDestination.STATISTICS,
-        -> lastOpened
-        LaunchDestination.LAST_OPENED -> LaunchDestination.TODAY
-    }
-    else -> requested
-}
 
 /**
  * 从领域状态投影出设置页状态。领域规则（规划日等）仍然只在 `:domain`。

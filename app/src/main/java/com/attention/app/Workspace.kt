@@ -81,14 +81,13 @@ import com.attention.app.ui.format.TimeRecordTags
 import com.attention.app.ui.theme.attentionTokens
 import com.attention.app.settings.SettingsScreen
 import com.attention.app.statistics.StatisticsScreen
+import com.attention.app.statistics.StatisticsSelection
+import com.attention.app.statistics.rememberStatisticsSelection
 import com.attention.workspace.state.SettingsActions
 import com.attention.workspace.state.StatisticsActions
-import com.attention.workspace.state.cumulativeFeedbackLabel
 import com.attention.workspace.state.goalProgressLabel
 import com.attention.workspace.state.label
-import com.attention.workspace.state.resolveLaunchDestination
 import com.attention.workspace.state.settingsScreenState
-import com.attention.workspace.state.shiftStatisticsPeriod
 import com.attention.workspace.state.stageFeedbackLabels
 import com.attention.workspace.state.statisticsScreenState
 import com.attention.workspace.state.summaryLabel
@@ -125,6 +124,7 @@ import com.attention.domain.parentAt
 import com.attention.domain.progress
 import com.attention.domain.progressRange
 import com.attention.domain.reminderEpochMillis
+import com.attention.domain.resolveLaunchDestination
 import com.attention.domain.subtreeMinutes
 import com.attention.domain.targetChildren
 import com.attention.domain.timerSettlementPreview
@@ -155,21 +155,12 @@ private class WorkspaceViewModelFactory(
 }
 
 /**
- * 统计页的周期选择。null 表示还没选过，投影会跟随组合根注入的当前规划日。
- * 它只属于统计页，所以留在组合根的页面状态里，页面自身仍然只渲染与发 intent。
- */
-private class StatisticsSelectionHolder {
-    var selectedDate by mutableStateOf<LocalDate?>(null)
-    var cadence by mutableStateOf(GoalCadence.DAILY)
-}
-
-/**
  * 统计页的 actions adapter，在组合根一侧组装：页面发出 intent，这里落到 ViewModel、
  * 周期位移与 SAF 文件选择器。ViewModel 与平台能力因此只出现在组合根侧。
  */
 private class StatisticsActionsAdapter(
     private val viewModel: AttentionViewModel,
-    private val selection: StatisticsSelectionHolder,
+    private val selection: StatisticsSelection,
     private val currentDate: () -> LocalDate,
     private val onPreviewJsonBackup: () -> Unit,
     private val onImportJson: () -> Unit,
@@ -183,11 +174,11 @@ private class StatisticsActionsAdapter(
     override fun selectNextPeriod() = shift(1)
 
     private fun shift(amount: Long) {
-        selection.selectedDate = shiftStatisticsPeriod(currentDate(), selection.cadence, amount)
+        selection.shiftPeriod(amount, currentDate())
     }
 
     override fun selectCadence(cadence: GoalCadence) {
-        selection.cadence = cadence
+        selection.selectCadence(cadence)
     }
 
     override fun settlePeriodSnapshots() {
@@ -392,12 +383,16 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     }
     androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.restoreReminders() }
 
-    // 统计页的周期选择挂在组合根，页面只渲染投影并发出 intent。
-    val statisticsSelection = remember { StatisticsSelectionHolder() }
+    // 系统时钟只在组合根读一次，所有页面投影共用这一份 now 与 zone（ADR-0005 第 3 节）。
+    val injectedNow = Instant.now()
+    val injectedZone = ZoneId.systemDefault()
+
+    // 统计页的周期选择由统计页 module 提供类型与迁移语义，组合根只持有一个实例来喂投影。
+    val statisticsSelection = rememberStatisticsSelection()
     val statisticsState = statisticsScreenState(
         state = state,
-        now = Instant.now(),
-        zone = ZoneId.systemDefault(),
+        now = injectedNow,
+        zone = injectedZone,
         selectedDate = statisticsSelection.selectedDate,
         cadence = statisticsSelection.cadence,
     )
@@ -486,12 +481,11 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                 )
             }
             if (settingsOpen) {
-                // 当前时间与时区只在组合根读一次，设置页拿到的是已经算好的投影。
                 SettingsScreen(
                     state = settingsScreenState(
                         state = state,
-                        now = Instant.now(),
-                        zone = ZoneId.systemDefault(),
+                        now = injectedNow,
+                        zone = injectedZone,
                     ),
                     actions = settingsActions,
                 )

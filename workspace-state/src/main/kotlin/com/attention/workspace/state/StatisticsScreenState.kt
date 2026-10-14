@@ -6,6 +6,8 @@ import com.attention.domain.GoalStage
 import com.attention.domain.GoalStageSummary
 import com.attention.domain.GoalSummary
 import com.attention.domain.Milestone
+import com.attention.domain.cumulativeHours
+import com.attention.domain.cumulativeMilestones
 import com.attention.domain.effectiveStage
 import com.attention.domain.goalStagesForTarget
 import com.attention.domain.goalSummary
@@ -155,8 +157,8 @@ fun statisticsScreenState(
                     "${snapshot.actualMinutes}/${snapshot.targetMinutes} 分钟" +
                     if (snapshot.completed) " · 达成" else " · 缺口 ${snapshot.gapMinutes}"
             },
-        cumulativeMilestonesEmpty = cumulativeMilestones(state).isEmpty(),
-        cumulativeMilestoneLines = cumulativeMilestones(state).map { it.cumulativeFeedbackLabel() },
+        cumulativeMilestonesEmpty = state.cumulativeMilestones().isEmpty(),
+        cumulativeMilestoneLines = state.cumulativeMilestones().map { it.cumulativeFeedbackLabel() },
         recentMilestoneLines = state.recentMilestones().map { milestone ->
             "里程碑 ${milestone.kind}：+${milestone.reward}（${milestone.instanceKey}）"
         },
@@ -178,11 +180,6 @@ fun statisticsScreenState(
 }
 
 private val statisticsCadences = listOf(GoalCadence.DAILY, GoalCadence.WEEKLY, GoalCadence.MONTHLY)
-
-private fun cumulativeMilestones(state: AttentionState): List<Milestone> = state.milestones
-    .filter { it.kind == "cumulative" }
-    .sortedWith(compareBy({ it.achievedAtEpochMillis }, { it.id }))
-    .distinctBy { it.instanceKey }
 
 private fun levelLines(experience: Long): List<String> {
     val levelProgress = levelProgressForExperience(experience)
@@ -245,7 +242,7 @@ fun AttentionState.stageFeedbackLabels(stage: GoalStage): List<String> =
     }
 
 fun Milestone.cumulativeFeedbackLabel(): String {
-    val hours = instanceKey.substringAfter("cumulative:", "").toLongOrNull()
+    val hours = cumulativeHours()
     return if (hours != null) {
         "累计投入里程碑：$hours 小时 · +$reward 投入经验"
     } else {
