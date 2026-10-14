@@ -11,6 +11,7 @@ import com.attention.app.data.room.AttentionDatabase
 import com.attention.app.data.room.RoomBusinessDataRepository
 import com.attention.app.data.settings.DataStoreSettingsStore
 import com.attention.domain.LaunchDestination
+import com.attention.domain.AttentionCommand
 import com.attention.domain.Target
 import com.attention.domain.TimeEntrySource
 import com.attention.domain.addTarget
@@ -234,6 +235,22 @@ class RoomAttentionStateRepositoryTest {
             entries.map { it.occurredAtEpochMillis },
         )
         assertEquals("b", repository.state.first().activeTimer?.targetId)
+    }
+
+    @Test
+    fun typed_timer_stop_uses_planner_settings_from_datastore_for_boundary_split() = runBlocking {
+        val repository = repository()
+        repository.updateBusiness { it.copy(targets = listOf(Target("typed-boundary", title = "跨界"))) }
+        repository.setPlannerSettings(repository.state.first().settings.copy(planningDayBoundaryMinutes = 5 * 60))
+
+        val startedAt = Instant.parse("2026-10-10T04:50:00Z")
+        val stoppedAt = Instant.parse("2026-10-10T05:10:00Z")
+        repository.updateBusiness { it.startTimer("typed-boundary", startedAt, ZoneId.of("UTC")) }
+
+        val result = repository.executeCommand(AttentionCommand.StopTimer, stoppedAt, ZoneId.of("UTC"))
+
+        assertEquals(listOf("2026-10-09", "2026-10-10"), result.generatedTimeEntries.map { it.planningDate })
+        assertEquals(listOf("2026-10-09", "2026-10-10"), result.state.timeEntries.map { it.planningDate })
     }
 
     @Test

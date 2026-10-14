@@ -12,7 +12,6 @@ import com.attention.domain.ScheduleEntry
 import com.attention.domain.StoredSettings
 import com.attention.domain.TargetMove
 import com.attention.domain.TimeEntry
-import com.attention.domain.recalculateExperience
 import com.attention.domain.addGoalStage
 import com.attention.domain.appendOneTimeGoalStage
 import com.attention.domain.addFutureGoalRule
@@ -28,7 +27,6 @@ import com.attention.domain.assignUnowned
 import com.attention.domain.archiveTarget
 import com.attention.domain.restoreTargets
 import com.attention.domain.deleteTargetRelations
-import com.attention.domain.deleteTimeEntry
 import com.attention.domain.editTimeEntry
 import com.attention.domain.pauseTimer
 import com.attention.domain.renameTarget
@@ -112,7 +110,7 @@ class AttentionViewModel(
     fun editTime(id: String, minutes: Int, targetId: String?, note: String = "") =
         runTypedCommand(AttentionCommand.EditTimeEntry(id, minutes, targetId, note))
 
-    fun deleteTime(id: String) = runCommand { it.deleteTimeEntry(id) }
+    fun deleteTime(id: String) = runTypedCommand(AttentionCommand.DeleteTimeEntry(id))
 
     /**
      * 删除一条实际投入，并把被删掉的原始记录交还给调用方。
@@ -122,11 +120,10 @@ class AttentionViewModel(
      * 保存失败时 [onRemoved] 不会被调用。
      */
     fun deleteTimeWithUndo(id: String, onRemoved: (TimeEntry) -> Unit) {
-        var removed: TimeEntry? = null
-        runCommand(onSuccess = { removed?.let(onRemoved) }) { state ->
-            removed = state.timeEntries.firstOrNull { it.id == id }
-            state.deleteTimeEntry(id)
-        }
+        runTypedCommand(
+            AttentionCommand.DeleteTimeEntry(id),
+            onSuccess = { result -> result.removedTimeEntries.singleOrNull()?.let(onRemoved) },
+        )
     }
 
     /**
@@ -135,9 +132,7 @@ class AttentionViewModel(
      * 经验值随时间记录重新推导，因此恢复之后累计投入与目标汇总回到删除前的样子；
      * 已经存在的同 id 记录不会被重复写入。
      */
-    fun restoreTimeEntry(entry: TimeEntry) = runCommand { state ->
-        if (state.timeEntries.any { it.id == entry.id }) state else state.copy(timeEntries = state.timeEntries + entry).recalculateExperience()
-    }
+    fun restoreTimeEntry(entry: TimeEntry) = runTypedCommand(AttentionCommand.RestoreTimeEntry(entry))
 
     fun addGoal(targetId: String, cadence: GoalCadence, minutes: Int, startDate: String, dueDate: String? = null) =
         runCommand { it.addGoalStage(targetId, cadence, minutes, startDate, dueDate) }
@@ -207,7 +202,8 @@ class AttentionViewModel(
     fun stopTimer(onSuccess: () -> Unit = {}) =
         runTypedCommand(AttentionCommand.StopTimer, onSuccess = { onSuccess() }, errorMessage = "无法结束计时")
 
-    fun awardMilestones() = runCommand { it.awardEligibleMilestones(java.time.LocalDate.now(zone)) }
+    /** Internal repair path for reconciling imported or legacy data. */
+    internal fun awardMilestones() = runCommand { it.awardEligibleMilestones(java.time.LocalDate.now(zone)) }
     fun settlePeriodSnapshots() = runCommand { it.settlePeriodSnapshots(it.planningDate(Instant.now(), zone)) }
 
     fun exportJson(onResult: (String) -> Unit) = scope.launch {

@@ -55,7 +55,7 @@ class RoomAttentionStateRepository(
         zone: ZoneId,
     ): AttentionCommandResult = mutex.withLock {
         val previous = state.first()
-        val result = business.execute(command, now, zone)
+        val result = business.execute(command, now, zone, plannerSettings = previous.settings)
         val next = result.state.copy(
             settings = previous.settings,
             launchDestination = previous.launchDestination,
