@@ -12,6 +12,8 @@ import com.attention.app.data.settings.SettingsSnapshot
 import com.attention.app.data.settings.SettingsStore
 import com.attention.app.reminder.ReminderCoordinator
 import com.attention.domain.AttentionState
+import com.attention.domain.AttentionCommand
+import com.attention.domain.AttentionCommandResult
 import com.attention.domain.LaunchDestination
 import com.attention.domain.StoredSettings
 import com.attention.domain.recalculateExperience
@@ -19,6 +21,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.time.Instant
+import java.time.ZoneId
 
 /**
  * Production repository for the split storage model.
@@ -51,6 +55,24 @@ class RoomAttentionStateRepository(
             }
             reminderCoordinator.sync(previous, next)
         }
+    }
+
+    override suspend fun executeCommand(
+        command: AttentionCommand,
+        now: Instant,
+        zone: ZoneId,
+    ): AttentionCommandResult = mutex.withLock {
+        val previous = state.first()
+        val result = business.execute(command, now, zone, plannerSettings = previous.settings)
+        val next = result.state.copy(
+            settings = previous.settings,
+            launchDestination = previous.launchDestination,
+            lastOpenedDestination = previous.lastOpenedDestination,
+            onboardingCompleted = previous.onboardingCompleted,
+            notificationsEnabled = previous.notificationsEnabled,
+        )
+        reminderCoordinator.sync(previous, next)
+        result.copy(state = next)
     }
 
     override suspend fun toggleScheduleCompleted(entryId: String) {

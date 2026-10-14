@@ -21,9 +21,9 @@ import com.attention.app.data.room.AttentionDatabase
 import com.attention.app.data.room.RoomBusinessDataRepository
 import com.attention.app.data.settings.createSettingsStore
 import com.attention.domain.AttentionState
+import com.attention.domain.AttentionCommand
 import com.attention.domain.pauseTimer
 import com.attention.domain.resumeTimer
-import com.attention.domain.stopTimerAndAwardEligibleMilestones
 import com.attention.domain.timerTargetLabel
 import java.time.Instant
 import java.time.ZoneId
@@ -75,9 +75,11 @@ class AttentionTimerService : Service() {
                 when (intent?.action) {
                     ACTION_PAUSE -> repository.updateBusiness { it.pauseTimer(Instant.now()) }
                     ACTION_RESUME -> repository.updateBusiness { it.resumeTimer(Instant.now()) }
-                    ACTION_STOP -> repository.updateBusiness {
-                        it.stopTimerAndAwardEligibleMilestones(Instant.now(), ZoneId.systemDefault()).state
-                    }
+                    ACTION_STOP -> repository.executeCommand(
+                        AttentionCommand.StopTimer,
+                        now = Instant.now(),
+                        zone = ZoneId.systemDefault(),
+                    )
                 }
 
                 if (intent?.action == ACTION_STOP) AttentionBootReceiver.cancelRecoveryPrompt(this@AttentionTimerService)

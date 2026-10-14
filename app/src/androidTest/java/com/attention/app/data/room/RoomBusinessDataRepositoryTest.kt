@@ -7,6 +7,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.attention.app.data.room.mapper.toEntity
 import com.attention.domain.ActiveTimer
+import com.attention.domain.AttentionCommand
 import com.attention.domain.AttentionState
 import com.attention.domain.FutureGoalRule
 import com.attention.domain.GoalCadence
@@ -17,6 +18,7 @@ import com.attention.domain.PeriodSnapshot
 import com.attention.domain.RecurrenceRule
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.ScheduleFrequency
+import com.attention.domain.StoredSettings
 import com.attention.domain.Target
 import com.attention.domain.TargetMove
 import com.attention.domain.TimeEntry
@@ -46,6 +48,8 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.time.LocalDate
+import java.time.Instant
+import java.time.ZoneId
 
 @RunWith(AndroidJUnit4::class)
 class RoomBusinessDataRepositoryTest {
@@ -102,6 +106,65 @@ class RoomBusinessDataRepositoryTest {
 
         repository.update { it.toggleScheduleCompleted("schedule") }
         assertEquals(initial.schedules.single(), repository.read().schedules.single())
+    }
+
+    @Test
+    fun typed_command_executes_against_current_state_and_persists_full_result() = runBlocking {
+        val target = Target("command-target", title = "命令目标")
+        val repository = RoomBusinessDataRepository(database)
+        repository.replace(AttentionState(targets = listOf(target)))
+
+        val result = repository.execute(
+            AttentionCommand.AddManualTimeEntry("2026-10-14", 30, target.id, "命令补记"),
+            Instant.parse("2026-10-14T12:00:00Z"),
+            ZoneId.of("UTC"),
+            StoredSettings(),
+        )
+
+        assertEquals(1, result.generatedTimeEntries.size)
+        assertEquals(result.state, repository.read())
+        assertEquals(result.generatedTimeEntries, repository.read().timeEntries)
+    }
+
+    @Test
+    fun retrying_idempotent_typed_command_does_not_duplicate_persisted_facts() = runBlocking {
+        val target = Target("retry-target", title = "重试目标")
+        val entry = TimeEntry("retry-entry", "2026-10-14", 30, target.id)
+        val repository = RoomBusinessDataRepository(database)
+        repository.replace(AttentionState(targets = listOf(target)))
+        val command = AttentionCommand.RestoreTimeEntry(entry)
+        val now = Instant.parse("2026-10-14T12:00:00Z")
+
+        val first = repository.execute(command, now, ZoneId.of("UTC"), StoredSettings())
+        val second = repository.execute(command, now, ZoneId.of("UTC"), StoredSettings())
+
+        assertEquals(listOf(entry), first.generatedTimeEntries)
+        assertTrue(second.generatedTimeEntries.isEmpty())
+        assertEquals(first.state, second.state)
+        assertEquals(listOf(entry), repository.read().timeEntries)
+    }
+
+    @Test
+    fun typed_command_persistence_failure_rolls_back_the_entire_transaction() = runBlocking {
+        val target = Target("rollback-target", title = "回滚目标")
+        val repository = RoomBusinessDataRepository(database)
+        val initial = AttentionState(targets = listOf(target))
+        repository.replace(initial)
+
+        assertThrows(SQLiteConstraintException::class.java) {
+            runBlocking {
+                repository.execute(
+                    AttentionCommand.RestoreTimeEntry(
+                        TimeEntry("invalid-entry", "2026-10-14", 30, "missing-target"),
+                    ),
+                    Instant.parse("2026-10-14T12:00:00Z"),
+                    ZoneId.of("UTC"),
+                    StoredSettings(),
+                )
+            }
+        }
+
+        assertEquals(initial, repository.read())
     }
 
     @Test
