@@ -2,6 +2,10 @@ package com.attention.app.data
 
 import com.attention.app.data.room.RoomBusinessDataRepository
 import com.attention.app.data.backup.AttentionBackupCodec
+import com.attention.app.data.backup.BackupCommitResult
+import com.attention.app.data.backup.BackupStateSubmissionPort
+import com.attention.app.data.backup.BackupWorkflow
+import com.attention.app.data.backup.ImportMode
 import com.attention.app.data.backup.ImportBackupStore
 import com.attention.app.data.backup.InMemoryImportBackupStore
 import com.attention.app.data.settings.SettingsSnapshot
@@ -10,7 +14,6 @@ import com.attention.app.reminder.ReminderCoordinator
 import com.attention.domain.AttentionState
 import com.attention.domain.LaunchDestination
 import com.attention.domain.StoredSettings
-import com.attention.domain.validateActiveTimerTarget
 import com.attention.domain.recalculateExperience
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -29,8 +32,13 @@ class RoomAttentionStateRepository(
     private val settings: SettingsStore,
     private val backupStore: ImportBackupStore = InMemoryImportBackupStore(),
     private val reminderCoordinator: ReminderCoordinator = ReminderCoordinator { _, _ -> },
-) : AttentionStateRepository {
+) : AttentionStateRepository, BackupStateSubmissionPort {
     private val mutex = Mutex()
+
+    /** Typed workflow used by ViewModel and other non-Android callers. */
+    override val backupWorkflow: BackupWorkflow by lazy {
+        BackupWorkflow(this, backupStore)
+    }
 
     override val state: Flow<AttentionState> = AttentionStateReader(business, settings).state
 
@@ -91,6 +99,60 @@ class RoomAttentionStateRepository(
         }
     }
 
+    /**
+     * Reads the complete composed state for [BackupStateSubmissionPort]. The
+     * submission implementation performs its own read again while holding
+     * [mutex], so this method is safe for workflow preview and fingerprinting.
+     */
+    override suspend fun read(): AttentionState = state.first()
+
+    /**
+     * Re-checks a plan fingerprint and, when current, rotates the import
+     * snapshot before replacing Room, DataStore and reminders. The entire
+     * operation is serialized by one mutex; any failure compensates all three
+     * stores and restores the previous snapshot value.
+     */
+    override suspend fun submit(
+        expectedFingerprint: String,
+        next: AttentionState,
+    ): BackupCommitResult = mutex.withLock {
+        val current = state.first()
+        val actualFingerprint = BackupWorkflow.stateFingerprint(current)
+        if (actualFingerprint != expectedFingerprint) {
+            return@withLock BackupCommitResult.StalePlan(
+                expectedFingerprint = expectedFingerprint,
+                actualFingerprint = actualFingerprint,
+            )
+        }
+
+        val previousBackup = backupStore.read()
+        val currentBackup = AttentionBackupCodec.encode(current)
+        try {
+            // Persist the pre-submit state before touching any runtime store.
+            // The old value is retained and restored if writing or replacement
+            // fails, so a failed import never destroys the last recovery point.
+            backupStore.write(currentBackup)
+            val committed = replaceWithRollback(current, next)
+            BackupCommitResult.Committed(committed)
+        } catch (error: Throwable) {
+            runCatching {
+                backupStore.write(previousBackup ?: currentBackup)
+            }.onFailure(error::addSuppressed)
+            throw error
+        }
+    }
+
+    /**
+     * Compatibility import preparation can fail before a typed plan exists.
+     * Keep its historical recovery guarantee inside the same mutex and port
+     * boundary used by successful submissions.
+     */
+    override suspend fun preserveImportBackupIfAbsent() = mutex.withLock {
+        if (backupStore.read() == null) {
+            backupStore.write(AttentionBackupCodec.encode(state.first()))
+        }
+    }
+
     override suspend fun restoreReminders() {
         mutex.withLock { reminderCoordinator.restore(state.first()) }
     }
@@ -98,24 +160,20 @@ class RoomAttentionStateRepository(
     override suspend fun exportJson(): String = AttentionBackupCodec.encode(state.first())
 
     override suspend fun importJson(encoded: String, clearExisting: Boolean): AttentionState {
-        return mutex.withLock {
-            val current = state.first()
-            val previousBackup = backupStore.read()
-            try {
-                val incoming = AttentionBackupCodec.decode(encoded)
-                val result = if (clearExisting) incoming else AttentionBackupCodec.merge(current, incoming)
-                result.validateActiveTimerTarget()
-                AttentionBackupCodec.validate(result)
-                backupStore.write(AttentionBackupCodec.encode(current))
-                replaceWithRollback(current, result)
-            } catch (error: Throwable) {
-                runCatching {
-                    backupStore.write(previousBackup ?: AttentionBackupCodec.encode(current))
-                }.onFailure(error::addSuppressed)
-                throw error
-            }
+        val plan = backupWorkflow.prepareImport(
+            encoded,
+            if (clearExisting) ImportMode.REPLACE else ImportMode.MERGE,
+        )
+        return when (val result = backupWorkflow.commit(plan)) {
+            is BackupCommitResult.Committed -> result.state
+            is BackupCommitResult.StalePlan -> error("导入计划已过期，请重新预览")
+            BackupCommitResult.NoImportBackup -> error("没有可恢复的导入前备份")
         }
     }
+
+    /** Restores the latest snapshot and keeps one-step snapshot exchange. */
+    suspend fun restoreLatestImportBackup(): BackupCommitResult =
+        backupWorkflow.restoreLatestImportBackup()
 
     override suspend fun lastImportBackup(): String? = backupStore.read()
 
