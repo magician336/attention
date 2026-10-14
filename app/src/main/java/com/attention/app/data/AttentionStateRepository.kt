@@ -1,15 +1,25 @@
 package com.attention.app.data
 
 import com.attention.domain.AttentionState
+import com.attention.domain.AttentionCommand
+import com.attention.domain.AttentionCommandResult
 import com.attention.domain.LaunchDestination
 import com.attention.domain.StoredSettings
 import kotlinx.coroutines.flow.Flow
+import java.time.Instant
+import java.time.ZoneId
 
 /** Runtime data boundary: Room business data, DataStore settings and versioned backups. */
 interface AttentionStateRepository {
     val state: Flow<AttentionState>
 
     suspend fun updateBusiness(transform: (AttentionState) -> AttentionState)
+    /** Executes a typed domain command and returns its externally observable facts. */
+    suspend fun executeCommand(
+        command: AttentionCommand,
+        now: Instant,
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): AttentionCommandResult
     suspend fun toggleScheduleCompleted(entryId: String)
     suspend fun setPlannerSettings(settings: StoredSettings)
     suspend fun setPlanningDayBoundaryMinutes(minutes: Int)

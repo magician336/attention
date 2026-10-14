@@ -3,6 +3,8 @@ package com.attention.app
 import com.attention.app.data.AttentionStateRepository
 import com.attention.domain.ActiveTimer
 import com.attention.domain.AttentionState
+import com.attention.domain.AttentionCommand
+import com.attention.domain.AttentionCommandResult
 import com.attention.domain.GoalCadence
 import com.attention.domain.GoalStage
 import com.attention.domain.LaunchDestination
@@ -14,6 +16,7 @@ import com.attention.domain.planningDate
 import com.attention.domain.toggleScheduleCompleted
 import java.time.LocalDate
 import java.time.Instant
+import java.time.ZoneId
 import java.time.ZoneOffset
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -30,6 +33,23 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AttentionViewModelTest {
+    @Test
+    fun manual_time_entry_is_submitted_as_typed_command() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val repository = FakeRepository(AttentionState())
+            AttentionViewModel(repository, ZoneOffset.UTC).addTime("2026-10-15", 25, null, "专注")
+            advanceUntilIdle()
+            assertEquals(
+                AttentionCommand.AddManualTimeEntry("2026-10-15", 25, null, "专注"),
+                repository.executedCommands.single(),
+            )
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
     @Test
     fun exporting_schedules_csv_returns_current_schedule_snapshot() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
@@ -237,6 +257,7 @@ class AttentionViewModelTest {
 
     private class FakeRepository(initial: AttentionState) : AttentionStateRepository {
         private val values = MutableStateFlow(initial)
+        val executedCommands = mutableListOf<AttentionCommand>()
         var savedBackup: String? = null
         var importedBackup: String? = null
         var importedClearExisting: Boolean? = null
@@ -244,6 +265,13 @@ class AttentionViewModelTest {
 
         override suspend fun updateBusiness(transform: (AttentionState) -> AttentionState) {
             values.value = transform(values.value)
+        }
+
+        override suspend fun executeCommand(command: AttentionCommand, now: Instant, zone: ZoneId): AttentionCommandResult {
+            executedCommands += command
+            val result = command.execute(values.value, now, zone)
+            values.value = result.state
+            return result
         }
 
         override suspend fun toggleScheduleCompleted(entryId: String) {

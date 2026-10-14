@@ -3,6 +3,7 @@ package com.attention.app
 import androidx.lifecycle.ViewModel
 import com.attention.app.data.AttentionStateRepository
 import com.attention.domain.AttentionState
+import com.attention.domain.AttentionCommand
 import com.attention.domain.FutureGoalRule
 import com.attention.domain.GoalCadence
 import com.attention.domain.LaunchDestination
@@ -11,7 +12,6 @@ import com.attention.domain.ScheduleEntry
 import com.attention.domain.StoredSettings
 import com.attention.domain.TargetMove
 import com.attention.domain.TimeEntry
-import com.attention.domain.TimeEntrySource
 import com.attention.domain.recalculateExperience
 import com.attention.domain.addGoalStage
 import com.attention.domain.appendOneTimeGoalStage
@@ -35,7 +35,6 @@ import com.attention.domain.renameTarget
 import com.attention.domain.recoverTimer
 import com.attention.domain.resumeTimer
 import com.attention.domain.startTimer
-import com.attention.domain.stopTimerAndAwardEligibleMilestones
 import com.attention.domain.stopRecurrence
 import com.attention.domain.updateSchedule
 import com.attention.domain.toggleScheduleCompleted
@@ -44,15 +43,13 @@ import com.attention.domain.updateMigration
 import com.attention.domain.cancelMigration
 import com.attention.domain.cancelFutureGoalRule
 import com.attention.domain.Migration
-import com.attention.domain.awardEligibleMilestones
-import com.attention.domain.switchTimer
-import com.attention.domain.confirmScheduleCompleted
 import com.attention.domain.schedulesCsv
 import com.attention.domain.timeEntriesCsv
 import com.attention.domain.setTargetExpanded
 import com.attention.domain.moveTarget
 import com.attention.domain.reorderTarget
 import com.attention.domain.settlePeriodSnapshots
+import com.attention.domain.awardEligibleMilestones
 import com.attention.domain.materializeOccurrences
 import com.attention.domain.planningDate
 import com.attention.domain.updateFutureTargetMove
@@ -110,14 +107,10 @@ class AttentionViewModel(
     fun deleteTargetRelations(ids: Set<String>) = runCommand { it.deleteTargetRelations(ids) }
 
     fun addTime(date: String, minutes: Int, targetId: String?, note: String = "") =
-        runCommand { it.addTimeEntry(date, minutes, targetId, TimeEntrySource.MANUAL, note = note).awardEligibleMilestones(LocalDate.parse(date)) }
+        runTypedCommand(AttentionCommand.AddManualTimeEntry(date, minutes, targetId, note))
 
     fun editTime(id: String, minutes: Int, targetId: String?, note: String = "") =
-        runCommand {
-            val edited = it.editTimeEntry(id, minutes, targetId, note)
-            val planningDate = edited.timeEntries.single { entry -> entry.id == id }.planningDate
-            edited.awardEligibleMilestones(LocalDate.parse(planningDate))
-        }
+        runTypedCommand(AttentionCommand.EditTimeEntry(id, minutes, targetId, note))
 
     fun deleteTime(id: String) = runCommand { it.deleteTimeEntry(id) }
 
@@ -143,8 +136,7 @@ class AttentionViewModel(
      * 已经存在的同 id 记录不会被重复写入。
      */
     fun restoreTimeEntry(entry: TimeEntry) = runCommand { state ->
-        if (state.timeEntries.any { it.id == entry.id }) state
-        else state.copy(timeEntries = state.timeEntries + entry).recalculateExperience()
+        if (state.timeEntries.any { it.id == entry.id }) state else state.copy(timeEntries = state.timeEntries + entry).recalculateExperience()
     }
 
     fun addGoal(targetId: String, cadence: GoalCadence, minutes: Int, startDate: String, dueDate: String? = null) =
@@ -167,10 +159,8 @@ class AttentionViewModel(
     fun addMigration(migration: Migration, onDate: LocalDate) = runCommand { it.addMigration(migration, onDate) }
     fun updateMigration(migration: Migration, onDate: LocalDate) = runCommand { it.updateMigration(migration, onDate) }
     fun cancelMigration(migrationId: String) = runCommand { it.cancelMigration(migrationId) }
-    fun assignUnowned(entryIds: Set<String>, targetId: String) = runCommand {
-        it.assignUnowned(entryIds, targetId)
-            .awardEligibleMilestones(LocalDate.now(zone))
-    }
+    fun assignUnowned(entryIds: Set<String>, targetId: String) =
+        runTypedCommand(AttentionCommand.AssignUnowned(entryIds, targetId))
 
     fun addSchedule(entry: ScheduleEntry) = runCommand { it.addSchedule(entry) }
     fun updateSchedule(entry: ScheduleEntry) = runCommand { it.updateSchedule(entry) }
@@ -208,27 +198,14 @@ class AttentionViewModel(
         it.startTimer(targetId, Instant.now(), zone, scheduleEntryId)
     }
     fun confirmScheduleCompleted(entryId: String, durationMinutes: Int? = null) =
-        runCommand { it.confirmScheduleCompleted(entryId, durationMinutes) }
-    fun switchTimer(targetId: String?) = scope.launch {
-        runCatching {
-            val now = Instant.now()
-            repository.updateBusiness { current ->
-                current.switchTimer(targetId, now, zone).state
-                    .awardEligibleMilestones(current.planningDate(now, zone))
-            }
-        }.onFailure { _error.value = it.message ?: "无法切换计时目标" }
-    }
+        runTypedCommand(AttentionCommand.ConfirmSchedule(entryId, durationMinutes))
+    fun switchTimer(targetId: String?) =
+        runTypedCommand(AttentionCommand.SwitchTimer(targetId), errorMessage = "无法切换计时目标")
     fun pauseTimer() = runCommand { it.pauseTimer(Instant.now()) }
     fun resumeTimer() = runCommand { it.resumeTimer(Instant.now()) }
     fun recoverTimer(onSuccess: () -> Unit = {}) = runCommand(onSuccess = onSuccess) { it.recoverTimer(Instant.now()) }
-    fun stopTimer(onSuccess: () -> Unit = {}) = scope.launch {
-        runCatching {
-            repository.updateBusiness { current ->
-                current.stopTimerAndAwardEligibleMilestones(Instant.now(), zone).state
-            }
-        }.onSuccess { onSuccess() }
-            .onFailure { _error.value = it.message ?: "无法结束计时" }
-    }
+    fun stopTimer(onSuccess: () -> Unit = {}) =
+        runTypedCommand(AttentionCommand.StopTimer, onSuccess = { onSuccess() }, errorMessage = "无法结束计时")
 
     fun awardMilestones() = runCommand { it.awardEligibleMilestones(java.time.LocalDate.now(zone)) }
     fun settlePeriodSnapshots() = runCommand { it.settlePeriodSnapshots(it.planningDate(Instant.now(), zone)) }
@@ -297,6 +274,17 @@ class AttentionViewModel(
         runCatching { repository.updateBusiness(transform) }
             .onSuccess { onSuccess() }
             .onFailure { _error.value = it.message ?: "操作未保存" }
+    }
+
+    private fun runTypedCommand(
+        command: AttentionCommand,
+        now: Instant = Instant.now(),
+        onSuccess: (com.attention.domain.AttentionCommandResult) -> Unit = {},
+        errorMessage: String = "操作未保存",
+    ) = scope.launch {
+        runCatching { repository.executeCommand(command, now, zone) }
+            .onSuccess(onSuccess)
+            .onFailure { _error.value = it.message ?: errorMessage }
     }
 
     private fun runSettingsCommand(command: suspend () -> Unit) = scope.launch {
