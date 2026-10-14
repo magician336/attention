@@ -44,12 +44,22 @@ data class AttentionRadius(
 )
 
 /**
- * 字体标度：三档字重层级。
+ * 字体标度：四档字重层级（页面标题 display > 区块标题 title > 正文 body > 辅助说明 caption）。
  *
- * 全部使用 sp，因此跟随系统动态字号放大；行高统一按 Center 对齐，字号放大后仍然可读。
+ * display 只用于页面级标题，title 用于卡片与区块标题；两者必须保持明显字号差，
+ * 否则页面会失去主次结构。全部使用 sp，因此跟随系统动态字号放大；行高统一按 Center 对齐，字号放大后仍然可读。
  */
 @Immutable
 data class AttentionTypography(
+    val display: TextStyle = TextStyle(
+        fontSize = 28.sp,
+        lineHeight = 36.sp,
+        fontWeight = FontWeight.SemiBold,
+        lineHeightStyle = LineHeightStyle(
+            alignment = LineHeightStyle.Alignment.Center,
+            trim = LineHeightStyle.Trim.None,
+        ),
+    ),
     val title: TextStyle = TextStyle(
         fontSize = 20.sp,
         lineHeight = 28.sp,
@@ -303,7 +313,8 @@ fun AttentionTheme(
         MaterialTheme(
             colorScheme = tokens.colorScheme,
             typography = Typography(
-                titleLarge = typography.title,
+                headlineMedium = typography.display,
+                titleLarge = typography.display,
                 titleMedium = typography.title,
                 bodyLarge = typography.body,
                 bodyMedium = typography.body,

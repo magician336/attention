@@ -38,17 +38,23 @@ class AttentionScaleTest {
     }
 
     @Test
-    fun typography_scale_has_three_tiers_ordered_by_emphasis() {
+    fun typography_scale_has_four_tiers_ordered_by_emphasis() {
         val typography = AttentionThemeTokens.forDarkTheme(darkTheme = false).typography
 
+        assertEquals(28.sp, typography.display.fontSize)
         assertEquals(20.sp, typography.title.fontSize)
         assertEquals(15.sp, typography.body.fontSize)
         assertEquals(13.sp, typography.caption.fontSize)
         assertEquals(FontWeight.Medium, typography.title.fontWeight)
         assertTrue(
-            "三档字号的层级顺序必须递减",
-            typography.title.fontSize.value > typography.body.fontSize.value &&
+            "四档字号的层级顺序必须递减",
+            typography.display.fontSize.value > typography.title.fontSize.value &&
+                typography.title.fontSize.value > typography.body.fontSize.value &&
                 typography.body.fontSize.value > typography.caption.fontSize.value,
+        )
+        assertTrue(
+            "页面标题与区块标题必须保持明显字号差，否则页面失去主次结构",
+            typography.display.fontSize.value - typography.title.fontSize.value >= 6.0,
         )
     }
 
@@ -56,7 +62,7 @@ class AttentionScaleTest {
     fun typography_scale_uses_sp_so_it_scales_with_the_system_font_size() {
         val typography = AttentionThemeTokens.forDarkTheme(darkTheme = true).typography
 
-        listOf(typography.title, typography.body, typography.caption).forEach { style ->
+        listOf(typography.display, typography.title, typography.body, typography.caption).forEach { style ->
             assertEquals(TextUnitType.Sp, style.fontSize.type)
             assertEquals(TextUnitType.Sp, style.lineHeight.type)
             assertEquals(

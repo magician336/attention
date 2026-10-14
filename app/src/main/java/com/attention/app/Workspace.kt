@@ -492,7 +492,7 @@ private fun WorkspaceTodayScreen(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(tokens.spacing.large),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("今天工作台", style = tokens.typography.title)
+        Text("今天工作台", style = tokens.typography.display)
         Text("规划日界线 ${formatMinutes(state.settings.planningDayBoundaryMinutes)} · 每周从${weekName(state.settings.weekStartDay)}开始")
         Text("规划日：$date")
         if (!state.onboardingCompleted) OnboardingCard(state, viewModel)
@@ -930,7 +930,7 @@ private fun TargetsScreen(state: AttentionState, viewModel: AttentionViewModel) 
     var selectedArchivedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var pendingDeleteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(tokens.spacing.large), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("目标树", style = tokens.typography.title)
+        Text("目标树", style = tokens.typography.display)
         Text("父目标显示整个子树的实际投入；归档目标会从默认列表隐藏。")
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             OutlinedTextField(title, { title = it }, label = { Text(if (parentId == null) "新计划" else "新子计划") }, modifier = Modifier.weight(1f), singleLine = true)
@@ -1523,7 +1523,7 @@ private fun AgendaScreen(
         dateError = false
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(tokens.spacing.large), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(if (selectedDate == null) "所有日期" else "规划日 $selectedDate", style = tokens.typography.title, modifier = Modifier.testTag("agenda-filter"))
+        Text(if (selectedDate == null) "所有日期" else "规划日 $selectedDate", style = tokens.typography.display, modifier = Modifier.testTag("agenda-filter"))
         Text("日程条目可带预计时长；它不会自动变成实际投入。")
         Box {
             AttentionOutlinedButton(onClick = { dateMenuExpanded = true }, modifier = Modifier.testTag("agenda-date-menu")) {
@@ -2018,7 +2018,7 @@ private fun SettingsScreen(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(tokens.spacing.large),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("设置", style = tokens.typography.title)
+        Text("设置", style = tokens.typography.display)
         Text("启动入口", style = tokens.typography.title)
         Text("应用下次启动时打开的页面")
         destinations.forEach { (destination, label) ->
@@ -2063,7 +2063,7 @@ private fun StatisticsScreen(
     val levelProgress = levelProgressForExperience(state.experience)
     val levelSpan = levelProgress.nextLevelThreshold - levelProgress.currentLevelThreshold
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(tokens.spacing.large), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("统计与成长", style = tokens.typography.title)
+        Text("统计与成长", style = tokens.typography.display)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             AttentionTextButton(onClick = { selectedDate = shiftStatisticsDate(selectedDate, cadence, -1) }) { Text("上一周期") }
             Text("${stats.range.start} 至 ${stats.range.endInclusive}")

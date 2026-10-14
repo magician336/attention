@@ -84,7 +84,7 @@ class AttentionThemeComposeTest {
         val text = probeText("brand-probe-scales")
         assertEquals("4.0,12.0,24.0", text.substringAfter("spacing=").substringBefore(";"))
         assertEquals("8.0,16.0,28.0", text.substringAfter("radius=").substringBefore(";"))
-        assertEquals("title:20.0,body:15.0,caption:13.0", text.substringAfter("typography="))
+        assertEquals("display:28.0,title:20.0,body:15.0,caption:13.0", text.substringAfter("typography="))
     }
 
     @Test
@@ -153,7 +153,7 @@ class AttentionThemeComposeTest {
             "error=$error",
             "spacing=4.0,12.0,24.0",
             "radius=8.0,16.0,28.0",
-            "typography=title:20.0,body:15.0,caption:13.0",
+            "typography=display:28.0,title:20.0,body:15.0,caption:13.0",
         ).joinToString(";")
     }
 }
@@ -170,7 +170,8 @@ private fun BrandTokenProbe(modifier: Modifier = Modifier) {
             "error=${tokens.brand.error.accent.hexForProbe()}",
             "spacing=${tokens.spacing.small.value},${tokens.spacing.medium.value},${tokens.spacing.large.value}",
             "radius=${tokens.radius.small.value},${tokens.radius.medium.value},${tokens.radius.large.value}",
-            "typography=title:${tokens.typography.title.fontSize.value}," +
+            "typography=display:${tokens.typography.display.fontSize.value}," +
+                "title:${tokens.typography.title.fontSize.value}," +
                 "body:${tokens.typography.body.fontSize.value}," +
                 "caption:${tokens.typography.caption.fontSize.value}",
         ).joinToString(";"),
