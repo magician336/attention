@@ -7,7 +7,6 @@ import android.net.Uri
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
-import android.widget.Toast
 import java.io.OutputStreamWriter
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -24,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,7 +42,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
@@ -64,10 +66,15 @@ import com.attention.app.timer.AttentionBootReceiver
 import com.attention.app.reminder.AlarmReminderCoordinator
 import com.attention.app.reminder.ReminderScheduler
 import com.attention.app.ui.components.AttentionButton
+import com.attention.app.ui.components.AttentionConfirmDialog
+import com.attention.app.ui.components.AttentionFeedbackHostState
 import com.attention.app.ui.components.AttentionInlineError
 import com.attention.app.ui.components.AttentionOutlinedButton
 import com.attention.app.ui.components.AttentionPermissionState
+import com.attention.app.ui.components.AttentionSelectedIndicator
+import com.attention.app.ui.components.AttentionSnackbarHost
 import com.attention.app.ui.components.AttentionTextButton
+import com.attention.app.ui.components.rememberAttentionFeedbackHostState
 import com.attention.app.ui.format.DurationFormat
 import com.attention.app.ui.format.TimeEntrySourceFormat
 import com.attention.app.ui.format.TimeRecordTags
@@ -119,6 +126,7 @@ import com.attention.domain.timerTargetLabel
 import java.time.Instant
 import java.time.LocalDate
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 private class WorkspaceViewModelFactory(
     private val repository: AttentionStateRepository,
@@ -144,6 +152,9 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     val state by viewModel.state.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val tokens = attentionTokens()
+    // 短时提示的宿主状态只创建一次，挂在页面切换之上，因此五个页面共用同一个提示出口。
+    val feedback = rememberAttentionFeedbackHostState()
+    val feedbackScope = rememberCoroutineScope()
     val hasExternalScheduleRequest = openScheduleDate != null || openScheduleId != null
     var destination by remember {
         mutableStateOf(initialLaunchDestination(hasExternalScheduleRequest, state.launchDestination, state.lastOpenedDestination))
@@ -164,18 +175,18 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         val csv = pendingTimeEntriesCsv
         pendingTimeEntriesCsv = null
         if (uri == null) {
-            Toast.makeText(context, "已取消保存时间记录 CSV", Toast.LENGTH_SHORT).show()
+            feedbackScope.launch { feedback.showMessage("已取消保存时间记录 CSV") }
         } else if (csv == null) {
-            Toast.makeText(context, "时间记录 CSV 导出失败", Toast.LENGTH_SHORT).show()
+            feedbackScope.launch { feedback.showMessage("时间记录 CSV 导出失败") }
         } else {
             runCatching {
                 context.contentResolver.openOutputStream(uri)?.use { output ->
                     writeUtf8Csv(csv, output)
                 } ?: error("无法打开保存位置")
             }.onSuccess {
-                Toast.makeText(context, "时间记录 CSV 已保存", Toast.LENGTH_SHORT).show()
+                feedbackScope.launch { feedback.showMessage("时间记录 CSV 已保存") }
             }.onFailure {
-                Toast.makeText(context, "时间记录 CSV 保存失败：${it.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
+                feedbackScope.launch { feedback.showMessage("时间记录 CSV 保存失败：${it.message ?: "未知错误"}") }
             }
         }
     }
@@ -309,6 +320,8 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                 else AttentionOutlinedButton(onClick = { settingsOpen = true }) { Text("设置") }
             }
         },
+    // 短时提示宿主挂在 Scaffold 上，因此五个页面共用同一个出口，流程不被打断。
+        snackbarHost = { AttentionSnackbarHost(state = feedback) },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
             error?.let {
@@ -322,7 +335,11 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             if (settingsOpen) {
                 SettingsScreen(state = state, viewModel = viewModel)
             } else when (destination) {
-                LaunchDestination.TODAY, LaunchDestination.LAST_OPENED -> WorkspaceTodayScreen(state, viewModel)
+                LaunchDestination.TODAY, LaunchDestination.LAST_OPENED -> WorkspaceTodayScreen(
+                    state = state,
+                    viewModel = viewModel,
+                    feedback = feedback,
+                )
                 LaunchDestination.TARGETS -> TargetsScreen(state, viewModel)
                 LaunchDestination.ALL_DATES -> AgendaScreen(
                     state = state,
@@ -435,14 +452,21 @@ private fun backupPreviewText(preview: BackupPreview, current: AttentionState, m
 }
 
 @Composable
-private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionViewModel) {
+private fun WorkspaceTodayScreen(
+    state: AttentionState,
+    viewModel: AttentionViewModel,
+    feedback: AttentionFeedbackHostState,
+) {
     val context = LocalContext.current
     val tokens = attentionTokens()
+    val feedbackScope = rememberCoroutineScope()
     fun startTimer(targetId: String?) {
         viewModel.startTimer(targetId) {
             AttentionBootReceiver.cancelRecoveryPrompt(context)
             if (!notificationsEnabled(context)) {
-                Toast.makeText(context, "通知权限未开启，计时仍会保存；通知栏控制不可用。", Toast.LENGTH_LONG).show()
+                feedbackScope.launch {
+                    feedback.showMessage("通知权限未开启，计时仍会保存；通知栏控制不可用。")
+                }
             }
             ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
         }
@@ -463,6 +487,7 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
     var editMinutes by remember { mutableStateOf("") }
     var editNote by remember { mutableStateOf("") }
     var editTargetId by remember { mutableStateOf<String?>(null) }
+    var pendingDelete by remember { mutableStateOf<TimeEntry?>(null) }
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(tokens.spacing.large),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -495,9 +520,17 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
                     }
                 }
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    AttentionTextButton(onClick = { manualTargetId = null }) { Text("未归属") }
-                    state.targets.filter { !it.archived }.forEach { target ->
-                        AttentionTextButton(onClick = { manualTargetId = target.id }) { Text(target.title) }
+                    // 选中项用共用的选中表达：颜色之外同时有勾选图标与“已选中：…”文案。
+                    val targets = listOf<Pair<String?, String>>(null to "未归属") +
+                        state.targets.filter { !it.archived }.map { it.id to it.title }
+                    targets.forEach { (id, title) ->
+                        if (manualTargetId == id) {
+                            Box(Modifier.clickable { manualTargetId = id }) {
+                                AttentionSelectedIndicator(selected = true, label = title)
+                            }
+                        } else {
+                            AttentionTextButton(onClick = { manualTargetId = id }) { Text(title) }
+                        }
                     }
                 }
                 Text("本规划日已记录：${state.timeEntries.filter { it.planningDate == date }.sumOf { it.durationMinutes }} 分钟")
@@ -643,7 +676,7 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
                             editNote = entry.note
                             editTargetId = entry.targetId
                         }, modifier = Modifier.testTag("edit-time-${entry.id}")) { Text("编辑") }
-                        AttentionTextButton(onClick = { viewModel.deleteTime(entry.id) }, modifier = Modifier.testTag("delete-time-${entry.id}")) { Text("删除") }
+                        AttentionTextButton(onClick = { pendingDelete = entry }, modifier = Modifier.testTag("delete-time-${entry.id}")) { Text("删除") }
                     }
                     if (editingEntry?.id == entry.id) {
                         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -673,6 +706,28 @@ private fun WorkspaceTodayScreen(state: AttentionState, viewModel: AttentionView
             targets = state.targets.filterNot { it.archived },
             onDismiss = { editingSchedule = null },
             onSave = { updated -> viewModel.updateSchedule(updated); editingSchedule = null },
+        )
+    }
+    pendingDelete?.let { entry ->
+        AttentionConfirmDialog(
+            visible = true,
+            title = "删除这条实际投入",
+            // 影响说明是必填的：用户要知道自己到底会失去什么，而不是只被问一句是否确定。
+            impact = "删除后这 ${DurationFormat.ofMinutes(entry.durationMinutes)} 的实际投入不再计入目标进度、投入经验与统计。" +
+                "删除后仍可以在底部提示里撤销一次。",
+            confirmLabel = "删除",
+            onConfirm = {
+                pendingDelete = null
+                viewModel.deleteTimeWithUndo(entry.id) { removed ->
+                    feedbackScope.launch {
+                        feedback.showUndoableMessage(
+                            message = "已删除这条实际投入，它不再计入目标进度与统计。",
+                            onUndo = { viewModel.restoreTimeEntry(removed) },
+                        )
+                    }
+                }
+            },
+            onDismiss = { pendingDelete = null },
         )
     }
 }

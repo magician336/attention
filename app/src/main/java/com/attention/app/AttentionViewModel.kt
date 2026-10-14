@@ -10,7 +10,9 @@ import com.attention.domain.RecurrenceRule
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.StoredSettings
 import com.attention.domain.TargetMove
+import com.attention.domain.TimeEntry
 import com.attention.domain.TimeEntrySource
+import com.attention.domain.recalculateExperience
 import com.attention.domain.addGoalStage
 import com.attention.domain.appendOneTimeGoalStage
 import com.attention.domain.addFutureGoalRule
@@ -117,6 +119,32 @@ class AttentionViewModel(
         }
 
     fun deleteTime(id: String) = runCommand { it.deleteTimeEntry(id) }
+
+    /**
+     * 删除一条实际投入，并把被删掉的原始记录交还给调用方。
+     *
+     * 交还的是原来的记录本身，而不是重新补记一笔：撤销必须把 id、来源、关联日程与
+     * 精确时间戳原样还回去，否则“撤销”会悄悄改写事实。只有删除真的成功了才会回调，
+     * 保存失败时 [onRemoved] 不会被调用。
+     */
+    fun deleteTimeWithUndo(id: String, onRemoved: (TimeEntry) -> Unit) {
+        var removed: TimeEntry? = null
+        runCommand(onSuccess = { removed?.let(onRemoved) }) { state ->
+            removed = state.timeEntries.firstOrNull { it.id == id }
+            state.deleteTimeEntry(id)
+        }
+    }
+
+    /**
+     * 把一条被删除的实际投入原样放回去。撤销的真实恢复动作。
+     *
+     * 经验值随时间记录重新推导，因此恢复之后累计投入与目标汇总回到删除前的样子；
+     * 已经存在的同 id 记录不会被重复写入。
+     */
+    fun restoreTimeEntry(entry: TimeEntry) = runCommand { state ->
+        if (state.timeEntries.any { it.id == entry.id }) state
+        else state.copy(timeEntries = state.timeEntries + entry).recalculateExperience()
+    }
 
     fun addGoal(targetId: String, cadence: GoalCadence, minutes: Int, startDate: String, dueDate: String? = null) =
         runCommand { it.addGoalStage(targetId, cadence, minutes, startDate, dueDate) }

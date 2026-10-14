@@ -28,6 +28,9 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onAllNodesWithTag
+import com.attention.app.ui.components.AttentionFeedbackTags
 
 @RunWith(AndroidJUnit4::class)
 class WorkspaceGoalSummaryCorrectionIntegrationTest {
@@ -94,6 +97,12 @@ class WorkspaceGoalSummaryCorrectionIntegrationTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("delete-time-$OWNED_ENTRY_ID").performScrollTo().performClick()
         composeRule.waitForIdle()
+        // Deleting a time record is destructive, so it is confirmed before anything changes.
+        composeRule.onNodeWithTag(AttentionFeedbackTags.CONFIRM_DIALOG, useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag(AttentionFeedbackTags.CONFIRM_DIALOG_CONFIRM, useUnmergedTree = true).performClick()
+        composeRule.waitUntil(5_000) {
+            composeRule.onAllNodesWithTag("delete-time-$OWNED_ENTRY_ID").fetchSemanticsNodes().isEmpty()
+        }
         openTargetDetails()
         assertSummary(5)
     }
