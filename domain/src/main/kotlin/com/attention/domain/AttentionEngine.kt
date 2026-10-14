@@ -1111,6 +1111,21 @@ fun AttentionState.continuousPlanningDaysThrough(onDate: LocalDate, targetId: St
     return count
 }
 
+private const val CUMULATIVE_MILESTONE_KIND = "cumulative"
+
+/**
+ * 累计投入里程碑的 instanceKey 形如 cumulative:小时数。kind 或 key 格式不符时返回 null，
+ * 调用方据此展示，而不是自己解析 key —— key 格式是 :domain 的规则。
+ */
+fun Milestone.cumulativeHours(): Long? =
+    if (kind == CUMULATIVE_MILESTONE_KIND) instanceKey.substringAfter("$CUMULATIVE_MILESTONE_KIND:").toLongOrNull() else null
+
+/** 累计投入里程碑：按达成时间排序，同一 instanceKey 只保留一条。 */
+fun AttentionState.cumulativeMilestones(): List<Milestone> = milestones
+    .filter { it.kind == CUMULATIVE_MILESTONE_KIND }
+    .sortedWith(compareBy({ it.achievedAtEpochMillis }, { it.id }))
+    .distinctBy { it.instanceKey }
+
 private const val ONE_TIME_GOAL_MILESTONE_KIND = "one_time_goal"
 
 fun oneTimeGoalMilestoneKey(stageId: String, startDate: String): String =
@@ -1178,9 +1193,9 @@ fun AttentionState.eligibleMilestones(onDate: LocalDate): List<Milestone> {
         .filter { it.targetId != null && LocalDate.parse(it.planningDate) <= onDate }
         .sumOf { it.durationMinutes.toLong() } / 60
     (100L..totalHours step 100L).forEach { hours ->
-        val key = "cumulative:$hours"
+        val key = "$CUMULATIVE_MILESTONE_KIND:$hours"
         val reward = cumulativeMilestoneReward(hours)
-        if (reward != null) result.addMilestoneIfMissing(existing, "cumulative", key, reward)
+        if (reward != null) result.addMilestoneIfMissing(existing, CUMULATIVE_MILESTONE_KIND, key, reward)
     }
     return result
 }
