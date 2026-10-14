@@ -5,8 +5,12 @@ import com.attention.app.data.room.entity.ExperienceEntity
 import com.attention.app.data.room.mapper.toDomain
 import com.attention.app.data.room.mapper.toEntity
 import com.attention.domain.AttentionState
+import com.attention.domain.AttentionCommand
+import com.attention.domain.AttentionCommandResult
 import com.attention.domain.descendantIds
 import com.attention.domain.recalculateExperience
+import java.time.Instant
+import java.time.ZoneId
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
@@ -24,6 +28,26 @@ class RoomBusinessDataRepository(
         val next = transform(readInTransaction()).recalculateExperience()
         replaceInTransaction(next)
         next
+    }
+
+    /**
+     * Executes one typed domain command against the current Room state and
+     * persists the complete result in the same transaction.
+     *
+     * The command remains the sole owner of domain facts such as generated
+     * entries and milestones. Room only supplies the current state and stores
+     * the canonical next state, so a persistence failure rolls back every
+     * write made by this command.
+     */
+    suspend fun execute(
+        command: AttentionCommand,
+        now: Instant,
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): AttentionCommandResult = database.withTransaction {
+        val result = command.execute(readInTransaction(), now, zone)
+        val canonicalState = result.state.recalculateExperience()
+        replaceInTransaction(canonicalState)
+        result.copy(state = canonicalState)
     }
 
     suspend fun toggleScheduleCompleted(entryId: String): AttentionState = database.withTransaction {
