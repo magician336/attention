@@ -41,7 +41,7 @@ import java.time.LocalDate
  * 页面因此既不读系统时钟，也不解析纪元毫秒（ADR-0005 §3）。
  *
  * 编辑表单里的提醒只是「一天内的第几分钟」，换算成绝对时刻由组合根 adapter 完成，
- * 权限申请同样只以 intent 过 seam（ADR-0005 §45-47）。
+ * 权限申请同样只以 intent 过 seam（ADR-0005 第 4 节「Android adapter 归属组合根」）。
  */
 @Composable
 internal fun TodayScheduleSection(state: TodayScreenState, actions: TodayActions) {

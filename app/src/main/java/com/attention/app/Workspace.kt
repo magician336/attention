@@ -103,7 +103,7 @@ import kotlinx.coroutines.launch
 /**
  * 今天工作台的 actions adapter，在组合根一侧组装：页面发出 intent，这里落到 ViewModel、
  * 设置存储、可撤销提示与所有 Android 平台能力。ViewModel、Room、`Context` 与前台计时服务
- * 因此只出现在组合根侧，页面 module 一个都拿不到（ADR-0005 §24、§45-47）。
+ * 因此只出现在组合根侧，页面 module 一个都拿不到（ADR-0005 第 1 节、第 4 节「Android adapter 归属组合根」）。
  */
 private class TodayActionsAdapter(
     private val viewModel: AttentionViewModel,
@@ -239,7 +239,7 @@ private class SettingsActionsAdapter(
 /**
  * 所有日期页的 actions adapter，在组合根一侧组装：页面发出 intent，这里落到 ViewModel、
  * 提醒的绝对时刻换算与通知权限申请。ViewModel、`Activity`/`Context` 与平台能力
- * 因此只出现在组合根侧（ADR-0005 §45-47）。
+ * 因此只出现在组合根侧（ADR-0005 第 4 节「Android adapter 归属组合根」）。
  */
 private class AgendaActionsAdapter(
     private val viewModel: AttentionViewModel,

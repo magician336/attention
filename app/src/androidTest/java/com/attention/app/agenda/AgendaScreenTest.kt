@@ -3,30 +3,26 @@ package com.attention.app.agenda
 import androidx.activity.compose.setContent
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.isToggleable
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.attention.app.MainActivity
 import com.attention.app.ui.theme.AttentionTheme
-import com.attention.domain.ActiveTimer
-import com.attention.domain.AttentionState
-import com.attention.domain.RecurrenceRule
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.ScheduleFrequency
-import com.attention.domain.StoredSettings
-import com.attention.domain.Target
 import com.attention.workspace.state.AgendaActions
+import com.attention.workspace.state.AgendaDateOption
+import com.attention.workspace.state.AgendaDateSection
+import com.attention.workspace.state.AgendaRecurrenceRuleLine
 import com.attention.workspace.state.AgendaRecurrenceDraft
 import com.attention.workspace.state.AgendaScheduleDraft
+import com.attention.workspace.state.AgendaScheduleRow
 import com.attention.workspace.state.AgendaScreenState
-import com.attention.workspace.state.agendaScreenState
-import java.time.Instant
+import com.attention.workspace.state.AgendaTargetOption
 import java.time.LocalDate
-import java.time.ZoneId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Rule
@@ -37,20 +33,21 @@ import org.junit.runner.RunWith
  * 所有日期页的直接测试：只给它 fake screen state 与 fake actions，
  * 断言可见标签、选中规划日、导航与筛选 intent、创建/编辑/完成 intent，
  * 以及从日程条目起计时的来源关联，不经过 ViewModel、Room 与权限 API。
+ *
+ * screen state 是手写的，不走 agendaScreenState 投影：页面测试钉住的是页面自己要渲染的那一行
+ * 文本，条目筛选与重复日程展开这些领域规则由 workspace-state 与 domain 的纯 Kotlin 测试负责。
+ * 页面版本因此不需要 Activity 宿主，用 [createComposeRule] 挂载即可。
  */
 @RunWith(AndroidJUnit4::class)
 class AgendaScreenTest {
 
     @get:Rule
-    val composeRule = createAndroidComposeRule<MainActivity>()
-
-    private val zone: ZoneId = ZoneId.of("Asia/Shanghai")
-    private val now: Instant = LocalDate.of(2026, 3, 5).atTime(10, 0).atZone(zone).toInstant()
+    val composeRule = createComposeRule()
 
     @Test
     fun the_page_shows_the_all_dates_view_with_a_capacity_summary_per_planning_day() {
         // 所有日期是特殊视图：条目按规划日分组，每天各有自己的每日容量
-        mount(screenState())
+        mount(allDatesScreenState())
 
         node("所有日期").assertIsDisplayed()
         node("规划日 2026-03-05").assertIsDisplayed()
@@ -63,7 +60,7 @@ class AgendaScreenTest {
     @Test
     fun a_selected_planning_day_shows_that_day_title_and_entries() {
         // 选中规划日：标题、筛选文案与容量卡片都跟着这一天
-        mount(screenState(selectedDate = LocalDate.of(2026, 3, 6)))
+        mount(planningDayScreenState(LocalDate.of(2026, 3, 6)))
 
         node("规划日 2026-03-06").assertIsDisplayed()
         node("筛选：规划日 2026-03-06").assertIsDisplayed()
@@ -74,7 +71,7 @@ class AgendaScreenTest {
     @Test
     fun the_empty_view_explains_what_is_missing() {
         // 没有条目时按当前视图给出空态文案
-        mount(screenState(state = AttentionState()))
+        mount(emptyScreenState())
 
         node("所有日期暂无日程条目。").assertIsDisplayed()
         composeRule.onNodeWithTag("agenda-empty", useUnmergedTree = true).assertIsDisplayed()
@@ -84,7 +81,7 @@ class AgendaScreenTest {
     fun picking_a_planning_day_from_the_filter_emits_the_selection_intent() {
         // 规划日筛选只发出 intent，实际选中日由组合根与页面选择状态决定
         val intents = RecordingAgendaActions()
-        mount(screenState(), intents)
+        mount(allDatesScreenState(), intents)
 
         composeRule.onNodeWithTag("agenda-date-menu", useUnmergedTree = true).performScrollTo().performClick()
         composeRule.onNodeWithTag("agenda-date-2026-03-06", useUnmergedTree = true).performClick()
@@ -96,7 +93,7 @@ class AgendaScreenTest {
     fun choosing_all_dates_emits_the_special_view_intent() {
         // 所有日期是一个特殊视图，不是一个可用的日期值
         val intents = RecordingAgendaActions()
-        mount(screenState(selectedDate = LocalDate.of(2026, 3, 6)), intents)
+        mount(planningDayScreenState(LocalDate.of(2026, 3, 6)), intents)
 
         composeRule.onNodeWithTag("agenda-date-menu", useUnmergedTree = true).performScrollTo().performClick()
         composeRule.onNodeWithTag("agenda-all-dates", useUnmergedTree = true).performClick()
@@ -109,7 +106,7 @@ class AgendaScreenTest {
     fun submitting_the_add_form_emits_a_schedule_draft() {
         // 标题与规划日必需；其余可选，提交后只发一个草稿 intent
         val intents = RecordingAgendaActions()
-        mount(screenState(), intents)
+        mount(allDatesScreenState(), intents)
 
         composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true).performScrollTo()
             .performTextReplacement("整理需求")
@@ -128,7 +125,7 @@ class AgendaScreenTest {
     fun an_incomplete_add_form_shows_the_validation_error_instead_of_an_intent() {
         // 标题为空时不发 intent，页面就地给出与迁移前相同的提示
         val intents = RecordingAgendaActions()
-        mount(screenState(), intents)
+        mount(allDatesScreenState(), intents)
 
         composeRule.onNodeWithTag("agenda-estimate-input", useUnmergedTree = true).performTextReplacement("45")
         composeRule.onNodeWithTag("agenda-add-submit", useUnmergedTree = true).performScrollTo().performClick()
@@ -141,7 +138,7 @@ class AgendaScreenTest {
     fun a_reminder_in_the_add_form_asks_for_permission_as_an_intent() {
         // 填了提醒才请求权限；权限申请本身由组合根 adapter 完成
         val intents = RecordingAgendaActions()
-        mount(screenState(), intents)
+        mount(allDatesScreenState(), intents)
 
         composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true).performScrollTo()
             .performTextReplacement("带提醒的日程")
@@ -158,7 +155,7 @@ class AgendaScreenTest {
     fun editing_an_entry_saves_the_changed_draft() {
         // 编辑对话框是页面本地表单状态；保存发出被改过的条目
         val intents = RecordingAgendaActions()
-        mount(screenState(), intents)
+        mount(allDatesScreenState(), intents)
 
         composeRule.onNodeWithTag("schedule-edit-e1", useUnmergedTree = true).performScrollTo().performClick()
         composeRule.onNodeWithTag("schedule-edit-estimate-e1", useUnmergedTree = true).performScrollTo()
@@ -174,7 +171,7 @@ class AgendaScreenTest {
     fun completing_and_cancelling_completion_emit_separate_intents() {
         // 完成确认与取消完成各自一个 intent，都带条目 id
         val intents = RecordingAgendaActions()
-        mount(screenState(), intents)
+        mount(allDatesScreenState(), intents)
 
         composeRule.onNodeWithTag("schedule-completion-e1", useUnmergedTree = true).performScrollTo().performClick()
         composeRule.onNodeWithTag("schedule-completion-e2", useUnmergedTree = true).performScrollTo().performClick()
@@ -187,7 +184,7 @@ class AgendaScreenTest {
     fun starting_a_timer_from_an_entry_keeps_the_entry_as_the_source() {
         // 从日程条目起计时的 intent 带上整条条目，组合根因此能保留来源关联
         val intents = RecordingAgendaActions()
-        mount(screenState(), intents)
+        mount(allDatesScreenState(), intents)
 
         composeRule.onNodeWithTag("schedule-start-timer-e1", useUnmergedTree = true).performScrollTo().performClick()
 
@@ -199,7 +196,7 @@ class AgendaScreenTest {
     @Test
     fun starting_a_timer_is_disabled_while_a_timer_is_running() {
         // 已有计时进行中时不允许从日程条目再起一个
-        mount(screenState(state = state().copy(activeTimer = runningTimer())))
+        mount(allDatesScreenState(canStartTimer = false))
 
         composeRule.onNodeWithTag("schedule-start-timer-e1", useUnmergedTree = true)
             .assertExists()
@@ -207,9 +204,9 @@ class AgendaScreenTest {
 
     @Test
     fun the_recurring_rule_lines_are_shown_with_their_stop_intent() {
-        // 重复日程规则行来自投影；停止未来生成只发出带 id 的 intent
+        // 重复日程规则行来自注入的 screen state；停止未来生成只发出带 id 的 intent
         val intents = RecordingAgendaActions()
-        mount(screenState(), intents)
+        mount(allDatesScreenState(), intents)
 
         node("每日晨读 · 每日 · 2026-03-05").assertIsDisplayed()
         node("每周复盘 · 每周 一,三 · 2026-03-02 至 2026-03-31").assertIsDisplayed()
@@ -223,7 +220,7 @@ class AgendaScreenTest {
     fun creating_a_weekly_recurrence_emits_the_rule_draft() {
         // 每周规则至少选一个星期；选中后提交发出规则草稿
         val intents = RecordingAgendaActions()
-        mount(screenState(), intents)
+        mount(allDatesScreenState(), intents)
 
         node("重复标题").performScrollTo().performTextReplacement("每周复盘会")
         node("每周").performScrollTo().performClick()
@@ -242,7 +239,7 @@ class AgendaScreenTest {
     fun a_weekly_recurrence_without_a_weekday_shows_the_validation_error() {
         // 每周规则没有选星期时不发 intent
         val intents = RecordingAgendaActions()
-        mount(screenState(), intents)
+        mount(allDatesScreenState(), intents)
 
         node("重复标题").performScrollTo().performTextReplacement("每周复盘会")
         node("每周").performScrollTo().performClick()
@@ -256,69 +253,122 @@ class AgendaScreenTest {
     private fun node(text: String, substring: Boolean = false) =
         composeRule.onNodeWithText(text, substring = substring).performScrollTo()
 
-    private fun runningTimer() = ActiveTimer(
-        targetId = null,
-        startedAtEpochMillis = now.toEpochMilli(),
-        lastPlanningDate = "2026-03-05",
+    private val planningDay: LocalDate = LocalDate.of(2026, 3, 5)
+
+    private val reportEntry = ScheduleEntry(
+        id = "e1",
+        planningDate = "2026-03-05",
+        title = "写周报",
+        estimatedMinutes = 60,
+        targetId = "t1",
     )
 
-    private fun state() = AttentionState(
-        targets = listOf(
-            Target(id = "t1", title = "工作"),
-            Target(id = "t-archived", title = "已归档计划", archived = true),
+    private val meetingEntry = ScheduleEntry(
+        id = "e2",
+        planningDate = "2026-03-06",
+        title = "开组会",
+        estimatedMinutes = 30,
+        completed = true,
+    )
+
+    /** 手写的行：展示文本由测试自己钉住，条目本身仍带自己的字段供 intent 使用。 */
+    private fun row(entry: ScheduleEntry, detailLabel: String, canStartTimer: Boolean) = AgendaScheduleRow(
+        entry = entry,
+        title = entry.title,
+        detailLabel = detailLabel,
+        note = "",
+        startText = "",
+        endText = "",
+        estimateText = entry.estimatedMinutes?.toString() ?: "",
+        reminderText = "",
+        targetId = entry.targetId,
+        canStartTimer = canStartTimer,
+    )
+
+    private val availableDates = listOf(
+        AgendaDateOption(planningDay, "规划日 2026-03-05"),
+        AgendaDateOption(LocalDate.of(2026, 3, 6), "规划日 2026-03-06"),
+    )
+
+    private val recurrenceRules = listOf(
+        AgendaRecurrenceRuleLine(ruleId = "rule-daily", label = "每日晨读 · 每日 · 2026-03-05", active = true),
+        AgendaRecurrenceRuleLine(
+            ruleId = "rule-weekly",
+            label = "每周复盘 · 每周 一,三 · 2026-03-02 至 2026-03-31",
+            active = false,
         ),
-        schedules = listOf(
-            ScheduleEntry(
-                id = "e1",
+    )
+
+    private val targets = listOf(AgendaTargetOption(targetId = "t1", title = "工作"))
+
+    /** 所有日期特殊视图：条目按规划日分组，每组带这一天的每日容量。 */
+    private fun allDatesScreenState(canStartTimer: Boolean = true): AgendaScreenState = AgendaScreenState(
+        planningDate = planningDay,
+        selectedDate = null,
+        headingLabel = "所有日期",
+        filterLabel = "筛选：所有日期",
+        availableDates = availableDates,
+        selectedCapacityLabel = null,
+        selectedRows = emptyList(),
+        dateSections = listOf(
+            AgendaDateSection(
                 planningDate = "2026-03-05",
-                title = "写周报",
-                estimatedMinutes = 60,
-                targetId = "t1",
+                capacityLabel = "已安排 60 / 120 分钟",
+                rows = listOf(
+                    row(reportEntry, "2026-03-05 · 60 分钟 · 工作 · 无提醒", canStartTimer),
+                ),
             ),
-            ScheduleEntry(
-                id = "e2",
+            AgendaDateSection(
                 planningDate = "2026-03-06",
-                title = "开组会",
-                estimatedMinutes = 30,
-                completed = true,
+                capacityLabel = "已安排 30 / 120 分钟",
+                rows = listOf(
+                    row(meetingEntry, "2026-03-06 · 30 分钟 · 无提醒 · 已完成", canStartTimer),
+                ),
             ),
         ),
-        recurrenceRules = listOf(
-            RecurrenceRule(
-                id = "rule-daily",
-                title = "每日晨读",
-                startDate = "2026-03-05",
-                frequency = ScheduleFrequency.DAILY,
-                estimatedMinutes = 20,
-            ),
-            RecurrenceRule(
-                id = "rule-weekly",
-                title = "每周复盘",
-                startDate = "2026-03-02",
-                frequency = ScheduleFrequency.WEEKLY,
-                weekdays = listOf(1, 3),
-                untilDate = "2026-03-31",
-                active = false,
-            ),
-        ),
-        settings = StoredSettings(dailyCapacityMinutes = 120),
+        emptyLabel = null,
+        recurrenceRules = recurrenceRules,
+        targets = targets,
+        pendingEditRow = null,
     )
 
-    private fun screenState(
-        state: AttentionState = state(),
-        selectedDate: LocalDate? = null,
-    ): AgendaScreenState = agendaScreenState(
-        state = state,
-        now = now,
-        zone = zone,
-        selectedDate = selectedDate,
+    /** 选中某个规划日的视图：标题、筛选文案与容量卡片都跟着这一天。 */
+    private fun planningDayScreenState(selected: LocalDate): AgendaScreenState = AgendaScreenState(
+        planningDate = planningDay,
+        selectedDate = selected,
+        headingLabel = "规划日 $selected",
+        filterLabel = "筛选：规划日 $selected",
+        availableDates = availableDates,
+        selectedCapacityLabel = "已安排 30 / 120 分钟",
+        selectedRows = listOf(row(meetingEntry, "2026-03-06 · 30 分钟 · 无提醒 · 已完成", true)),
+        dateSections = emptyList(),
+        emptyLabel = null,
+        recurrenceRules = recurrenceRules,
+        targets = targets,
+        pendingEditRow = null,
+    )
+
+    /** 一条日程都没有时的视图：空态提示由页面自己渲染。 */
+    private fun emptyScreenState(): AgendaScreenState = AgendaScreenState(
+        planningDate = planningDay,
+        selectedDate = null,
+        headingLabel = "所有日期",
+        filterLabel = "筛选：所有日期",
+        availableDates = listOf(AgendaDateOption(planningDay, "规划日 2026-03-05")),
+        selectedCapacityLabel = null,
+        selectedRows = emptyList(),
+        dateSections = emptyList(),
+        emptyLabel = "所有日期暂无日程条目。",
+        recurrenceRules = emptyList(),
+        targets = emptyList(),
+        pendingEditRow = null,
     )
 
     private fun mount(
         state: AgendaScreenState,
         actions: AgendaActions = RecordingAgendaActions(),
     ) {
-        composeRule.activity.setContent {
+        composeRule.setContent {
             AttentionTheme { AgendaScreen(state = state, actions = actions) }
         }
     }

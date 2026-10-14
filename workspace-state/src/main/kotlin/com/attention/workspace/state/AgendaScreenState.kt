@@ -7,6 +7,7 @@ import com.attention.domain.ScheduleEntry
 import com.attention.domain.ScheduleFrequency
 import com.attention.domain.agendaEntries
 import com.attention.domain.capacitySummary
+import com.attention.domain.formatMinuteOfDay
 import com.attention.domain.planningDate
 import java.time.Instant
 import java.time.LocalDate
@@ -214,7 +215,7 @@ fun agendaWeekdayLabel(day: Int): String = when (day) {
     else -> day.toString()
 }
 
-fun formatAgendaMinute(value: Int): String = "%02d:%02d".format(value / 60, value % 60)
+fun formatAgendaMinute(value: Int): String = formatMinuteOfDay(value)
 
 fun formatAgendaReminderEpoch(epochMillis: Long, zone: ZoneId): String =
     Instant.ofEpochMilli(epochMillis).atZone(zone).let { formatAgendaMinute(it.hour * 60 + it.minute) }

@@ -2,6 +2,7 @@ package com.attention.app.ui.format
 
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.TimeEntrySource
+import com.attention.domain.formatMinuteOfDay
 
 /**
  * 时间记录来源的中文表达。名字取自 `CONTEXT.md` 已有词汇，不新造领域词。
@@ -42,7 +43,8 @@ object TimeEntrySourceFormat {
 /**
  * 一天之内第几分钟的定点表达。
  *
- * 这里只做定点格式化，不参与规划日判定——规划日界线由领域层负责。
+ * 这里只做定点格式化，不参与规划日判定——规划日界线由领域层负责。收敛到一天之内是这一层
+ * 自己的防御：分钟到定点的算式由 `:domain` 的 [formatMinuteOfDay] 统一提供。
  */
 object MinuteOfDay {
 
@@ -50,6 +52,6 @@ object MinuteOfDay {
 
     fun format(minuteOfDay: Int): String {
         val clamped = minuteOfDay.coerceIn(0, MINUTES_PER_HOUR * 24 - 1)
-        return "%02d:%02d".format(clamped / MINUTES_PER_HOUR, clamped % MINUTES_PER_HOUR)
+        return formatMinuteOfDay(clamped)
     }
 }

@@ -12,7 +12,7 @@ import com.attention.workspace.state.TodayTimeRecord
  * 今天工作台自己的选择与表单状态：快速记录的分钟数与目标归属、两个规划日设置输入框、
  * 时间记录的编辑草稿，以及删除确认的目标。
  *
- * 它属于今天工作台 module 而不是组合根：ADR-0005 §24 要求选择状态留在页面一侧。
+ * 它属于今天工作台 module 而不是组合根：ADR-0005 第 1 节要求选择状态留在页面一侧。
  * 组合根不认识这些字段，也不解释「谁正在被编辑」这条语义——语义只在这里。
  */
 internal class TodaySelection {

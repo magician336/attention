@@ -27,7 +27,7 @@ import com.attention.workspace.state.TodayScreenState
  * 首次设置流程。
  *
  * 页面这一侧只有表单与五步的顺序；它只发 intent，因此走的是和离线一样的公开设置命令，
- * Activity 重建后由 DataStore 恢复（ADR-0005 §24：表单状态属于页面 module）。
+ * Activity 重建后由 DataStore 恢复（ADR-0005 第 1 节：表单状态属于页面 module）。
  *
  * 日程的规划日初值来自投影的规划日，不再读系统时钟。
  *

@@ -49,7 +49,7 @@ import java.time.LocalDate
  * 规划日、日程条目、每日容量与提醒时间都由组合根注入的投影算好。
  *
  * 提醒权限不在这里申请：页面只发出 [AgendaActions.requestReminderPermission] intent，
- * 权限检查与申请由组合根 adapter 完成（ADR-0005 §45-47）。
+ * 权限检查与申请由组合根 adapter 完成（ADR-0005 第 4 节「Android adapter 归属组合根」）。
  */
 @Composable
 internal fun AgendaScreen(

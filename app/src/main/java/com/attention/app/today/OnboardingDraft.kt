@@ -12,7 +12,7 @@ import java.time.LocalDate
 /**
  * 首次设置流程自己的表单状态：当前走到第几步、五个步骤各自的草稿与上一次的报错。
  *
- * 它属于今天工作台 module 而不是组合根：ADR-0005 §24 要求表单草稿由页面 module 拥有，
+ * 它属于今天工作台 module 而不是组合根：ADR-0005 第 1 节要求表单草稿由页面 module 拥有，
  * 组合根既不声明这个类型，也不改写它的字段。
  */
 internal class OnboardingDraft(planningDate: String) {
@@ -250,7 +250,7 @@ internal sealed interface OnboardingSave {
 
 /**
  * 在页面里创建首次设置的表单状态。组合根因此不需要直接构造这个页面状态类型，
- * 它的类型与状态迁移一起留在页面 module 内（ADR-0005 §24）。
+ * 它的类型与状态迁移一起留在页面 module 内（ADR-0005 第 1 节）。
  */
 @Composable
 internal fun rememberOnboardingDraft(planningDate: String): OnboardingDraft =

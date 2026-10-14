@@ -6,7 +6,7 @@ import java.time.LocalDate
  * 今天工作台「今日安排」里编辑日程对话框的表单输入。
  *
  * 这个类型属于今天工作台 module：编辑草稿的取舍是页面自己的语义，
- * 组合根不认识它（ADR-0005 §24）。
+ * 组合根不认识它（ADR-0005 第 1 节）。
  */
 internal data class TodayScheduleFormInput(
     val title: String,

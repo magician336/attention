@@ -15,7 +15,7 @@ import org.junit.Test
 /**
  * 活动计时器投影的纯 Kotlin 测试：页面只读这份状态，不读系统时钟，也不读完整领域状态。
  *
- * 已用时与结算预览都由注入的 [now] / [zone] 决定，因此同样的输入永远得到同样的输出。
+ * 实际投入与结算预览都由注入的 [now] / [zone] 决定，因此同样的输入永远得到同样的输出。
  * 取样跨过规划日界线（默认 03:00），断言在「凌晨两点」与「凌晨三点刚过界线」两个时刻上都成立。
  */
 class TodayTimerStateTest {
@@ -80,7 +80,7 @@ class TodayTimerStateTest {
 
     @Test
     fun a_timer_that_has_not_reached_a_full_minute_reports_no_elapsed_minutes_and_no_record() {
-        // 30 秒既不算 1 分钟已用时，也不会生成时间记录：两者必须同时为 0
+        // 30 秒既不算 1 分钟实际投入，也不会生成时间记录：两者必须同时为 0
         val screenState = project(
             AttentionState(activeTimer = runningTimer(targetId = null, startedAt = beforeBoundary.minusSeconds(30))),
         )
