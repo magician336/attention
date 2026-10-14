@@ -3,14 +3,30 @@ package com.attention.app.data
 import com.attention.domain.AttentionState
 import com.attention.domain.AttentionCommand
 import com.attention.domain.AttentionCommandResult
+import com.attention.app.data.backup.BackupWorkflow
 import com.attention.domain.LaunchDestination
 import com.attention.domain.StoredSettings
 import kotlinx.coroutines.flow.Flow
 import java.time.Instant
 import java.time.ZoneId
 
+/**
+ * Supplies the typed backup workflow to presentation adapters without making
+ * them depend on Room, DataStore or reminder implementations.
+ */
+interface BackupWorkflowProvider {
+    val backupWorkflow: BackupWorkflow
+}
+
 /** Runtime data boundary: Room business data, DataStore settings and versioned backups. */
-interface AttentionStateRepository {
+interface AttentionStateRepository : BackupWorkflowProvider {
+    /**
+     * Legacy test doubles can keep implementing only the runtime commands;
+     * backup-aware callers receive a clear error until they provide a workflow.
+     */
+    override val backupWorkflow: BackupWorkflow
+        get() = error("该 repository 未提供 BackupWorkflow")
+
     val state: Flow<AttentionState>
 
     suspend fun updateBusiness(transform: (AttentionState) -> AttentionState)

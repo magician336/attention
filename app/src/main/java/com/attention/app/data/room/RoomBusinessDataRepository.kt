@@ -17,10 +17,10 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 
 /** Room-only business data boundary; settings are composed by AttentionStateReader. */
-class RoomBusinessDataRepository(
+open class RoomBusinessDataRepository(
     private val database: AttentionDatabase,
 ) {
-    suspend fun replace(state: AttentionState) = database.withTransaction {
+    open suspend fun replace(state: AttentionState) = database.withTransaction {
         replaceInTransaction(state)
     }
 

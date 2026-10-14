@@ -137,6 +137,17 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
         )
     }
 
+    @Test
+    fun restore_import_backup_requires_explicit_confirmation() {
+        composeRule.onNode(hasText("统计") and hasClickAction()).performClick()
+        composeRule.onNodeWithText("恢复最近一次导入前备份").performScrollTo().performClick()
+
+        composeRule.onNodeWithTag("restore-import-dialog", useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithTag("restore-import-confirm", useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithTag("restore-import-cancel", useUnmergedTree = true).performClick()
+        composeRule.onNodeWithTag("restore-import-dialog", useUnmergedTree = true).assertDoesNotExist()
+    }
+
     private fun openAgenda() {
         composeRule.onNode(hasText("所有日期") and hasClickAction()).performClick()
         composeRule.waitForIdle()
