@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -66,33 +65,32 @@ import com.attention.app.timer.AttentionBootReceiver
 import com.attention.app.reminder.AlarmReminderCoordinator
 import com.attention.app.reminder.ReminderScheduler
 import com.attention.app.ui.components.AttentionButton
-import com.attention.app.ui.components.AttentionConfirmDialog
 import com.attention.app.ui.components.AttentionFeedbackHostState
 import com.attention.app.ui.components.AttentionInlineError
 import com.attention.app.ui.components.AttentionOutlinedButton
 import com.attention.app.ui.components.AttentionPermissionState
-import com.attention.app.ui.components.AttentionSelectedIndicator
 import com.attention.app.ui.components.AttentionSnackbarHost
 import com.attention.app.ui.components.AttentionTextButton
 import com.attention.app.ui.components.rememberAttentionFeedbackHostState
-import com.attention.app.ui.format.DurationFormat
-import com.attention.app.ui.format.TimeEntrySourceFormat
-import com.attention.app.ui.format.TimeRecordTags
 import com.attention.app.ui.theme.attentionTokens
 import com.attention.app.settings.SettingsScreen
 import com.attention.app.statistics.StatisticsScreen
 import com.attention.app.statistics.StatisticsSelection
 import com.attention.app.statistics.rememberStatisticsSelection
+import com.attention.app.today.TodayScreen
 import com.attention.workspace.state.SettingsActions
 import com.attention.workspace.state.StatisticsActions
+import com.attention.workspace.state.TodayActions
+import com.attention.workspace.state.capacityLabel
 import com.attention.workspace.state.goalProgressLabel
 import com.attention.workspace.state.label
 import com.attention.workspace.state.settingsScreenState
 import com.attention.workspace.state.stageFeedbackLabels
 import com.attention.workspace.state.statisticsScreenState
 import com.attention.workspace.state.summaryLabel
+import com.attention.workspace.state.todayScreenState
+import com.attention.workspace.state.weekDayLabel
 import com.attention.domain.AttentionState
-import com.attention.domain.CapacitySummary
 import com.attention.domain.availableMigrationMinutes
 import com.attention.domain.GoalCadence
 import com.attention.domain.FutureGoalRule
@@ -134,6 +132,40 @@ import java.time.LocalDate
 import java.time.ZoneId
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+
+/**
+ * 今天工作台的 actions adapter，在组合根一侧组装：页面发出 intent，这里落到 ViewModel、
+ * 设置存储与可撤销提示。ViewModel 因此只出现在组合根侧，页面拿不到它。
+ *
+ * 计时相关的能力（前台计时服务、恢复提示、通知可用性）也留在组合根这一侧，
+ * 由 [TodayTimerSection] 直接使用；计时器迁移属于票 147。
+ */
+private class TodayActionsAdapter(
+    private val viewModel: AttentionViewModel,
+    private val currentWeekStartDay: () -> Int,
+    private val onTimeRecordDeleted: (TimeEntry) -> Unit,
+) : TodayActions {
+    override fun recordTime(planningDate: String, minutes: Int, targetId: String?) {
+        viewModel.addTime(planningDate, minutes, targetId)
+    }
+
+    // 只调整时长、目标归属与备注：记录的规划日与来源由领域层保持不变。
+    override fun editTime(entryId: String, minutes: Int, targetId: String?, note: String) {
+        viewModel.editTime(entryId, minutes, targetId, note)
+    }
+
+    override fun deleteTime(entryId: String) {
+        viewModel.deleteTimeWithUndo(entryId, onTimeRecordDeleted)
+    }
+
+    override fun saveDailyPlanningSettings(boundaryMinutes: Int, dailyCapacityMinutes: Int?) {
+        viewModel.setSettings(StoredSettings(boundaryMinutes, currentWeekStartDay(), dailyCapacityMinutes))
+    }
+
+    override fun selectWeekStartDay(day: Int) {
+        viewModel.setWeekStart(day)
+    }
+}
 
 /**
  * 设置页的 actions adapter，在组合根一侧组装：页面发出 intent，这里落到 ViewModel。
@@ -387,6 +419,31 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     val injectedNow = Instant.now()
     val injectedZone = ZoneId.systemDefault()
 
+    // 今天工作台的选择状态属于页面 module（TodaySelection），组合根只喂投影，不碰它的字段。
+    // 今天工作台不导航规划日，因此投影除注入的时间与时区外不需要页面选择参数。
+    val todayState = todayScreenState(
+        state = state,
+        now = injectedNow,
+        zone = injectedZone,
+    )
+    val currentWeekStartDay by androidx.compose.runtime.rememberUpdatedState(state.settings.weekStartDay)
+    val todayActions: TodayActions = remember(viewModel) {
+        TodayActionsAdapter(
+            viewModel = viewModel,
+            currentWeekStartDay = { currentWeekStartDay },
+            // 删除的可撤销提示由组合根展示：撤销要用回被删掉的那条记录本身，
+            // 页面因此不需要认识时间记录这个领域类型。
+            onTimeRecordDeleted = { removed ->
+                feedbackScope.launch {
+                    feedback.showUndoableMessage(
+                        message = "已删除这条实际投入，它不再计入目标进度与统计。",
+                        onUndo = { viewModel.restoreTimeEntry(removed) },
+                    )
+                }
+            },
+        )
+    }
+
     // 统计页的周期选择由统计页 module 提供类型与迁移语义，组合根只持有一个实例来喂投影。
     val statisticsSelection = rememberStatisticsSelection()
     val statisticsState = statisticsScreenState(
@@ -490,10 +547,12 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                     actions = settingsActions,
                 )
             } else when (destination) {
-                LaunchDestination.TODAY, LaunchDestination.LAST_OPENED -> WorkspaceTodayScreen(
-                    state = state,
-                    viewModel = viewModel,
-                    feedback = feedback,
+                LaunchDestination.TODAY, LaunchDestination.LAST_OPENED -> TodayScreen(
+                    state = todayState,
+                    actions = todayActions,
+                    onboardingSection = { OnboardingCard(state, viewModel) },
+                    timerSection = { TodayTimerSection(state, viewModel, feedback) },
+                    schedulesSection = { TodayScheduleSection(state, viewModel, todayState.planningDate.toString()) },
                 )
                 LaunchDestination.TARGETS -> TargetsScreen(state, viewModel)
                 LaunchDestination.ALL_DATES -> AgendaScreen(
@@ -576,8 +635,15 @@ private fun backupPreviewText(preview: BackupPreview, current: AttentionState, m
     append("\n导入前会自动备份当前数据。")
 }
 
+/**
+ * 今天工作台的计时卡片。
+ *
+ * 计时器、前台计时服务与通知权限都留在组合根这一侧（ADR-0005 第 4 节）。
+ * 票 147 会把它们改成 intent；在那之前这里保持原来的调用路径、标签与文案不变，
+ * 今天工作台只是把它作为一个插槽渲染在自己的原位置上。
+ */
 @Composable
-private fun WorkspaceTodayScreen(
+private fun TodayTimerSection(
     state: AttentionState,
     viewModel: AttentionViewModel,
     feedback: AttentionFeedbackHostState,
@@ -596,234 +662,91 @@ private fun WorkspaceTodayScreen(
             ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
         }
     }
-    val date = state.planningDate(Instant.now()).toString()
-    val capacity = state.capacitySummary(date)
-    var minutes by remember { mutableStateOf("15") }
-    var manualTargetId by remember { mutableStateOf<String?>(null) }
-    var boundary by remember(state.settings.planningDayBoundaryMinutes) {
-        mutableStateOf(state.settings.planningDayBoundaryMinutes.toString())
-    }
-    var dailyCapacity by remember(state.settings.dailyCapacityMinutes) {
-        mutableStateOf(state.settings.dailyCapacityMinutes?.toString() ?: "")
-    }
-    var dailyCapacityError by remember { mutableStateOf<String?>(null) }
-    var editingEntry by remember { mutableStateOf<TimeEntry?>(null) }
-    var editingSchedule by remember { mutableStateOf<ScheduleEntry?>(null) }
-    var editMinutes by remember { mutableStateOf("") }
-    var editNote by remember { mutableStateOf("") }
-    var editTargetId by remember { mutableStateOf<String?>(null) }
-    var pendingDelete by remember { mutableStateOf<TimeEntry?>(null) }
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(tokens.spacing.large),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("今天工作台", style = tokens.typography.display)
-        Text("规划日界线 ${formatMinutes(state.settings.planningDayBoundaryMinutes)} · 每周从${weekName(state.settings.weekStartDay)}开始")
-        Text("规划日：$date")
-        if (!state.onboardingCompleted) OnboardingCard(state, viewModel)
-        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
-            Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("快速记录实际投入", style = tokens.typography.title)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(5, 15, 30, 60).forEach { amount ->
-                        AttentionOutlinedButton(onClick = { viewModel.addTime(date, amount, null) }) { Text("+$amount") }
-                    }
+    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
+        Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("计时器", style = tokens.typography.title)
+            val timer = state.activeTimer
+            if (timer == null) {
+                Text("计时结束时会按规划日界线自动切分时间记录。")
+                AttentionButton(onClick = {
+                    startTimer(null)
+                }) { Text("开始未归属计时") }
+                state.targets.filter { !it.archived }.forEach { target ->
+                    AttentionOutlinedButton(onClick = {
+                        startTimer(target.id)
+                    }) { Text("计时：${target.title}") }
                 }
-                state.targets.filter { !it.archived }.take(4).forEach { target ->
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                        Text(target.title, Modifier.weight(1f))
-                        listOf(15, 30).forEach { amount ->
-                            AttentionTextButton(onClick = { viewModel.addTime(date, amount, target.id) }) { Text("+$amount") }
-                        }
-                    }
+            } else {
+                Text(if (timer.paused) "计时已暂停" else "正在计时")
+                Text("当前目标：${state.timerTargetLabel(timer.targetId)}")
+                if (timer.completedSegments.isNotEmpty()) {
+                    Text("已完成片段：${timer.completedSegments.size}")
                 }
-                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    OutlinedTextField(minutes, { minutes = it.filter(Char::isDigit) }, label = { Text("分钟") }, modifier = Modifier.width(120.dp), singleLine = true)
-                    Spacer(Modifier.width(8.dp))
-                    AttentionButton(onClick = { minutes.toIntOrNull()?.takeIf { it > 0 }?.let { viewModel.addTime(date, it, manualTargetId) } }) {
-                        Text(if (manualTargetId == null) "记录未归属活动" else "记录到目标")
-                    }
+                val settlementPreview = state.timerSettlementPreview(Instant.now())
+                val settlementScope = settlementPreview.entries.joinToString("；") {
+                    "${it.planningDate} ${it.durationMinutes} 分钟"
                 }
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    // 选中项用共用的选中表达：颜色之外同时有勾选图标与“已选中：…”文案。
-                    val targets = listOf<Pair<String?, String>>(null to "未归属") +
-                        state.targets.filter { !it.archived }.map { it.id to it.title }
-                    targets.forEach { (id, title) ->
-                        if (manualTargetId == id) {
-                            Box(Modifier.clickable { manualTargetId = id }) {
-                                AttentionSelectedIndicator(selected = true, label = title)
-                            }
-                        } else {
-                            AttentionTextButton(onClick = { manualTargetId = id }) { Text(title) }
-                        }
-                    }
-                }
-                Text("本规划日已记录：${state.timeEntries.filter { it.planningDate == date }.sumOf { it.durationMinutes }} 分钟")
-            }
-        }
-        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
-            Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("计时器", style = tokens.typography.title)
-                val timer = state.activeTimer
-                if (timer == null) {
-                    Text("计时结束时会按规划日界线自动切分时间记录。")
-                    AttentionButton(onClick = {
-                        startTimer(null)
-                    }) { Text("开始未归属计时") }
-                    state.targets.filter { !it.archived }.forEach { target ->
-                        AttentionOutlinedButton(onClick = {
-                            startTimer(target.id)
-                        }) { Text("计时：${target.title}") }
-                    }
-                } else {
-                    Text(if (timer.paused) "计时已暂停" else "正在计时")
-                    Text("当前目标：${state.timerTargetLabel(timer.targetId)}")
-                    if (timer.completedSegments.isNotEmpty()) {
-                        Text("已完成片段：${timer.completedSegments.size}")
-                    }
-                    val settlementPreview = state.timerSettlementPreview(Instant.now())
-                    val settlementScope = settlementPreview.entries.joinToString("；") {
-                        "${it.planningDate} ${it.durationMinutes} 分钟"
-                    }
-                    Text(
-                        if (settlementPreview.hasCompleteMinutes) {
-                            "结束范围预览：$settlementScope；共 ${settlementPreview.totalMinutes} 分钟"
-                        } else {
-                            "结束范围预览：当前片段不足 1 分钟，不会生成时间记录"
-                        },
-                        modifier = Modifier.testTag("timer-settlement-preview"),
-                    )
-                    if (!notificationsEnabled(context)) {
-                        AttentionPermissionState(
-                            label = "权限未开启",
-                            description = "通知权限未开启，计时数据仍会保存；通知栏暂停、继续和结束控制不可用。",
-                            required = true,
-                            modifier = Modifier.testTag("timer-notification-permission-warning"),
-                        )
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (timer.paused) AttentionButton(onClick = viewModel::resumeTimer) { Text("继续") }
-                        else AttentionButton(onClick = viewModel::pauseTimer) { Text("暂停") }
-                        AttentionOutlinedButton(onClick = {
-                            viewModel.recoverTimer {
-                                AttentionBootReceiver.cancelRecoveryPrompt(context)
-                                ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
-                            }
-                        }) { Text("从此刻继续") }
-                        AttentionOutlinedButton(onClick = {
-                            viewModel.stopTimer {
-                                AttentionBootReceiver.cancelRecoveryPrompt(context)
-                                context.stopService(AttentionTimerService.intent(context))
-                            }
-                        }) { Text("结束并保存") }
-                    }
-                    if (timer.targetId != null) {
-                        AttentionOutlinedButton(
-                            modifier = Modifier.testTag("switch-timer-unowned"),
-                            onClick = { viewModel.switchTimer(null) },
-                        ) { Text("切换到未归属活动") }
-                    }
-                    state.targets.filter { !it.archived && it.id != timer.targetId }.forEach { target ->
-                        AttentionOutlinedButton(onClick = { viewModel.switchTimer(target.id) }) { Text("切换到 ${target.title}") }
-                    }
-                }
-            }
-        }
-        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
-            Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("每日容量", style = tokens.typography.title)
-                Text(capacitySummaryText(capacity), modifier = Modifier.testTag("daily-capacity-summary"))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(boundary, { boundary = it.filter(Char::isDigit) }, label = { Text("界线分钟") }, modifier = Modifier.width(150.dp).testTag("planning-boundary-input"), singleLine = true)
-                    OutlinedTextField(
-                        dailyCapacity,
-                        { dailyCapacity = it; dailyCapacityError = null },
-                        label = { Text("容量分钟") },
-                        modifier = Modifier.width(150.dp).testTag("daily-capacity-input"),
-                        singleLine = true,
-                        isError = dailyCapacityError != null,
-                    )
-                }
-                dailyCapacityError?.let {
-                    AttentionInlineError(message = it, messageTag = "daily-capacity-error")
-                }
-                AttentionButton(modifier = Modifier.testTag("daily-capacity-save"), onClick = {
-                    val b = boundary.toIntOrNull()?.takeIf { it in 0 until 1440 } ?: state.settings.planningDayBoundaryMinutes
-                    val input = dailyCapacity.trim()
-                    val c = input.toIntOrNull()?.takeIf { it > 0 }
-                    if (input.isNotEmpty() && c == null) {
-                        dailyCapacityError = "每日容量必须是正整数，或留空清除"
+                Text(
+                    if (settlementPreview.hasCompleteMinutes) {
+                        "结束范围预览：$settlementScope；共 ${settlementPreview.totalMinutes} 分钟"
                     } else {
-                        dailyCapacityError = null
-                        viewModel.setSettings(StoredSettings(b, state.settings.weekStartDay, c))
-                    }
-                }) { Text("保存设置") }
-            }
-        }
-        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
-            Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("周起始日", style = tokens.typography.title)
-                Row(
-                    Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    (1..7).forEach { day ->
-                        if (day == state.settings.weekStartDay) {
-                            AttentionButton(onClick = {}) { Text(weekName(day)) }
-                        } else {
-                            AttentionOutlinedButton(onClick = { viewModel.setWeekStart(day) }) { Text(weekName(day)) }
+                        "结束范围预览：当前片段不足 1 分钟，不会生成时间记录"
+                    },
+                    modifier = Modifier.testTag("timer-settlement-preview"),
+                )
+                if (!notificationsEnabled(context)) {
+                    AttentionPermissionState(
+                        label = "权限未开启",
+                        description = "通知权限未开启，计时数据仍会保存；通知栏暂停、继续和结束控制不可用。",
+                        required = true,
+                        modifier = Modifier.testTag("timer-notification-permission-warning"),
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (timer.paused) AttentionButton(onClick = viewModel::resumeTimer) { Text("继续") }
+                    else AttentionButton(onClick = viewModel::pauseTimer) { Text("暂停") }
+                    AttentionOutlinedButton(onClick = {
+                        viewModel.recoverTimer {
+                            AttentionBootReceiver.cancelRecoveryPrompt(context)
+                            ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
                         }
-                    }
+                    }) { Text("从此刻继续") }
+                    AttentionOutlinedButton(onClick = {
+                        viewModel.stopTimer {
+                            AttentionBootReceiver.cancelRecoveryPrompt(context)
+                            context.stopService(AttentionTimerService.intent(context))
+                        }
+                    }) { Text("结束并保存") }
+                }
+                if (timer.targetId != null) {
+                    AttentionOutlinedButton(
+                        modifier = Modifier.testTag("switch-timer-unowned"),
+                        onClick = { viewModel.switchTimer(null) },
+                    ) { Text("切换到未归属活动") }
+                }
+                state.targets.filter { !it.archived && it.id != timer.targetId }.forEach { target ->
+                    AttentionOutlinedButton(onClick = { viewModel.switchTimer(target.id) }) { Text("切换到 ${target.title}") }
                 }
             }
         }
-        Text("今日安排", style = tokens.typography.title)
-        Text("实际投入记录", style = tokens.typography.title)
-        state.timeEntries.filter { it.planningDate == date }.forEach { entry ->
-            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
-                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        DurationFormat.ofMinutes(entry.durationMinutes),
-                        style = tokens.typography.title,
-                        modifier = Modifier.testTag(TimeRecordTags.DURATION),
-                    )
-                    Text(
-                        "${state.targets.firstOrNull { it.id == entry.targetId }?.title ?: "未归属活动"} · " +
-                            TimeEntrySourceFormat.labelOf(entry.source),
-                        style = tokens.typography.caption,
-                        color = tokens.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.testTag(TimeRecordTags.SOURCE_MARKER),
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        AttentionTextButton(onClick = {
-                            editingEntry = entry
-                            editMinutes = entry.durationMinutes.toString()
-                            editNote = entry.note
-                            editTargetId = entry.targetId
-                        }, modifier = Modifier.testTag("edit-time-${entry.id}")) { Text("编辑") }
-                        AttentionTextButton(onClick = { pendingDelete = entry }, modifier = Modifier.testTag("delete-time-${entry.id}")) { Text("删除") }
-                    }
-                    if (editingEntry?.id == entry.id) {
-                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            AttentionTextButton(onClick = { editTargetId = null }) { Text("未归属") }
-                            state.targets.filter { !it.archived }.forEach { target ->
-                                AttentionTextButton(onClick = { editTargetId = target.id }) { Text(target.title) }
-                            }
-                        }
-                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                            OutlinedTextField(editMinutes, { editMinutes = it.filter(Char::isDigit) }, label = { Text("分钟") }, modifier = Modifier.testTag("edit-time-minutes-${entry.id}").width(120.dp), singleLine = true)
-                            Spacer(Modifier.width(8.dp))
-                            OutlinedTextField(editNote, { editNote = it }, label = { Text("备注") }, modifier = Modifier.width(180.dp), singleLine = true)
-                            Spacer(Modifier.width(8.dp))
-                            AttentionButton(modifier = Modifier.testTag("save-time-${entry.id}"), onClick = { editMinutes.toIntOrNull()?.takeIf { it > 0 }?.let { viewModel.editTime(entry.id, it, editTargetId, editNote); editingEntry = null } }) { Text("保存") }
-                        }
-                    }
-                }
-            }
-        }
-        state.schedules.filter { it.planningDate == date }.forEach { entry ->
-            ScheduleRow(entry, state, viewModel, onEdit = { editingSchedule = it })
-        }
+    }
+}
+
+/**
+ * 今天工作台「今日安排」里的日程行与它的编辑对话框。
+ *
+ * 日程行属于所有日期页的迁移范围（票 148/149）。在那之前它们保持原来的位置与行为，
+ * 由组合根作为一个插槽交给今天工作台渲染。
+ */
+@Composable
+private fun TodayScheduleSection(
+    state: AttentionState,
+    viewModel: AttentionViewModel,
+    planningDate: String,
+) {
+    var editingSchedule by remember { mutableStateOf<ScheduleEntry?>(null) }
+    state.schedules.filter { it.planningDate == planningDate }.forEach { entry ->
+        ScheduleRow(entry, state, viewModel, onEdit = { editingSchedule = it })
     }
     editingSchedule?.let { entry ->
         ScheduleEditDialog(
@@ -831,28 +754,6 @@ private fun WorkspaceTodayScreen(
             targets = state.targets.filterNot { it.archived },
             onDismiss = { editingSchedule = null },
             onSave = { updated -> viewModel.updateSchedule(updated); editingSchedule = null },
-        )
-    }
-    pendingDelete?.let { entry ->
-        AttentionConfirmDialog(
-            visible = true,
-            title = "删除这条实际投入",
-            // 影响说明是必填的：用户要知道自己到底会失去什么，而不是只被问一句是否确定。
-            impact = "删除后这 ${DurationFormat.ofMinutes(entry.durationMinutes)} 的实际投入不再计入目标进度、投入经验与统计。" +
-                "删除后仍可以在底部提示里撤销一次。",
-            confirmLabel = "删除",
-            onConfirm = {
-                pendingDelete = null
-                viewModel.deleteTimeWithUndo(entry.id) { removed ->
-                    feedbackScope.launch {
-                        feedback.showUndoableMessage(
-                            message = "已删除这条实际投入，它不再计入目标进度与统计。",
-                            onUndo = { viewModel.restoreTimeEntry(removed) },
-                        )
-                    }
-                }
-            },
-            onDismiss = { pendingDelete = null },
         )
     }
 }
@@ -912,9 +813,9 @@ private fun OnboardingCard(state: AttentionState, viewModel: AttentionViewModel)
                     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         (1..7).forEach { day ->
                             if (day == weekStart) AttentionButton(onClick = {}, modifier = Modifier.testTag("onboarding-week-$day")) {
-                                Text(weekName(day))
+                                Text(weekDayLabel(day))
                             } else AttentionOutlinedButton(onClick = { weekStart = day }, modifier = Modifier.testTag("onboarding-week-$day")) {
-                                Text(weekName(day))
+                                Text(weekDayLabel(day))
                             }
                         }
                     }
@@ -1682,7 +1583,7 @@ private fun AgendaScreen(
                 Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("每日容量", style = tokens.typography.body)
                     Text(
-                        capacitySummaryText(state.capacitySummary(selectedDate)),
+                        state.capacitySummary(selectedDate).capacityLabel(),
                         modifier = Modifier.testTag("agenda-capacity-summary"),
                     )
                 }
@@ -1896,7 +1797,7 @@ private fun AgendaScreen(
             agendaEntries.groupBy { it.planningDate }.forEach { (planningDate, entries) ->
                 Text("规划日 $planningDate", style = tokens.typography.title)
                 Text(
-                    capacitySummaryText(state.capacitySummary(planningDate)),
+                    state.capacitySummary(planningDate).capacityLabel(),
                     modifier = Modifier.testTag("agenda-capacity-summary-$planningDate"),
                 )
                 entries.forEach { entry ->
@@ -1955,12 +1856,6 @@ private fun ScheduleRow(
             ) { Text(if (entry.completed) "取消完成" else "完成并记录") }
         }
     }
-}
-
-private fun capacitySummaryText(summary: CapacitySummary): String = when {
-    summary.capacityMinutes == null -> "已安排 ${summary.usedMinutes} 分钟（每日容量未设置）"
-    summary.overloaded -> "已安排 ${summary.usedMinutes} / ${summary.capacityMinutes} 分钟（超载）"
-    else -> "已安排 ${summary.usedMinutes} / ${summary.capacityMinutes} 分钟"
 }
 
 @Composable
@@ -2170,16 +2065,4 @@ private fun ScheduleFrequency.label(): String = when (this) {
     ScheduleFrequency.DAILY -> "每日"
     ScheduleFrequency.WEEKLY -> "每周"
     ScheduleFrequency.MONTHLY -> "每月"
-}
-
-private fun formatMinutes(minutes: Int): String = "%02d:%02d".format(minutes / 60, minutes % 60)
-
-private fun weekName(value: Int): String = when (value) {
-    1 -> "周一"
-    2 -> "周二"
-    3 -> "周三"
-    4 -> "周四"
-    5 -> "周五"
-    6 -> "周六"
-    else -> "周日"
 }
