@@ -51,6 +51,29 @@ class AttentionViewModelTest {
     }
 
     @Test
+    fun schedule_confirmation_is_submitted_as_typed_command() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val schedule = ScheduleEntry(
+                id = "view-model-schedule",
+                planningDate = "2026-10-15",
+                title = "确认日程",
+                estimatedMinutes = 30,
+            )
+            val repository = FakeRepository(AttentionState(schedules = listOf(schedule)))
+            AttentionViewModel(repository, ZoneOffset.UTC).confirmScheduleCompleted(schedule.id, 25)
+            advanceUntilIdle()
+            assertEquals(
+                AttentionCommand.ConfirmSchedule(schedule.id, 25),
+                repository.executedCommands.single(),
+            )
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
     fun exporting_schedules_csv_returns_current_schedule_snapshot() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         Dispatchers.setMain(dispatcher)
