@@ -538,7 +538,14 @@ fun AttentionState.toggleScheduleCompleted(entryId: String): AttentionState {
  */
 fun AttentionState.confirmScheduleCompleted(entryId: String, durationMinutes: Int? = null): AttentionState {
     val entry = schedules.firstOrNull { it.id == entryId } ?: throw IllegalArgumentException("日程条目不存在")
-    val minutes = durationMinutes ?: entry.estimatedMinutes
+    val rangeMinutes = if (entry.startMinute != null && entry.endMinute != null) {
+        entry.endMinute - entry.startMinute
+    } else {
+        null
+    }
+    val minutes = durationMinutes
+        ?: entry.estimatedMinutes
+        ?: rangeMinutes
         ?: throw IllegalArgumentException("日程条目缺少预计时长，无法确认实际投入")
     require(minutes > 0) { "时间记录时长必须为正数" }
     require(validRecordTarget(entry.targetId)) { "时间记录只能归入未归档目标" }

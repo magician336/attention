@@ -106,6 +106,7 @@ fun TimeEntrySourceMarker(
 ) {
     val tokens = attentionTokens()
     val semantic = when (row.source) {
+        TimeEntrySource.TIMER -> tokens.brand.timingInProgress
         TimeEntrySource.SCHEDULE_CONFIRMED -> tokens.brand.scheduled
         else -> tokens.brand.unattributed
     }

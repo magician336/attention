@@ -303,6 +303,22 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     }
     androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.restoreReminders() }
 
+    fun startTimerFromSchedule(entry: ScheduleEntry) {
+        viewModel.startTimer(
+            targetId = entry.targetId,
+            onSuccess = {
+                AttentionBootReceiver.cancelRecoveryPrompt(context)
+                if (!notificationsEnabled(context)) {
+                    feedbackScope.launch {
+                        feedback.showMessage("通知权限未开启，计时仍会保存；通知栏控制不可用。")
+                    }
+                }
+                ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
+            },
+            scheduleEntryId = entry.id,
+        )
+    }
+
     Scaffold(
         topBar = { TopAppBar(title = { Text("Attention") }) },
         bottomBar = {
@@ -347,6 +363,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                     selectedDate = selectedAgendaDate,
                     onSelectedDateChange = { selectedAgendaDate = it },
                     openScheduleId = openScheduleId,
+                    onStartTimer = ::startTimerFromSchedule,
                 )
                 LaunchDestination.STATISTICS -> StatisticsScreen(
                     state = state,
@@ -1474,6 +1491,7 @@ private fun AgendaScreen(
     selectedDate: String?,
     onSelectedDateChange: (String?) -> Unit,
     openScheduleId: String? = null,
+    onStartTimer: (ScheduleEntry) -> Unit = {},
 ) {
     val context = LocalContext.current
     val tokens = attentionTokens()
@@ -1774,12 +1792,12 @@ private fun AgendaScreen(
                     modifier = Modifier.testTag("agenda-capacity-summary-$planningDate"),
                 )
                 entries.forEach { entry ->
-                    ScheduleRow(entry, state, viewModel, onEdit = { editingEntry = it })
+                    ScheduleRow(entry, state, viewModel, onEdit = { editingEntry = it }, onStartTimer = onStartTimer)
                 }
             }
         } else {
             agendaEntries.forEach { entry ->
-                ScheduleRow(entry, state, viewModel, onEdit = { editingEntry = it })
+                ScheduleRow(entry, state, viewModel, onEdit = { editingEntry = it }, onStartTimer = onStartTimer)
             }
         }
     }
@@ -1794,7 +1812,13 @@ private fun AgendaScreen(
 }
 
 @Composable
-private fun ScheduleRow(entry: ScheduleEntry, state: AttentionState, viewModel: AttentionViewModel, onEdit: (ScheduleEntry) -> Unit = {}) {
+private fun ScheduleRow(
+    entry: ScheduleEntry,
+    state: AttentionState,
+    viewModel: AttentionViewModel,
+    onEdit: (ScheduleEntry) -> Unit = {},
+    onStartTimer: (ScheduleEntry) -> Unit = {},
+) {
     val tokens = attentionTokens()
     Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
         Row(Modifier.padding(12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
@@ -1810,9 +1834,17 @@ private fun ScheduleRow(entry: ScheduleEntry, state: AttentionState, viewModel: 
             }
             AttentionTextButton(onClick = { onEdit(entry) }, modifier = Modifier.testTag("schedule-edit-${entry.id}")) { Text("编辑") }
             AttentionTextButton(
-                onClick = { viewModel.toggleScheduleCompleted(entry.id) },
+                onClick = { onStartTimer(entry) },
+                enabled = state.activeTimer == null,
+                modifier = Modifier.testTag("schedule-start-timer-${entry.id}"),
+            ) { Text("开始计时") }
+            AttentionTextButton(
+                onClick = {
+                    if (entry.completed) viewModel.toggleScheduleCompleted(entry.id)
+                    else viewModel.confirmScheduleCompleted(entry.id)
+                },
                 modifier = Modifier.testTag("schedule-completion-${entry.id}"),
-            ) { Text(if (entry.completed) "取消完成" else "完成") }
+            ) { Text(if (entry.completed) "取消完成" else "完成并记录") }
         }
     }
 }

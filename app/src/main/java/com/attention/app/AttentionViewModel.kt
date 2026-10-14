@@ -46,6 +46,7 @@ import com.attention.domain.cancelFutureGoalRule
 import com.attention.domain.Migration
 import com.attention.domain.awardEligibleMilestones
 import com.attention.domain.switchTimer
+import com.attention.domain.confirmScheduleCompleted
 import com.attention.domain.schedulesCsv
 import com.attention.domain.timeEntriesCsv
 import com.attention.domain.setTargetExpanded
@@ -199,9 +200,15 @@ class AttentionViewModel(
         repository.setLastOpenedDestination(destination)
     }
 
-    fun startTimer(targetId: String?, onSuccess: () -> Unit = {}) = runCommand(onSuccess = onSuccess) {
-        it.startTimer(targetId, Instant.now(), zone)
+    fun startTimer(
+        targetId: String?,
+        scheduleEntryId: String? = null,
+        onSuccess: () -> Unit = {},
+    ) = runCommand(onSuccess = onSuccess) {
+        it.startTimer(targetId, Instant.now(), zone, scheduleEntryId)
     }
+    fun confirmScheduleCompleted(entryId: String, durationMinutes: Int? = null) =
+        runCommand { it.confirmScheduleCompleted(entryId, durationMinutes) }
     fun switchTimer(targetId: String?) = scope.launch {
         runCatching {
             val now = Instant.now()

@@ -89,9 +89,9 @@ class AttentionThemeComposeTest {
 
     @Test
     fun app_renders_the_fixed_brand_background_for_the_current_system_scheme() {
-        val bitmap = composeRule.onRoot().captureToImage().asAndroidBitmap()
         val darkTheme = isDeviceInDarkMode()
         val expectedBackground = if (darkTheme) 0xFF17130F.toInt() else 0xFFFBF6EE.toInt()
+        val bitmap = captureRootBitmapUntilBackground(expectedBackground)
 
         val counts = pixelHistogram(bitmap)
         val backgroundShare = (counts[expectedBackground] ?: 0).toDouble() / counts.values.sum()
@@ -101,6 +101,25 @@ class AttentionThemeComposeTest {
                 "主色为 ${"0x%08X".format(counts.maxBy { it.value }.key)}",
             backgroundShare >= 0.01,
         )
+    }
+
+    /**
+     * Root capture can race the first Compose frame on a cold activity. Keep the pixel assertion,
+     * but wait for the frame carrying the fixed brand background instead of failing on that race.
+     */
+    private fun captureRootBitmapUntilBackground(expectedBackground: Int): Bitmap {
+        var latest: Bitmap? = null
+        composeRule.waitUntil(timeoutMillis = 3_000) {
+            composeRule.waitForIdle()
+            val candidate = runCatching { composeRule.onRoot().captureToImage().asAndroidBitmap() }
+                .getOrNull()
+                ?: return@waitUntil false
+            latest = candidate
+            val counts = pixelHistogram(candidate)
+            val sampledPixels = counts.values.sum()
+            sampledPixels > 0 && (counts[expectedBackground] ?: 0).toDouble() / sampledPixels >= 0.01
+        }
+        return checkNotNull(latest)
     }
 
     private fun mountProbe(tag: String, darkTheme: Boolean = isDeviceInDarkMode()) {

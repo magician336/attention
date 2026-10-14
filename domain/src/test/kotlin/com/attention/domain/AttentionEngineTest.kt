@@ -2297,6 +2297,22 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun schedule_confirmation_uses_the_planned_time_range_when_estimate_is_missing() {
+        val schedule = ScheduleEntry(
+            id = "schedule-range",
+            planningDate = date.toString(),
+            title = "时间段日程",
+            startMinute = 9 * 60,
+            endMinute = 9 * 60 + 30,
+        )
+
+        val confirmed = AttentionState(schedules = listOf(schedule)).confirmScheduleCompleted(schedule.id)
+
+        assertEquals(30, confirmed.timeEntries.single().durationMinutes)
+        assertEquals(TimeEntrySource.SCHEDULE_CONFIRMED, confirmed.timeEntries.single().source)
+    }
+
+    @Test
     fun each_source_creates_a_record_and_only_the_timer_carries_a_precise_timestamp() {
         val target = Target("target", title = "阅读")
         val schedule = ScheduleEntry("schedule", date.toString(), "阅读", estimatedMinutes = 45, targetId = target.id)
