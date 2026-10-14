@@ -4,6 +4,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -48,6 +49,36 @@ class AttentionCommandTest {
         val retry = command.execute(first.state, now, utc)
         assertTrue(retry.milestones.isEmpty())
         assertEquals(3, retry.state.milestones.distinctBy { it.instanceKey }.size)
+    }
+
+    @Test
+    fun all_investment_entry_commands_share_experience_and_milestone_policy_but_keep_time_semantics() {
+        val target = Target("shared-policy-target", title = "统一策略")
+        val stage = GoalStage("shared-policy-stage", target.id, GoalCadence.ONE_TIME, 30, date.toString())
+        val now = Instant.parse("2026-10-08T12:34:56Z")
+
+        val manual = AttentionCommand.AddManualTimeEntry(date.toString(), 30, target.id)
+            .execute(AttentionState(targets = listOf(target), goalStages = listOf(stage)), now, utc)
+        val schedule = ScheduleEntry("shared-policy-schedule", date.toString(), "日程确认", estimatedMinutes = 30, targetId = target.id)
+        val confirmed = AttentionCommand.ConfirmSchedule(schedule.id)
+            .execute(AttentionState(targets = listOf(target), goalStages = listOf(stage), schedules = listOf(schedule)), now, utc)
+        val timer = AttentionState(targets = listOf(target), goalStages = listOf(stage))
+            .startTimer(target.id, now.minusSeconds(30 * 60L), utc)
+            .let { AttentionCommand.StopTimer.execute(it, now, utc) }
+
+        val results = listOf(manual, confirmed, timer)
+        assertEquals(listOf(10_030L, 10_030L, 10_030L), results.map { it.state.experience })
+        val expectedInstanceKey = "one_time_goal:shared-policy-stage:2026-10-08"
+        assertEquals(listOf(expectedInstanceKey), results.map { it.milestones.single().instanceKey }.distinct())
+        assertTrue(results.all { it.milestones.single().achievedAtEpochMillis == now.toEpochMilli() })
+
+        assertEquals(TimeEntrySource.MANUAL, manual.generatedTimeEntries.single().source)
+        assertNull(manual.generatedTimeEntries.single().occurredAtEpochMillis)
+        assertEquals(TimeEntrySource.SCHEDULE_CONFIRMED, confirmed.generatedTimeEntries.single().source)
+        assertNull(confirmed.generatedTimeEntries.single().occurredAtEpochMillis)
+        assertEquals(schedule.id, confirmed.generatedTimeEntries.single().scheduleEntryId)
+        assertEquals(TimeEntrySource.TIMER, timer.generatedTimeEntries.single().source)
+        assertEquals(now.minusSeconds(30 * 60L).toEpochMilli(), timer.generatedTimeEntries.single().occurredAtEpochMillis)
     }
 
     @Test
