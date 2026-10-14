@@ -49,7 +49,7 @@ import com.attention.app.data.room.entity.TimeEntryEntity
         ExperienceEntity::class,
         ActiveTimerEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 abstract class AttentionDatabase : RoomDatabase() {
@@ -69,11 +69,23 @@ abstract class AttentionDatabase : RoomDatabase() {
 
     companion object {
         const val DATABASE_NAME = "attention.db"
-        const val DATABASE_VERSION = 4
+        const val DATABASE_VERSION = 5
 
         val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE period_snapshots ADD COLUMN stageId TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
+        /**
+         * Purely additive: two nullable schedule links. Historical rows keep a null link and their
+         * original source, because a past time record must never be guessed to belong to a
+         * schedule entry that may have looked plausible.
+         */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE time_entries ADD COLUMN scheduleEntryId TEXT")
+                db.execSQL("ALTER TABLE active_timer ADD COLUMN scheduleEntryId TEXT")
             }
         }
 
@@ -85,7 +97,7 @@ abstract class AttentionDatabase : RoomDatabase() {
         // contract. Restrict the destructive fallback to the schema versions
         // created by the pre-release Room foundation instead of silently applying
         // it to an unknown future version.
-        ).addMigrations(MIGRATION_3_4)
+        ).addMigrations(MIGRATION_3_4, MIGRATION_4_5)
             .fallbackToDestructiveMigrationFrom(true, 1, 2)
             .build()
     }

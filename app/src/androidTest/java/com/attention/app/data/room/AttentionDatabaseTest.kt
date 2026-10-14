@@ -85,6 +85,81 @@ class AttentionDatabaseTest {
         }
     }
 
+    @Test
+    fun schema_v4_migrates_schedule_links_without_rewriting_history() {
+        val databaseName = "attention-migration-v4.db"
+        val legacy = migrationHelper.createDatabase(databaseName, 4)
+        legacy.execSQL(
+            "INSERT INTO targets (id, parentId, title, note, icon, colorHex, archived, sortOrder, expanded) " +
+                "VALUES ('target', NULL, '阅读', '', NULL, NULL, 0, 0, 1)",
+        )
+        legacy.execSQL(
+            "INSERT INTO schedule_entries (id, planningDate, title, startMinute, endMinute, estimatedMinutes, note, " +
+                "targetId, completed, reminderEpochMillis, recurrenceRuleId) " +
+                "VALUES ('schedule', '2026-10-08', '阅读', NULL, NULL, 45, '', 'target', 1, NULL, NULL)",
+        )
+        legacy.execSQL(
+            "INSERT INTO time_entries (id, planningDate, durationMinutes, targetId, source, occurredAtEpochMillis, note) " +
+                "VALUES ('manual-entry', '2026-10-08', 30, 'target', 'MANUAL', NULL, '')",
+        )
+        legacy.execSQL(
+            "INSERT INTO time_entries (id, planningDate, durationMinutes, targetId, source, occurredAtEpochMillis, note) " +
+                "VALUES ('timer-entry', '2026-10-08', 60, 'target', 'TIMER', 1000, '')",
+        )
+        legacy.execSQL(
+            "INSERT INTO time_entries (id, planningDate, durationMinutes, targetId, source, occurredAtEpochMillis, note) " +
+                "VALUES ('unowned-entry', '2026-10-08', 20, NULL, 'IMPORT', NULL, '')",
+        )
+        legacy.execSQL(
+            "INSERT INTO active_timer (id, targetId, startedAtEpochMillis, accumulatedMillis, paused, lastPlanningDate, completedSegmentsJson) " +
+                "VALUES (1, 'target', 1000, 0, 0, '2026-10-08', '[]')",
+        )
+        legacy.execSQL("INSERT INTO experience (id, points) VALUES (1, 90)")
+        legacy.close()
+
+        val migrated = migrationHelper.runMigrationsAndValidate(
+            databaseName,
+            5,
+            true,
+            AttentionDatabase.MIGRATION_4_5,
+        )
+        try {
+            // History is untouched: same rows, same sources, no guessed schedule link.
+            migrated.query("SELECT id, source, durationMinutes, scheduleEntryId FROM time_entries ORDER BY id").use { cursor ->
+                assertEquals(3, cursor.count)
+                val rows = buildList {
+                    while (cursor.moveToNext()) {
+                        add(Triple(cursor.getString(0), cursor.getString(1), cursor.getInt(2)) to cursor.getString(3))
+                    }
+                }
+                assertEquals(
+                    listOf(
+                        Triple("manual-entry", "MANUAL", 30) to null,
+                        Triple("timer-entry", "TIMER", 60) to null,
+                        Triple("unowned-entry", "IMPORT", 20) to null,
+                    ),
+                    rows,
+                )
+            }
+            migrated.query("SELECT scheduleEntryId FROM active_timer WHERE id = 1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertNull(cursor.getString(0))
+            }
+            migrated.query("SELECT points FROM experience WHERE id = 1").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(90L, cursor.getLong(0))
+            }
+            migrated.query("SELECT SUM(durationMinutes) FROM time_entries").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(110L, cursor.getLong(0))
+            }
+
+            } finally {
+            migrated.close()
+            ApplicationProvider.getApplicationContext<Context>().deleteDatabase(databaseName)
+        }
+    }
+
     private fun createLegacyDatabase(context: Context, version: Int, identityHash: String) {
         context.deleteDatabase(AttentionDatabase.DATABASE_NAME)
         val legacy = context.openOrCreateDatabase(AttentionDatabase.DATABASE_NAME, Context.MODE_PRIVATE, null)

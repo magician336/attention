@@ -24,7 +24,7 @@ data class StoredSettings(
 enum class GoalCadence { DAILY, WEEKLY, MONTHLY, ONE_TIME }
 
 @Serializable
-enum class TimeEntrySource { MANUAL, TIMER, IMPORT }
+enum class TimeEntrySource { MANUAL, TIMER, SCHEDULE_CONFIRMED, IMPORT }
 
 @Serializable
 enum class ScheduleFrequency { DAILY, WEEKLY, MONTHLY }
@@ -65,6 +65,7 @@ data class TimeEntry(
     val source: TimeEntrySource = TimeEntrySource.MANUAL,
     val occurredAtEpochMillis: Long? = null,
     val note: String = "",
+    val scheduleEntryId: String? = null,
 )
 
 @Serializable
@@ -151,6 +152,7 @@ data class ActiveTimer(
     val paused: Boolean = false,
     val lastPlanningDate: String,
     val completedSegments: List<TimerSegment> = emptyList(),
+    val scheduleEntryId: String? = null,
 )
 
 @Serializable
@@ -246,6 +248,24 @@ data class PeriodStats(
 )
 
 data class TimerResult(val state: AttentionState, val entries: List<TimeEntry>)
+
+/**
+ * Read model for one time record of a planning day. A record whose linked schedule entry no
+ * longer exists stays visible and says so instead of being dropped or throwing.
+ */
+data class TimeEntryRow(
+    val entry: TimeEntry,
+    val source: TimeEntrySource,
+    val schedule: ScheduleEntry?,
+) {
+    val hasPreciseTiming: Boolean get() = source == TimeEntrySource.TIMER && entry.occurredAtEpochMillis != null
+    val scheduleMissing: Boolean get() = entry.scheduleEntryId != null && schedule == null
+    val scheduleLabel: String get() = when {
+        entry.scheduleEntryId == null -> ""
+        schedule != null -> schedule.title
+        else -> "所属日程已删除"
+    }
+}
 
 data class TimerSettlementPreview(val entries: List<TimeEntry>) {
     val totalMinutes: Int get() = entries.sumOf { it.durationMinutes }

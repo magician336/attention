@@ -486,6 +486,21 @@ fun AttentionState.editTimeEntry(entryId: String, durationMinutes: Int, targetId
 fun AttentionState.deleteTimeEntry(entryId: String): AttentionState = copy(timeEntries = timeEntries.filterNot { it.id == entryId })
     .recalculateExperience()
 
+/**
+ * Reads the time records of one planning day for display. Records whose linked schedule entry no
+ * longer exists are still returned; the read model reports the missing schedule instead of
+ * throwing or silently dropping the record.
+ */
+fun AttentionState.timeEntryRows(planningDate: String? = null): List<TimeEntryRow> = timeEntries
+    .filter { planningDate == null || it.planningDate == planningDate }
+    .map { entry ->
+        TimeEntryRow(
+            entry = entry,
+            source = entry.source,
+            schedule = entry.scheduleEntryId?.let { id -> schedules.firstOrNull { it.id == id } },
+        )
+    }
+
 fun AttentionState.assignUnowned(entryIds: Set<String>, targetId: String): AttentionState {
     if (entryIds.isEmpty()) return this
     require(targets.any { it.id == targetId && !it.archived }) { "时间记录只能归入未归档目标" }
@@ -514,6 +529,37 @@ fun AttentionState.toggleScheduleCompleted(entryId: String): AttentionState {
     return copy(schedules = schedules.map { entry ->
         if (entry.id == entryId) entry.copy(completed = !entry.completed) else entry
     })
+}
+
+/**
+ * Completes a schedule entry and records the actual invested time it claimed. A record created
+ * this way is schedule-confirmed: it carries no precise start or end timestamp, because the user
+ * confirmed it against the plan rather than measuring it with the timer.
+ */
+fun AttentionState.confirmScheduleCompleted(entryId: String, durationMinutes: Int? = null): AttentionState {
+    val entry = schedules.firstOrNull { it.id == entryId } ?: throw IllegalArgumentException("日程条目不存在")
+    val rangeMinutes = if (entry.startMinute != null && entry.endMinute != null) {
+        entry.endMinute - entry.startMinute
+    } else {
+        null
+    }
+    val minutes = durationMinutes
+        ?: entry.estimatedMinutes
+        ?: rangeMinutes
+        ?: throw IllegalArgumentException("日程条目缺少预计时长，无法确认实际投入")
+    require(minutes > 0) { "时间记录时长必须为正数" }
+    require(validRecordTarget(entry.targetId)) { "时间记录只能归入未归档目标" }
+    return copy(
+        schedules = schedules.map { schedule -> if (schedule.id == entryId) schedule.copy(completed = true) else schedule },
+        timeEntries = timeEntries + TimeEntry(
+            planningDate = entry.planningDate,
+            durationMinutes = minutes,
+            targetId = entry.targetId,
+            source = TimeEntrySource.SCHEDULE_CONFIRMED,
+            occurredAtEpochMillis = null,
+            scheduleEntryId = entryId,
+        ),
+    ).recalculateExperience()
 }
 
 private fun AttentionState.validateScheduleEntry(entry: ScheduleEntry) {
@@ -912,18 +958,24 @@ fun AttentionState.addRecurrenceAndMaterialize(
     zone: ZoneId = ZoneId.systemDefault(),
 ): AttentionState = addRecurrence(rule).materializeOccurrences(rule, through, zone)
 
-fun AttentionState.startTimer(targetId: String?, now: Instant, zone: ZoneId = ZoneId.systemDefault()): AttentionState {
+fun AttentionState.startTimer(
+    targetId: String?,
+    now: Instant,
+    zone: ZoneId = ZoneId.systemDefault(),
+    scheduleEntryId: String? = null,
+): AttentionState {
     require(validRecordTarget(targetId)) { "计时只能归入未归档目标" }
+    require(scheduleEntryId == null || schedules.any { it.id == scheduleEntryId }) { "计时只能关联存在的日程条目" }
     require(activeTimer == null) { "已有活动计时器，请先暂停或结束" }
-    return copy(activeTimer = ActiveTimer(targetId = targetId, startedAtEpochMillis = now.toEpochMilli(), lastPlanningDate = planningDate(now, zone).toString()))
+    return copy(activeTimer = ActiveTimer(targetId = targetId, startedAtEpochMillis = now.toEpochMilli(), lastPlanningDate = planningDate(now, zone).toString(), scheduleEntryId = scheduleEntryId))
 }
 
-fun AttentionState.switchTimer(targetId: String?, now: Instant, zone: ZoneId = ZoneId.systemDefault()): TimerResult {
+fun AttentionState.switchTimer(targetId: String?, now: Instant, zone: ZoneId = ZoneId.systemDefault(), scheduleEntryId: String? = null): TimerResult {
     require(validRecordTarget(targetId)) { "计时只能归入未归档目标" }
-    if (activeTimer == null) return TimerResult(startTimer(targetId, now, zone), emptyList())
+    if (activeTimer == null) return TimerResult(startTimer(targetId, now, zone, scheduleEntryId), emptyList())
     if (activeTimer.targetId == targetId) return TimerResult(this, emptyList())
     val stopped = stopTimer(now, zone)
-    return TimerResult(stopped.state.startTimer(targetId, now, zone), stopped.entries)
+    return TimerResult(stopped.state.startTimer(targetId, now, zone, scheduleEntryId), stopped.entries)
 }
 
 fun AttentionState.pauseTimer(now: Instant): AttentionState {
@@ -962,7 +1014,7 @@ fun AttentionState.stopTimer(now: Instant, zone: ZoneId = ZoneId.systemDefault()
         val endedAt = maxOf(timer.startedAtEpochMillis, now.toEpochMilli())
         segments += TimerSegment(timer.startedAtEpochMillis, endedAt)
     }
-    val entries = splitTimerSegments(segments, timer.targetId, settings.planningDayBoundaryMinutes, zone)
+    val entries = splitTimerSegments(segments, timer.targetId, timer.scheduleEntryId, settings.planningDayBoundaryMinutes, zone)
     return TimerResult(copy(activeTimer = null, timeEntries = timeEntries + entries).recalculateExperience(), entries)
 }
 
@@ -984,7 +1036,7 @@ fun AttentionState.timerSettlementPreview(
     zone: ZoneId = ZoneId.systemDefault(),
 ): TimerSettlementPreview = TimerSettlementPreview(activeTimer?.let { stopTimer(now, zone).entries } ?: emptyList())
 
-private fun splitTimerSegments(segments: List<TimerSegment>, targetId: String?, boundaryMinutes: Int, zone: ZoneId): List<TimeEntry> {
+private fun splitTimerSegments(segments: List<TimerSegment>, targetId: String?, scheduleEntryId: String?, boundaryMinutes: Int, zone: ZoneId): List<TimeEntry> {
     data class TimerBucket(var durationMillis: Long, val occurredAtEpochMillis: Long)
 
     val buckets = linkedMapOf<LocalDate, TimerBucket>()
@@ -1014,6 +1066,7 @@ private fun splitTimerSegments(segments: List<TimerSegment>, targetId: String?, 
             targetId = targetId,
             source = TimeEntrySource.TIMER,
             occurredAtEpochMillis = bucket.occurredAtEpochMillis,
+            scheduleEntryId = scheduleEntryId,
         )
     }
 }

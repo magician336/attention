@@ -2267,4 +2267,203 @@ class AttentionEngineTest {
         assertTrue(deleted.experience >= deleted.milestones.sumOf { it.reward })
     }
 
+    @Test
+    fun schedule_completion_creates_a_schedule_confirmed_record_without_a_precise_timestamp() {
+        val target = Target("target", title = "阅读")
+        val schedule = ScheduleEntry("schedule", date.toString(), "阅读", estimatedMinutes = 45, targetId = target.id)
+        val state = AttentionState(targets = listOf(target), schedules = listOf(schedule))
+
+        val confirmed = state.confirmScheduleCompleted(schedule.id)
+
+        val record = confirmed.timeEntries.single()
+        assertEquals(TimeEntrySource.SCHEDULE_CONFIRMED, record.source)
+        assertEquals(schedule.id, record.scheduleEntryId)
+        assertNull(record.occurredAtEpochMillis)
+        assertEquals(date.toString(), record.planningDate)
+        assertEquals(45, record.durationMinutes)
+        assertEquals(target.id, record.targetId)
+        assertTrue(confirmed.schedules.single().completed)
+        assertEquals(45L, confirmed.experience)
+    }
+
+    @Test
+    fun schedule_confirmation_requires_an_existing_entry_and_a_positive_duration() {
+        val schedule = ScheduleEntry("schedule", date.toString(), "无时长")
+        val state = AttentionState(schedules = listOf(schedule))
+
+        assertThrows(IllegalArgumentException::class.java) { state.confirmScheduleCompleted("missing") }
+        assertThrows(IllegalArgumentException::class.java) { state.confirmScheduleCompleted(schedule.id) }
+        assertTrue(state.confirmScheduleCompleted(schedule.id, 30).timeEntries.single().durationMinutes == 30)
+    }
+
+    @Test
+    fun schedule_confirmation_uses_the_planned_time_range_when_estimate_is_missing() {
+        val schedule = ScheduleEntry(
+            id = "schedule-range",
+            planningDate = date.toString(),
+            title = "时间段日程",
+            startMinute = 9 * 60,
+            endMinute = 9 * 60 + 30,
+        )
+
+        val confirmed = AttentionState(schedules = listOf(schedule)).confirmScheduleCompleted(schedule.id)
+
+        assertEquals(30, confirmed.timeEntries.single().durationMinutes)
+        assertEquals(TimeEntrySource.SCHEDULE_CONFIRMED, confirmed.timeEntries.single().source)
+    }
+
+    @Test
+    fun each_source_creates_a_record_and_only_the_timer_carries_a_precise_timestamp() {
+        val target = Target("target", title = "阅读")
+        val schedule = ScheduleEntry("schedule", date.toString(), "阅读", estimatedMinutes = 45, targetId = target.id)
+        val base = AttentionState(targets = listOf(target), schedules = listOf(schedule))
+
+        val backfilled = base.addTimeEntry(date.toString(), 30, target.id)
+        val confirmed = base.confirmScheduleCompleted(schedule.id, 45)
+        val timed = base.startTimer(target.id, Instant.parse("2026-10-08T09:00:00Z"), utc)
+            .stopTimer(Instant.parse("2026-10-08T09:30:00Z"), utc)
+
+        assertEquals(TimeEntrySource.MANUAL, backfilled.timeEntries.single().source)
+        assertNull(backfilled.timeEntries.single().scheduleEntryId)
+        assertEquals(TimeEntrySource.SCHEDULE_CONFIRMED, confirmed.timeEntries.single().source)
+        assertEquals(TimeEntrySource.TIMER, timed.entries.single().source)
+        assertNotNull(timed.entries.single().occurredAtEpochMillis)
+    }
+
+    @Test
+    fun timer_started_from_a_schedule_carries_the_link_into_settled_records() {
+        val target = Target("target", title = "阅读")
+        val schedule = ScheduleEntry("schedule", date.toString(), "阅读", estimatedMinutes = 45, targetId = target.id)
+        val state = AttentionState(targets = listOf(target), schedules = listOf(schedule))
+
+        val started = state.startTimer(target.id, Instant.parse("2026-10-08T09:00:00Z"), utc, schedule.id)
+        assertEquals(schedule.id, started.activeTimer?.scheduleEntryId)
+
+        val settled = started.stopTimer(Instant.parse("2026-10-08T09:30:00Z"), utc)
+        val record = settled.entries.single()
+        assertEquals(TimeEntrySource.TIMER, record.source)
+        assertEquals(schedule.id, record.scheduleEntryId)
+        assertNotNull(record.occurredAtEpochMillis)
+    }
+
+    @Test
+    fun timer_started_from_the_global_entry_point_binds_no_schedule() {
+        val target = Target("target", title = "阅读")
+        val schedule = ScheduleEntry("schedule", date.toString(), "阅读", estimatedMinutes = 45, targetId = target.id)
+        val state = AttentionState(targets = listOf(target), schedules = listOf(schedule))
+
+        val started = state.startTimer(target.id, Instant.parse("2026-10-08T09:00:00Z"), utc)
+        assertNull(started.activeTimer?.scheduleEntryId)
+
+        val settled = started.stopTimer(Instant.parse("2026-10-08T09:30:00Z"), utc)
+        assertNull(settled.entries.single().scheduleEntryId)
+        assertThrows(IllegalArgumentException::class.java) {
+            state.startTimer(target.id, Instant.parse("2026-10-08T09:00:00Z"), utc, "missing-schedule")
+        }
+    }
+
+    @Test
+    fun editing_a_record_preserves_source_link_planning_day_and_precise_timestamp() {
+        val target = Target("target", title = "阅读")
+        val schedule = ScheduleEntry("schedule", date.toString(), "阅读", estimatedMinutes = 45, targetId = target.id)
+        val state = AttentionState(targets = listOf(target), schedules = listOf(schedule))
+        val timedRecord = state.startTimer(target.id, Instant.parse("2026-10-08T09:00:00Z"), utc, schedule.id)
+            .stopTimer(Instant.parse("2026-10-08T09:30:00Z"), utc)
+            .entries.single()
+        val confirmedRecord = TimeEntry(
+            id = "editable",
+            planningDate = date.toString(),
+            durationMinutes = 30,
+            targetId = target.id,
+            source = TimeEntrySource.SCHEDULE_CONFIRMED,
+            scheduleEntryId = schedule.id,
+            note = "原备注",
+        )
+        val withEntries = state.copy(timeEntries = listOf(timedRecord, confirmedRecord))
+
+        val edited = withEntries.editTimeEntry("editable", 40, target.id, "新备注")
+        val editedRecord = edited.timeEntries.single { it.id == "editable" }
+        assertEquals(TimeEntrySource.SCHEDULE_CONFIRMED, editedRecord.source)
+        assertEquals(schedule.id, editedRecord.scheduleEntryId)
+        assertEquals(date.toString(), editedRecord.planningDate)
+        assertNull(editedRecord.occurredAtEpochMillis)
+        assertEquals(40, editedRecord.durationMinutes)
+        assertEquals("新备注", editedRecord.note)
+
+        val timedAfterEdit = edited.editTimeEntry(timedRecord.id, 50, target.id, "计时更正")
+        val editedTimed = timedAfterEdit.timeEntries.single { it.id == timedRecord.id }
+        assertEquals(TimeEntrySource.TIMER, editedTimed.source)
+        assertEquals(schedule.id, editedTimed.scheduleEntryId)
+        assertEquals(timedRecord.planningDate, editedTimed.planningDate)
+        assertEquals(timedRecord.occurredAtEpochMillis, editedTimed.occurredAtEpochMillis)
+        // 50 edited timer minutes + 40 edited schedule-confirmed minutes, counted once each.
+        assertEquals(90L, timedAfterEdit.experience)
+    }
+
+    @Test
+    fun reading_a_record_whose_schedule_is_gone_reports_it_instead_of_throwing() {
+        val target = Target("target", title = "阅读")
+        val state = AttentionState(
+            targets = listOf(target),
+            timeEntries = listOf(
+                TimeEntry("dangling", date.toString(), 30, target.id, TimeEntrySource.SCHEDULE_CONFIRMED, scheduleEntryId = "removed-schedule"),
+                TimeEntry("plain", date.toString(), 10, target.id),
+            ),
+        )
+
+        val rows = state.timeEntryRows(date.toString())
+
+        assertEquals(listOf("dangling", "plain"), rows.map { it.entry.id })
+        assertTrue(rows.first().scheduleMissing)
+        assertEquals(TimeEntrySource.SCHEDULE_CONFIRMED, rows.first().source)
+        assertFalse(rows.last().scheduleMissing)
+    }
+
+    @Test
+    fun every_source_produces_experience_once_and_parent_rollup_never_double_counts() {
+        val parent = Target("parent", title = "阅读")
+        val child = Target("child", parentId = parent.id, title = "中国文学")
+        val schedule = ScheduleEntry("schedule", date.toString(), "阅读", estimatedMinutes = 45, targetId = child.id)
+        val state = AttentionState(targets = listOf(parent, child), schedules = listOf(schedule))
+        val withSources = state.addTimeEntry(date.toString(), 10, child.id, TimeEntrySource.MANUAL)
+            .confirmScheduleCompleted(schedule.id, 45)
+
+        assertEquals(55L, withSources.experience)
+        assertEquals(55, withSources.subtreeMinutes(parent.id, date.toString()))
+        assertEquals(55, withSources.directMinutes(child.id, date.toString()))
+        assertEquals(0, withSources.directMinutes(parent.id, date.toString()))
+
+        val timed = withSources.startTimer(child.id, Instant.parse("2026-10-08T09:00:00Z"), utc)
+            .stopTimer(Instant.parse("2026-10-08T09:20:00Z"), utc)
+        assertEquals(75L, timed.state.experience)
+        assertEquals(75, timed.state.subtreeMinutes(parent.id, date.toString()))
+    }
+
+    @Test
+    fun csv_export_emits_the_new_source_without_changing_the_column_structure() {
+        val target = Target("target", title = "阅读")
+        val schedule = ScheduleEntry("schedule", date.toString(), "阅读", estimatedMinutes = 45, targetId = target.id)
+        val state = AttentionState(
+            targets = listOf(target),
+            schedules = listOf(schedule),
+            timeEntries = listOf(
+                TimeEntry("manual", date.toString(), 30, target.id, TimeEntrySource.MANUAL),
+                TimeEntry("confirmed", date.toString(), 45, target.id, TimeEntrySource.SCHEDULE_CONFIRMED, scheduleEntryId = schedule.id),
+                TimeEntry("timed", date.toString(), 60, target.id, TimeEntrySource.TIMER, 1L, scheduleEntryId = schedule.id),
+                TimeEntry("imported", date.toString(), 20, target.id, TimeEntrySource.IMPORT),
+            ),
+        )
+
+        val csv = state.timeEntriesCsv()
+
+        assertEquals(
+            "\uFEFFplanning_date,duration_minutes,target_id,target_title,source,note\n" +
+                "$date,30,target,阅读,MANUAL,\n" +
+                "$date,45,target,阅读,SCHEDULE_CONFIRMED,\n" +
+                "$date,60,target,阅读,TIMER,\n" +
+                "$date,20,target,阅读,IMPORT,\n",
+            csv,
+        )
+        assertEquals(6, csv.trim().lines().first().split(",").size)
+    }
 }

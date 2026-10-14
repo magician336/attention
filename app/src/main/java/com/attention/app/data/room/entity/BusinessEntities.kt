@@ -74,6 +74,7 @@ data class TimeEntryEntity(
     val source: String,
     val occurredAtEpochMillis: Long?,
     val note: String,
+    val scheduleEntryId: String?,
 )
 
 @Entity(
@@ -287,6 +288,7 @@ data class ActiveTimerEntity(
     val paused: Boolean,
     val lastPlanningDate: String,
     val completedSegmentsJson: String,
+    val scheduleEntryId: String?,
 ) {
     companion object {
         const val SINGLETON_ID = 1
