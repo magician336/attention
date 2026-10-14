@@ -1139,13 +1139,23 @@ private fun MutableList<Milestone>.addMilestoneIfMissing(
     kind: String,
     instanceKey: String,
     reward: Long,
+    achievedAtEpochMillis: Long = System.currentTimeMillis(),
 ) {
     if (existingKeys.add(instanceKey)) {
-        add(Milestone(kind = kind, instanceKey = instanceKey, reward = reward, achievedAtEpochMillis = System.currentTimeMillis()))
+        add(Milestone(kind = kind, instanceKey = instanceKey, reward = reward, achievedAtEpochMillis = achievedAtEpochMillis))
     }
 }
 
-fun AttentionState.eligibleMilestones(onDate: LocalDate): List<Milestone> {
+/**
+ * Builds all milestone candidates that are eligible through [onDate].
+ *
+ * The timestamp is explicit for command paths. The public repair helper below keeps
+ * its historical system-clock behaviour for existing callers.
+ */
+internal fun AttentionState.eligibleMilestonesAt(
+    onDate: LocalDate,
+    achievedAtEpochMillis: Long,
+): List<Milestone> {
     val existing = milestones.map { it.instanceKey }.toMutableSet()
     val result = mutableListOf<Milestone>()
     goalStages.forEach { stage ->
@@ -1164,14 +1174,14 @@ fun AttentionState.eligibleMilestones(onDate: LocalDate): List<Milestone> {
                 GoalCadence.DAILY -> 500L
                 GoalCadence.WEEKLY, GoalCadence.MONTHLY -> 1_000L
             }
-            result.addMilestoneIfMissing(existing, kind, key, reward)
+            result.addMilestoneIfMissing(existing, kind, key, reward, achievedAtEpochMillis)
         }
     }
     targets.filter { !it.archived }.forEach { target ->
         val days = continuousPlanningDaysThrough(onDate, target.id)
         listOf(7 to 500L, 30 to 1_000L, 100 to 10_000L).forEach { (threshold, reward) ->
             val key = "streak:${target.id}:$threshold"
-            if (days >= threshold) result.addMilestoneIfMissing(existing, "streak", key, reward)
+            if (days >= threshold) result.addMilestoneIfMissing(existing, "streak", key, reward, achievedAtEpochMillis)
         }
     }
     val totalHours = timeEntries
@@ -1180,10 +1190,13 @@ fun AttentionState.eligibleMilestones(onDate: LocalDate): List<Milestone> {
     (100L..totalHours step 100L).forEach { hours ->
         val key = "cumulative:$hours"
         val reward = cumulativeMilestoneReward(hours)
-        if (reward != null) result.addMilestoneIfMissing(existing, "cumulative", key, reward)
+        if (reward != null) result.addMilestoneIfMissing(existing, "cumulative", key, reward, achievedAtEpochMillis)
     }
     return result
 }
+
+fun AttentionState.eligibleMilestones(onDate: LocalDate): List<Milestone> =
+    eligibleMilestonesAt(onDate, System.currentTimeMillis())
 
 fun AttentionState.awardEligibleMilestones(onDate: LocalDate): AttentionState {
     val additions = eligibleMilestones(onDate)
