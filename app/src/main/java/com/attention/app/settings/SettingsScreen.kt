@@ -61,6 +61,7 @@ internal fun SettingsScreen(
                 ) { Text(option.label) }
             }
         }
+        OnboardingSection(actions = actions)
         PlanningSettingsSection(state = state, actions = actions, draft = draft)
         NotificationSection(state = state, actions = actions)
         BackupDataSection(actions = actions)
@@ -69,6 +70,27 @@ internal fun SettingsScreen(
             onClick = actions::close,
             modifier = Modifier.fillMaxWidth().testTag("settings-back"),
         ) { Text("返回统计页") }
+    }
+}
+
+/**
+ * 引导：设置页是重新打开首次使用引导的唯一入口。
+ *
+ * 引导是说明式的，重看它同样只解释日程、目标树与统计的职责，不写任何业务数据，
+ * 因此这里只有一个按钮——真正打开全屏引导由组合根完成。
+ */
+@Composable
+private fun OnboardingSection(actions: SettingsActions) {
+    val tokens = attentionTokens()
+    Card(Modifier.fillMaxWidth().testTag("settings-onboarding-section")) {
+        Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("引导", style = tokens.typography.title)
+            Text("重新打开首次使用引导，再看一遍日程、目标树与统计分别负责什么。")
+            AttentionButton(
+                modifier = Modifier.fillMaxWidth().testTag("settings-open-onboarding"),
+                onClick = actions::openOnboarding,
+            ) { Text("重新打开引导") }
+        }
     }
 }
 

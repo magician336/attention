@@ -9,6 +9,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.attention.domain.AttentionState
 import com.attention.domain.planningDate
 import java.time.Instant
+import org.junit.BeforeClass
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -34,5 +35,15 @@ class TodayScreenTest {
         composeRule.onNodeWithTag("agenda-range-today").assertIsDisplayed()
         composeRule.onNodeWithTag("agenda-range-tomorrow").assertIsDisplayed()
         composeRule.onNodeWithTag("agenda-range-all-dates").assertIsDisplayed()
+    }
+
+    companion object {
+        @JvmStatic
+        @BeforeClass
+        fun markTheGuideAsCompleted() {
+            // #177：未完成引导时第一次启动看到的是独立全屏引导；这条用例钉住的是引导之后的首屏，
+            // 引导本身由 WorkspaceOnboardingFlowIntegrationTest 覆盖。
+            WorkspaceGuideSeed.markCompleted()
+        }
     }
 }

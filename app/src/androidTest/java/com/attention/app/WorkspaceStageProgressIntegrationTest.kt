@@ -78,6 +78,8 @@ class WorkspaceStageProgressIntegrationTest {
             } finally {
                 database.close()
             }
+            // #177：未完成引导时第一次启动是全屏引导；这条用例要看的是引导之后的工作区
+            WorkspaceGuideSeed.markCompleted()
         }
     }
 
