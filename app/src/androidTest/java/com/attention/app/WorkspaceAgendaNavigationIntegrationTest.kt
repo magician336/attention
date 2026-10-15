@@ -147,7 +147,15 @@ class WorkspaceAgendaNavigationIntegrationTest {
         val running = readState().activeTimer
         assertEquals(TODAY_ENTRY_ID, running?.scheduleEntryId)
 
-        composeRule.onNodeWithTag("agenda-running-timer-stop", useUnmergedTree = true).performScrollTo().performClick()
+        // 从条目起计时会弹一条「通知权限未开启」的短时提示，它浮在页面底部，
+        // 正好盖住「结束并保存」。提示消失之前这个按钮点不动——先等它走，
+        // 再验证停止计时这条路径（同类的统计页用例已有同样的等待）。
+        composeRule.waitUntil(TIMEOUT) {
+            composeRule.onAllNodesWithTag("attention.feedback.snackbar").fetchSemanticsNodes().isEmpty()
+        }
+        composeRule.onNodeWithTag("agenda-running-timer-stop", useUnmergedTree = true)
+            .performScrollTo()
+            .performClick()
         composeRule.waitUntil(TIMEOUT) {
             composeRule.onAllNodesWithTag("agenda-running-timer").fetchSemanticsNodes().isEmpty()
         }

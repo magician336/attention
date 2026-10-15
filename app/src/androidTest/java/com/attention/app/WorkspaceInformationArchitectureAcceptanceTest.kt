@@ -191,6 +191,11 @@ class WorkspaceInformationArchitectureAcceptanceTest {
         }
         composeRule.onNodeWithText("正在计时：UI-验收父目标", substring = true).performScrollTo().assertIsDisplayed()
         assertEquals(TODAY_ENTRY_ID, readBusinessState().activeTimer?.scheduleEntryId)
+        // 同一条短时提示会浮在页面底部并盖住「结束并保存」，提示走之前这个按钮点不动。
+        // 这条用例后面等提示消失是为了点「打开设置」，这里等它是为了停表：同一件事，同一处等待。
+        composeRule.waitUntil(TIMEOUT) {
+            composeRule.onAllNodesWithTag("attention.feedback.snackbar").fetchSemanticsNodes().isEmpty()
+        }
         composeRule.onNodeWithTag("agenda-running-timer-stop", useUnmergedTree = true).performScrollTo().performClick()
         composeRule.waitUntil(TIMEOUT) {
             composeRule.onAllNodesWithTag("agenda-running-timer").fetchSemanticsNodes().isEmpty()
