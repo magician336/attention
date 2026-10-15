@@ -981,7 +981,7 @@ private fun AgendaRecurrenceSection(
                 Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("重复日程", style = tokens.typography.body)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        OutlinedTextField(form.title, form::changeTitle, label = { Text("重复标题") }, modifier = Modifier.weight(1f), singleLine = true)
+                        OutlinedTextField(form.title, form::changeTitle, label = { Text("重复标题") }, modifier = Modifier.weight(1f).testTag("agenda-recurrence-title-input"), singleLine = true)
                         ScheduleFrequency.entries.forEach { value ->
                             if (form.frequency == value) AttentionButton(onClick = {}) { Text(value.agendaLabel()) }
                             else AttentionOutlinedButton(onClick = { form.selectFrequency(value) }) { Text(value.agendaLabel()) }
@@ -1000,6 +1000,9 @@ private fun AgendaRecurrenceSection(
                                         Checkbox(
                                             checked = weekday in form.weekdays,
                                             onCheckedChange = { checked -> form.toggleWeekday(weekday, checked) },
+                                            // 星期复选框带稳定 test tag：页面上的时间轴行也有完成勾选框，
+                                            // 测试必须能指名这一个，而不是「页面上第一个可切换的控件」。
+                                            modifier = Modifier.testTag("agenda-recurrence-weekday-$weekday"),
                                         )
                                         Text(agendaWeekdayLabel(weekday), modifier = Modifier.padding(top = 12.dp))
                                     }

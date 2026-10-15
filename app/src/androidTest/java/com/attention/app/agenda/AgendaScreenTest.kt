@@ -12,7 +12,6 @@ import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -332,13 +331,20 @@ class AgendaScreenTest {
 
     @Test
     fun the_recurring_schedule_block_is_a_secondary_entry_that_is_collapsed_by_default() {
-        // 重复日程不再是首屏主路径：表单与规则行都收在次级入口后面
+        // 重复日程不再是首屏主路径：表单与规则行都收在次级入口后面。
+        // 折叠只挪位置不删能力，因此这条用例两头都断言：折叠入口在，展开后条目也在。
         mount(allDatesScreenState())
 
         composeRule.onNodeWithTag("agenda-recurrence-toggle", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("重复标题", substring = false).assertDoesNotExist()
         composeRule.onNodeWithTag("recurrence-reminder-input", useUnmergedTree = true).assertDoesNotExist()
         composeRule.onNodeWithText("每日晨读 · 每日 · 2026-03-05").assertDoesNotExist()
+
+        expandRecurrence()
+
+        composeRule.onNodeWithTag("agenda-recurrence-title-input", useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithTag("recurrence-reminder-input", useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithText("每日晨读 · 每日 · 2026-03-05").assertExists()
     }
 
     @Test
@@ -363,10 +369,14 @@ class AgendaScreenTest {
         mount(allDatesScreenState(), intents)
 
         expandRecurrence()
-        node("重复标题").performScrollTo().performTextReplacement("每周复盘会")
+        composeRule.onNodeWithTag("agenda-recurrence-title-input", useUnmergedTree = true)
+            .performScrollTo().performTextReplacement("每周复盘会")
         node("每周").performScrollTo().performClick()
-        // 星期由复选框本身切换，标签文字只是它的说明
-        composeRule.onAllNodes(isToggleable(), useUnmergedTree = true)[0].performScrollTo().performClick()
+        // 星期由复选框本身切换，标签文字只是它的说明。
+        // 指名这一个复选框而不是「页面上第一个可切换的控件」：重复日程是折叠的次级入口，
+        // 排在时间轴之后，而时间轴行自带完成勾选框，按位置猜会点到完成勾选框上。
+        composeRule.onNodeWithTag("agenda-recurrence-weekday-1", useUnmergedTree = true)
+            .performScrollTo().performClick()
         node("创建并生成未来 30 天").performScrollTo().performClick()
 
         val draft: AgendaRecurrenceDraft = intents.addedRecurrences.single()
@@ -383,7 +393,8 @@ class AgendaScreenTest {
         mount(allDatesScreenState(), intents)
 
         expandRecurrence()
-        node("重复标题").performScrollTo().performTextReplacement("每周复盘会")
+        composeRule.onNodeWithTag("agenda-recurrence-title-input", useUnmergedTree = true)
+            .performScrollTo().performTextReplacement("每周复盘会")
         node("每周").performScrollTo().performClick()
         node("创建并生成未来 30 天").performScrollTo().performClick()
 
@@ -422,9 +433,10 @@ class AgendaScreenTest {
 
     @Test
     fun the_running_schedule_is_pinned_to_the_top_of_the_timeline() {
-        // #180 的首屏顺序是「容量摘要 → 时间轴 → 计时控制 → 添加 → 事后补记」，
-        // 而「正在计时的条目固定在时间轴顶部」指的是**时间轴内部**的第一位，不是整页第一位。
-        // 这两件事必须分别断言：整页顺序按 spec，置顶按时间轴内部。
+        // #193 的「置顶」指的是**时间轴内部**的第一位：正在计时的那条日程行排在其它行之前。
+        // 整页区块顺序是 #189 的另一条规则，由
+        // [the_first_screen_shows_its_sections_in_the_fixed_workbench_order] 单独断言——
+        // 两条规则各由一条用例负责，用例之间因此不会互相推翻。
         val timingEntry = ScheduleEntry("e5", "2026-03-06", "正在做的", estimatedMinutes = 60)
         mount(
             planningDayScreenState(
@@ -441,21 +453,12 @@ class AgendaScreenTest {
         val cueIndex = tags.indexOf("schedule-timing-cue")
         val timingRowIndex = tags.indexOf("agenda-schedule-row-e5")
         val otherRowIndex = tags.indexOf("agenda-schedule-row-e2")
-        val timelineSectionIndex = tags.indexOf("agenda-section-timeline")
-        val timerSectionIndex = tags.indexOf("agenda-section-timer")
 
         assertTrue("计时线索必须渲染：" + tags, cueIndex >= 0)
         assertTrue("正在计时的日程行必须渲染：" + tags, timingRowIndex >= 0)
         assertTrue("其它日程行必须渲染：" + tags, otherRowIndex >= 0)
         assertTrue("计时线索应落在正在计时的那一行：" + tags, cueIndex == timingRowIndex + 1)
         assertTrue("正在计时的条目应固定在时间轴第一位，实际顺序：" + tags, timingRowIndex < otherRowIndex)
-        // 计时控制卡是时间轴区块之后的一块，它不属于时间轴内部。
-        assertTrue("计时控制区块必须渲染：" + tags, timerSectionIndex >= 0)
-        assertTrue("时间轴区块必须渲染：" + tags, timelineSectionIndex >= 0)
-        assertTrue(
-            "整页顺序按 #180：时间轴在计时控制之前，实际顺序：" + tags,
-            timelineSectionIndex < timerSectionIndex,
-        )
     }
 
     @Test
@@ -698,7 +701,10 @@ class AgendaScreenTest {
     @Test
     fun the_first_screen_shows_its_sections_in_the_fixed_workbench_order() {
         // 首屏自上而下固定为：规划日与每日容量摘要、时间轴、进行中的计时状态、添加日程入口、事后补记，
-        // 重复日程作为折叠的次级入口排在最后
+        // 重复日程作为折叠的次级入口排在最后。
+        // 这条用例只管**整页区块顺序**；「正在计时的条目固定在时间轴顶部」是时间轴内部的事，
+        // 由 [the_running_schedule_is_pinned_to_the_top_of_the_timeline] 单独断言。
+        // 计时区块只有真的有计时时才占位，所以这条用例必须注入一个运行中的计时。
         mount(
             planningDayScreenState(
                 selected = planningDay,
@@ -717,6 +723,21 @@ class AgendaScreenTest {
         ).map { tag -> sectionTop(tag) }
 
         assertEquals(tops.sorted(), tops)
+    }
+
+    @Test
+    fun there_is_no_timer_section_before_a_timer_is_started() {
+        // 没有运行中的计时时，计时区块不留空占位：首屏因此不出现一块空区块。
+        // 这是 #180 的顺序规则（「进行中的计时状态」在时间轴之后）在无计时时的表现，
+        // 而不是一条被忽略的顺序——因此这里断言的是**不存在**。
+        mount(planningDayScreenState(planningDay))
+
+        composeRule.onNodeWithTag("agenda-section-timer", useUnmergedTree = true).assertDoesNotExist()
+        composeRule.onNodeWithTag("agenda-running-timer", useUnmergedTree = true).assertDoesNotExist()
+        // 没有计时时其余区块照旧在位，缺的是计时这一块而不是整页。
+        composeRule.onNodeWithTag("agenda-section-summary", useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithTag("agenda-section-timeline", useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithTag("agenda-section-add", useUnmergedTree = true).assertExists()
     }
 
     @Test
