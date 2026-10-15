@@ -1,5 +1,6 @@
 package com.attention.domain
 
+import java.time.LocalDate
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -64,6 +65,93 @@ class LaunchDestinationResolutionTest {
         assertEquals(LaunchDestination.TARGETS, LaunchDestination.TARGETS.asAgendaEntry())
         assertEquals(LaunchDestination.STATISTICS, LaunchDestination.STATISTICS.asAgendaEntry())
         assertEquals(LaunchDestination.LAST_OPENED, LaunchDestination.LAST_OPENED.asAgendaEntry())
+    }
+
+    @Test
+    fun an_external_schedule_request_wins_over_every_saved_entry() {
+        // 外部日程请求优先级最高：保存的入口与上次打开都不拦截它
+        listOf(
+            LaunchDestination.AGENDA,
+            LaunchDestination.TARGETS,
+            LaunchDestination.STATISTICS,
+            LaunchDestination.LAST_OPENED,
+            LaunchDestination.TODAY,
+        ).forEach { requested ->
+            assertEquals(
+                "外部请求必须压过保存的入口 $requested",
+                LaunchDestination.AGENDA,
+                resolveInitialLaunchDestination(true, requested, LaunchDestination.STATISTICS),
+            )
+        }
+    }
+
+    @Test
+    fun the_saved_entry_lands_on_its_own_page_when_there_is_no_external_request() {
+        // 日程、目标树、统计、上次打开四种启动入口各自直达对应页面
+        assertEquals(
+            LaunchDestination.AGENDA,
+            resolveInitialLaunchDestination(false, LaunchDestination.AGENDA, LaunchDestination.STATISTICS),
+        )
+        assertEquals(
+            LaunchDestination.TARGETS,
+            resolveInitialLaunchDestination(false, LaunchDestination.TARGETS, LaunchDestination.STATISTICS),
+        )
+        assertEquals(
+            LaunchDestination.STATISTICS,
+            resolveInitialLaunchDestination(false, LaunchDestination.STATISTICS, LaunchDestination.TARGETS),
+        )
+        assertEquals(
+            LaunchDestination.TARGETS,
+            resolveInitialLaunchDestination(false, LaunchDestination.LAST_OPENED, LaunchDestination.TARGETS),
+        )
+    }
+
+    @Test
+    fun no_usable_history_falls_back_to_the_schedule_of_the_current_planning_day() {
+        // 没有有效历史时回退到日程，组合根据此打开当前规划日的日程
+        assertEquals(
+            LaunchDestination.AGENDA,
+            resolveInitialLaunchDestination(false, LaunchDestination.LAST_OPENED, LaunchDestination.LAST_OPENED),
+        )
+        assertEquals(
+            LaunchDestination.AGENDA,
+            resolveInitialLaunchDestination(false, LaunchDestination.LAST_OPENED, LaunchDestination.TODAY),
+        )
+        // 旧入口值仍按旧页面直达，再由领域兼容映射落到同一页日程
+        assertEquals(
+            LaunchDestination.AGENDA,
+            resolveInitialLaunchDestination(false, LaunchDestination.ALL_DATES, LaunchDestination.ALL_DATES).asAgendaEntry(),
+        )
+    }
+
+    @Test
+    fun an_external_request_locates_the_planning_day_it_names() {
+        val state = AttentionState().addSchedule(
+            ScheduleEntry(id = "wanted", planningDate = "2026-10-20", title = "被点名的条目"),
+        )
+        assertEquals(
+            LocalDate.of(2026, 10, 20),
+            externalSchedulePlanningDate(state, "2026-10-20", "wanted"),
+        )
+        // 请求带的规划日优先于条目自身的规划日
+        assertEquals(
+            LocalDate.of(2026, 10, 18),
+            externalSchedulePlanningDate(state, "2026-10-18", "wanted"),
+        )
+    }
+
+    @Test
+    fun an_external_request_falls_back_to_the_entries_own_planning_day() {
+        val state = AttentionState().addSchedule(
+            ScheduleEntry(id = "wanted", planningDate = "2026-10-20", title = "被点名的条目"),
+        )
+        // 只有条目 id（通知没带规划日）时定位到条目所在的日子，而不是当前规划日
+        assertEquals(LocalDate.of(2026, 10, 20), externalSchedulePlanningDate(state, null, "wanted"))
+        // 规划日无法解析时同样退回条目自身的规划日
+        assertEquals(LocalDate.of(2026, 10, 20), externalSchedulePlanningDate(state, "不是日期", "wanted"))
+        // 没有任何可定位的目标时没有定位日，由调用方回退到当前规划日
+        assertEquals(null, externalSchedulePlanningDate(state, null, null))
+        assertEquals(null, externalSchedulePlanningDate(state, "不是日期", "不存在"))
     }
 
     @Test

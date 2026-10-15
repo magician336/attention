@@ -2,6 +2,7 @@ package com.attention.app
 
 import com.attention.domain.LaunchDestination
 import com.attention.domain.asAgendaEntry
+import com.attention.domain.resolveInitialLaunchDestination
 import com.attention.domain.resolveLaunchDestination
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -36,7 +37,7 @@ class WorkspaceNavigationTest {
         // 底部导航收敛为三项之后，「日程」就是它的真实入口：旧入口值仍然等价于日程
         assertEquals(
             LaunchDestination.AGENDA,
-            initialLaunchDestination(false, LaunchDestination.AGENDA, LaunchDestination.TARGETS),
+            resolveInitialLaunchDestination(false, LaunchDestination.AGENDA, LaunchDestination.TARGETS),
         )
         assertEquals(
             LaunchDestination.AGENDA,
@@ -50,14 +51,14 @@ class WorkspaceNavigationTest {
 
     @Test
     fun external_schedule_request_takes_precedence_over_saved_launch_page() {
-        // 外部日程请求直接打开合并后的日程页（深链优先级由 #174 继续细化）
+        // 外部日程请求直接打开日程并定位到指定规划日与条目，不被保存的启动入口拦截
         assertEquals(
             LaunchDestination.AGENDA,
-            initialLaunchDestination(true, LaunchDestination.STATISTICS, LaunchDestination.TARGETS),
+            resolveInitialLaunchDestination(true, LaunchDestination.STATISTICS, LaunchDestination.TARGETS),
         )
         assertEquals(
             LaunchDestination.STATISTICS,
-            initialLaunchDestination(false, LaunchDestination.STATISTICS, LaunchDestination.TARGETS),
+            resolveInitialLaunchDestination(false, LaunchDestination.STATISTICS, LaunchDestination.TARGETS),
         )
     }
 
