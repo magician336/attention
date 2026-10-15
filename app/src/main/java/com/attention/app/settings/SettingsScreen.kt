@@ -1,9 +1,9 @@
 package com.attention.app.settings
 
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -33,6 +33,7 @@ import com.attention.workspace.state.SettingsScreenState
  * 这里是启动入口、规划日界线、周起始日、每日容量、通知与备份数据的唯一编辑入口：
  * #172 下线今天页的每日容量卡片之后，规划日语义相关的编辑能力全部集中到了这一页。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun SettingsScreen(
     state: SettingsScreenState,
@@ -46,6 +47,11 @@ internal fun SettingsScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("设置", style = tokens.typography.display)
+        // 返回入口放在页首而不是页尾：设置很长，页尾的返回按钮要一路滚到底才看得见。
+        AttentionOutlinedButton(
+            onClick = actions::close,
+            modifier = Modifier.fillMaxWidth().testTag("settings-back"),
+        ) { Text("返回统计页") }
         Text("启动入口", style = tokens.typography.title)
         Text("应用下次启动时打开的页面")
         state.options.forEach { option ->
@@ -64,11 +70,6 @@ internal fun SettingsScreen(
         PlanningSettingsSection(state = state, actions = actions, draft = draft)
         NotificationSection(state = state, actions = actions)
         BackupDataSection(actions = actions)
-        // 设置页不是顶级工作区：离开它回到统计页，返回动作由组合根接到统计页上。
-        AttentionOutlinedButton(
-            onClick = actions::close,
-            modifier = Modifier.fillMaxWidth().testTag("settings-back"),
-        ) { Text("返回统计页") }
     }
 }
 
@@ -78,6 +79,7 @@ internal fun SettingsScreen(
  * 界线与容量共用一次保存 intent（它们一起写进同一份规划设置），周起始日是一条独立的公开设置命令，
  * 因此点选即生效。三项的语义仍然由领域层负责，页面只负责输入与提交。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PlanningSettingsSection(
     state: SettingsScreenState,
@@ -98,7 +100,7 @@ private fun PlanningSettingsSection(
                 singleLine = true,
             )
             Text("周起始日", style = tokens.typography.title)
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 state.weekDayOptions.forEach { option ->
                     if (option.selected) {
                         AttentionButton(
@@ -168,6 +170,7 @@ private fun NotificationSection(
  *
  * 按钮只发出 intent，SAF 文件选择器、导入预览与恢复确认仍由组合根完成，workflow 与迁移前一致。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun BackupDataSection(actions: SettingsActions) {
     val tokens = attentionTokens()
@@ -175,7 +178,9 @@ private fun BackupDataSection(actions: SettingsActions) {
         Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("备份数据", style = tokens.typography.title)
             Text("备份与恢复会经过系统文件选择器；导入前自动保存一次保护性备份。")
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // 换行排列而不是横向滚动：横向滚动条里排在屏幕外的按钮在窄屏上点不到，
+            // 每一项都必须能直接点到。
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 AttentionButton(onClick = actions::previewJsonBackup) { Text("预览 JSON 备份") }
                 AttentionOutlinedButton(onClick = actions::importJson) { Text("导入 JSON") }
                 AttentionOutlinedButton(onClick = actions::exportTimeEntriesCsv) { Text("导出时间记录 CSV") }

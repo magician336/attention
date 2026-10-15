@@ -165,8 +165,9 @@ class StatisticsScreenTest {
         composeRule.onNodeWithTag("statistics-open-settings").performScrollTo().performClick()
 
         assertEquals(1, intents.openedSettings)
-        // 启动入口与备份数据都已经搬进设置页，统计页不再重复呈现它们
-        node("首屏入口").assertDoesNotExist()
+        // 启动入口与备份数据都已经搬进设置页，统计页不再重复呈现它们。
+        // 这里不能先滚再断言「不存在」：不存在的节点滚不出来，滚动会先失败。
+        composeRule.onNodeWithText("首屏入口").assertDoesNotExist()
         composeRule.onNodeWithText("预览 JSON 备份").assertDoesNotExist()
         composeRule.onNodeWithText("恢复最近一次导入前备份").assertDoesNotExist()
     }

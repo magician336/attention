@@ -59,10 +59,10 @@ class WorkspaceSettingsEntryIntegrationTest {
         // 入口在统计页底部；进入后是独立设置页，返回后回到统计页
         openSettingsFromStatistics()
 
-        composeRule.onNodeWithTag("settings-back").assertIsDisplayed()
-        composeRule.onNodeWithTag("launch-destination-STATISTICS").assertIsDisplayed()
+        composeRule.onNodeWithTag("settings-back").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("launch-destination-STATISTICS").performScrollTo().assertIsDisplayed()
 
-        composeRule.onNodeWithTag("settings-back").performClick()
+        composeRule.onNodeWithTag("settings-back").performScrollTo().performClick()
         composeRule.waitForIdle()
 
         composeRule.onNodeWithText("统计与成长").assertIsDisplayed()
@@ -73,8 +73,8 @@ class WorkspaceSettingsEntryIntegrationTest {
         // #172 下线今天页的每日容量卡片之后，规划日语义这三项在设置页才重新有入口，改完要真的存下来
         openSettingsFromStatistics()
 
-        composeRule.onNodeWithTag("planning-boundary-input").performTextReplacement("90")
-        composeRule.onNodeWithTag("daily-capacity-input").performTextReplacement("300")
+        composeRule.onNodeWithTag("planning-boundary-input").performScrollTo().performTextReplacement("90")
+        composeRule.onNodeWithTag("daily-capacity-input").performScrollTo().performTextReplacement("300")
         composeRule.onNodeWithTag("planning-settings-save").performScrollTo().performClick()
         composeRule.waitUntil(TIMEOUT) {
             readSettings().let { it.planningDayBoundaryMinutes == 90 && it.dailyCapacityMinutes == 300 }
