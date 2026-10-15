@@ -62,7 +62,10 @@ class WorkspaceAgendaCapacityIntegrationTest {
     }
 
     private fun openAgenda() {
-        composeRule.onNode(hasText("所有日期") and hasClickAction()).performClick()
+        // 「所有日期」现在是日程页里的一个日期范围，不再是底部的顶级入口
+        composeRule.onNodeWithTag("nav-agenda", useUnmergedTree = true).performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).performScrollTo().performClick()
         composeRule.waitForIdle()
     }
 

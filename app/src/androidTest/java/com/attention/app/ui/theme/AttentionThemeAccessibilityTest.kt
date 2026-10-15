@@ -14,6 +14,7 @@ import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -45,16 +46,21 @@ class AttentionThemeAccessibilityTest {
      * 页面级接入 #137 修好了这个差距：Material 3 的 [Button] 固定 40dp 且不响应
      * `LocalMinimumInteractiveComponentEnforcement`，因此页面上的按钮改为显式声明
      * 48dp 最小高度，而不是靠主题层的强制约束。
+     *
+     * 被测控件跟着主工作区收敛一起移动：今天工作台的每日容量卡片本次下线，
+     * 因此钉在合并后日程页上同属 [AttentionButton] 的「添加日程」按钮。
      */
     @Test
     fun interactive_controls_meet_the_material3_touch_target_baseline() {
-        composeRule.onNodeWithTag("daily-capacity-save").assertHeightIsAtLeast(48.dp)
+        composeRule.onNodeWithTag("agenda-add-submit", useUnmergedTree = true)
+            .performScrollTo()
+            .assertHeightIsAtLeast(48.dp)
         composeRule.onNodeWithTag("onboarding-save-continue").assertHeightIsAtLeast(48.dp)
     }
 
     @Test
     fun interactive_controls_expose_a_semantic_label() {
-        val label = composeRule.onNodeWithTag("daily-capacity-save")
+        val label = composeRule.onNodeWithTag("agenda-add-submit")
             .fetchSemanticsNode()
             .config
             .getOrNull(SemanticsProperties.Text)

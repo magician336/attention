@@ -66,15 +66,19 @@ class WorkspaceRoomIntegrationTest {
 
     @Test
     fun agenda_screen_is_available_from_room_backed_workspace() {
-        composeRule.onNode(hasText("所有日期") and hasClickAction()).performClick()
+        composeRule.onNodeWithTag("nav-agenda", useUnmergedTree = true).performClick()
         composeRule.onNodeWithText("日程条目可带预计时长；它不会自动变成实际投入。").assertExists()
     }
 
     @Test
-    fun timer_controls_are_available_from_room_backed_workspace() {
-        composeRule.onNode(hasText("今天") and hasClickAction()).performClick()
-        composeRule.onNodeWithText("计时器").assertExists()
-        composeRule.onNodeWithText("开始未归属计时").assertExists()
+    fun the_merged_agenda_page_replaces_the_workbench_with_date_ranges() {
+        // 今天工作台的计时卡、快速记录与每日容量卡片本次下线：日程页只有日期范围与日程时间轴
+        composeRule.onNodeWithTag("nav-agenda", useUnmergedTree = true).performClick()
+        composeRule.onNodeWithTag("agenda-range-today", useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithTag("agenda-range-tomorrow", useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithText("开始未归属计时").assertDoesNotExist()
+        composeRule.onNodeWithText("快速记录实际投入").assertDoesNotExist()
     }
 
     @Test

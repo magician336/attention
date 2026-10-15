@@ -108,20 +108,7 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
             .performScrollTo()
             .assert(hasText("已安排 60 / 60 分钟", substring = true))
 
-        // Workbench settings survive activity recreation, and JSON backup remains user-visible.
-        composeRule.onNode(hasText("今天") and hasClickAction()).performClick()
-        replace("planning-boundary-input", "240")
-        click("daily-capacity-save")
-        composeRule.waitForIdle()
-        composeRule.onNodeWithText("规划日界线 04:00 · 每周从周一开始").assertExists()
-
-        composeRule.activityRule.scenario.recreate()
-        composeRule.waitForIdle()
-        composeRule.onNodeWithText("规划日界线 04:00 · 每周从周一开始").assertExists()
-        composeRule.onNodeWithTag("daily-capacity-summary", useUnmergedTree = true)
-            .performScrollTo()
-            .assert(hasText("/ 60 分钟", substring = true))
-
+        // JSON backup remains user-visible from statistics.
         composeRule.onNode(hasText("统计") and hasClickAction()).performClick()
         composeRule.onNodeWithText("预览 JSON 备份").performScrollTo().performClick()
         // The export launches the system document picker in its own process; the stubbed
@@ -149,7 +136,10 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
     }
 
     private fun openAgenda() {
-        composeRule.onNode(hasText("所有日期") and hasClickAction()).performClick()
+        // 「所有日期」现在是日程页里的一个日期范围，不再是底部的顶级入口
+        composeRule.onNodeWithTag("nav-agenda", useUnmergedTree = true).performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).performScrollTo().performClick()
         composeRule.waitForIdle()
     }
 

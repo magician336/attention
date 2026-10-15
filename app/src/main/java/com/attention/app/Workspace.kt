@@ -19,9 +19,19 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Event
+import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -30,7 +40,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -70,7 +84,7 @@ import com.attention.app.statistics.StatisticsSelection
 import com.attention.app.statistics.rememberStatisticsSelection
 import com.attention.app.targets.TargetsScreen
 import com.attention.app.targets.rememberTargetsSelection
-import com.attention.app.today.TodayScreen
+import com.attention.app.today.TodayOnboardingCard
 import com.attention.workspace.state.AgendaActions
 import com.attention.workspace.state.AgendaRecurrenceDraft
 import com.attention.workspace.state.AgendaScheduleDraft
@@ -95,6 +109,7 @@ import com.attention.domain.newId
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.StoredSettings
 import com.attention.domain.TimeEntry
+import com.attention.domain.asAgendaEntry
 import com.attention.domain.capacitySummary
 import com.attention.domain.planningDate
 import com.attention.domain.reminderEpochMillis
@@ -257,6 +272,8 @@ private class AgendaActionsAdapter(
     private val zone: ZoneId,
     private val onStartTimerFromEntry: (ScheduleEntry) -> Unit,
     private val onRequestReminderPermission: () -> Unit,
+    private val onStopTimer: () -> Unit,
+    private val onTimeRecordDeleted: (TimeEntry) -> Unit,
 ) : AgendaActions {
     override fun selectPlanningDate(date: LocalDate?) {
         selection.selectDate(date)
@@ -308,6 +325,18 @@ private class AgendaActionsAdapter(
 
     // 条目一起带出，因此产出的时间记录保留同一个来源关联。
     override fun startTimerFromEntry(entry: ScheduleEntry) = onStartTimerFromEntry(entry)
+
+    // 运行中的计时只能从日程页停掉：平台动作（停前台计时服务、撤掉恢复提示）仍归组合根。
+    override fun stopRunningTimer() = onStopTimer()
+
+    override fun editTime(entryId: String, minutes: Int, targetId: String?, note: String) {
+        viewModel.editTime(entryId, minutes, targetId, note)
+    }
+
+    // 删除的可撤销提示由组合根展示：撤销要用回被删掉的那条记录本身。
+    override fun deleteTime(entryId: String) {
+        viewModel.deleteTimeWithUndo(entryId, onTimeRecordDeleted)
+    }
 
     override fun addRecurrenceAndMaterialize(draft: AgendaRecurrenceDraft) {
         val rule = draft.toRecurrenceRule()
@@ -689,7 +718,10 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         persistedSettingsLoaded = true
     }
     androidx.compose.runtime.LaunchedEffect(destination, settingsOpen, persistedSettingsLoaded) {
-        if (shouldPersistLastOpened(persistedSettingsLoaded, settingsOpen)) viewModel.saveLastOpened(destination)
+        // 底部导航只有三项，因此「上次打开」写入的永远是它自己：旧入口值先按领域兼容映射落成日程。
+        if (shouldPersistLastOpened(persistedSettingsLoaded, settingsOpen)) {
+            viewModel.saveLastOpened(destination.asAgendaEntry())
+        }
     }
     androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.restoreReminders() }
 
@@ -746,9 +778,11 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             onFeedbackMessage = { message -> feedbackScope.launch { feedback.showMessage(message) } },
         )
     }
-    // 所有日期页的选中规划日由页面 module 提供类型与迁移语义，组合根只持有一个实例来喂投影。
+    // 日程页的选中规划日由页面 module 提供类型与迁移语义，组合根只持有一个实例来喂投影。
+    // 默认打开当前规划日：外部日程请求带来的规划日仍然优先（深链优先级由 #174 决定）。
     val agendaSelection = rememberAgendaSelection(
-        openScheduleDate?.let { value -> runCatching { LocalDate.parse(value) }.getOrNull() },
+        openScheduleDate?.let { value -> runCatching { LocalDate.parse(value) }.getOrNull() }
+            ?: state.planningDate(injectedNow, injectedZone),
     )
     val agendaState = agendaScreenState(
         state = state,
@@ -840,24 +874,48 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             zone = injectedZone,
             onStartTimerFromEntry = ::startTimerFromSchedule,
             onRequestReminderPermission = { requestReminderPermission(context) },
+            onStopTimer = {
+                viewModel.stopTimer(onSuccess = {
+                    AttentionBootReceiver.cancelRecoveryPrompt(context)
+                    context.stopService(AttentionTimerService.intent(context))
+                })
+            },
+            onTimeRecordDeleted = { removed ->
+                feedbackScope.launch {
+                    feedback.showUndoableMessage(
+                        message = "已删除这条实际投入，它不再计入目标进度与统计。",
+                        onUndo = { viewModel.restoreTimeEntry(removed) },
+                    )
+                }
+            },
         )
     }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Attention") }) },
         bottomBar = {
+            // 主工作区收敛为日程、目标树、统计三个入口：今天/明天/所有日期是日程页里的范围，
+            // 不再是顶级入口。每一项同时有 Material 图标与中文标签，选中态带可访问语义。
             Row(Modifier.fillMaxWidth().padding(6.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
                 listOf(
-                    LaunchDestination.TODAY to "今天",
-                    LaunchDestination.TARGETS to "目标树",
-                    LaunchDestination.ALL_DATES to "所有日期",
-                    LaunchDestination.STATISTICS to "统计",
-                ).forEach { (item, label) ->
-                    if (selectedNavigationDestination(destination) == item && !settingsOpen) AttentionButton(onClick = { settingsOpen = false; destinationChosen = true }) { Text(label) }
-                    else AttentionOutlinedButton(onClick = { settingsOpen = false; destinationChosen = true; destination = item }) { Text(label) }
+                    Triple(LaunchDestination.AGENDA, "日程", Icons.Filled.Event),
+                    Triple(LaunchDestination.TARGETS, "目标树", Icons.Filled.AccountTree),
+                    Triple(LaunchDestination.STATISTICS, "统计", Icons.Filled.Insights),
+                ).forEach { (item, label, icon) ->
+                    WorkspaceNavigationItem(
+                        label = label,
+                        icon = icon,
+                        selected = !settingsOpen && destination.asAgendaEntry() == item,
+                        onSelect = {
+                            settingsOpen = false
+                            destinationChosen = true
+                            destination = item
+                        },
+                        modifier = Modifier.testTag("nav-${item.name.lowercase()}"),
+                    )
                 }
-                if (settingsOpen) AttentionButton(onClick = {}) { Text("设置") }
-                else AttentionOutlinedButton(onClick = { settingsOpen = true }) { Text("设置") }
+                if (settingsOpen) AttentionButton(onClick = {}, modifier = Modifier.testTag("nav-settings")) { Text("设置") }
+                else AttentionOutlinedButton(onClick = { settingsOpen = true }, modifier = Modifier.testTag("nav-settings")) { Text("设置") }
             }
         },
     // 短时提示宿主挂在 Scaffold 上，因此五个页面共用同一个出口，流程不被打断。
@@ -881,30 +939,28 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                     ),
                     actions = settingsActions,
                 )
-            } else when (destination) {
-                // 「日程」入口打开当前规划日，与今天工作台是同一个页面；底部导航的
-                // 四个入口与标签本票不变，收敛为三项属于后续票。
-                LaunchDestination.TODAY,
-                LaunchDestination.AGENDA,
-                LaunchDestination.LAST_OPENED,
-                -> TodayScreen(
-                    state = todayState,
-                    actions = todayActions,
+            } else when (destination.asAgendaEntry()) {
+                // 「日程」是合并后的页面：它承载当前规划日、今天、明天、所有日期与任意规划日。
+                // 旧入口值 TODAY / ALL_DATES 通过领域兼容映射落到同一页（枚举值本身保留）。
+                LaunchDestination.AGENDA -> AgendaScreen(
+                    state = agendaState,
+                    actions = agendaActions,
+                    openScheduleId = openScheduleId,
+                    // 未完成引导的用户仍然看得到引导卡片，它属于它自己的页面 module。
+                    onboarding = if (todayState.onboardingCompleted) null else {
+                        { TodayOnboardingCard(state = todayState, actions = todayActions) }
+                    },
                 )
                 LaunchDestination.TARGETS -> TargetsScreen(
                     state = targetsState,
                     actions = targetsActions,
                     selection = targetsSelection,
                 )
-                LaunchDestination.ALL_DATES -> AgendaScreen(
-                    state = agendaState,
-                    actions = agendaActions,
-                    openScheduleId = openScheduleId,
-                )
                 LaunchDestination.STATISTICS -> StatisticsScreen(
                     state = statisticsState,
                     actions = statisticsActions,
                 )
+                LaunchDestination.TODAY, LaunchDestination.ALL_DATES, LaunchDestination.LAST_OPENED -> Unit
             }
             jsonPreview?.let { Text("JSON 预览：\n$it", modifier = Modifier.padding(16.dp)) }
             jsonExportMessage?.let { Text(it, modifier = Modifier.padding(horizontal = 16.dp)) }
@@ -1008,6 +1064,41 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     }
 }
 
+/**
+ * 一个底部导航入口：Material 图标与中文标签同时可见，选中态用填充色之外的
+ * 「已选中：…」文案、勾选图标与可访问的 selected 语义表达，因此不依赖颜色单独传达。
+ */
+@Composable
+private fun WorkspaceNavigationItem(
+    label: String,
+    icon: ImageVector,
+    selected: Boolean,
+    onSelect: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        shape = RoundedCornerShape(attentionTokens().radius.small),
+        color = Color.Transparent,
+        modifier = modifier.selectable(
+            selected = selected,
+            onClick = onSelect,
+            role = Role.Tab,
+        ),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (selected) {
+                Icon(Icons.Filled.Check, contentDescription = "已选中", modifier = Modifier.size(16.dp))
+            }
+            Icon(icon, contentDescription = label, modifier = Modifier.size(20.dp))
+            Text(label)
+        }
+    }
+}
+
 private fun backupPreviewText(
     preview: BackupPreview,
     current: AttentionState,
@@ -1059,17 +1150,10 @@ internal fun initialLaunchDestination(
     requested: LaunchDestination,
     lastOpened: LaunchDestination,
 ): LaunchDestination = if (hasExternalScheduleRequest) {
-    LaunchDestination.ALL_DATES
+    LaunchDestination.AGENDA
 } else {
     resolveLaunchDestination(requested, lastOpened)
 }
-
-/**
- * 「日程」入口落在底部导航现有的「今天」项上：底部导航的四个入口与标签本票不变，
- * 因此选中态与页面外观在导航收敛为三项之前保持一致。
- */
-internal fun selectedNavigationDestination(destination: LaunchDestination): LaunchDestination =
-    if (destination == LaunchDestination.AGENDA) LaunchDestination.TODAY else destination
 
 internal fun shouldPersistLastOpened(settingsLoaded: Boolean, settingsOpen: Boolean): Boolean =
     settingsLoaded && !settingsOpen

@@ -62,6 +62,21 @@ fun updateSchedule(entry: ScheduleEntry, reminderMinuteOfDay: Int?)
     /** 从日程条目起计时。[targetId] 与条目一起带出，产出的时间记录保留同一来源上下文。 */
     fun startTimerFromEntry(entry: ScheduleEntry)
 
+    /**
+     * 结束并保存运行中的计时。计时卡下线之后，这是日程页上唯一能停掉一次计时的入口，
+     * 因此它必须留在同一页；结算、经验与里程碑仍由 `:domain` 计算，前台服务由组合根停掉。
+     */
+    fun stopRunningTimer()
+
+    /**
+     * 编辑一条实际投入，只调整时长、目标归属与备注。
+     * 记录的规划日与来源由领域层保持不变，因此这里不接收它们。
+     */
+    fun editTime(entryId: String, minutes: Int, targetId: String?, note: String)
+
+    /** 删除一条实际投入，并给出一次撤销机会；撤销提示由组合根展示。 */
+    fun deleteTime(entryId: String)
+
     fun addRecurrenceAndMaterialize(draft: AgendaRecurrenceDraft)
 
     fun stopRecurrence(ruleId: String)
