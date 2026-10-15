@@ -79,7 +79,9 @@ class AgendaScreenTest {
         node("已安排 60 / 120 分钟").assertIsDisplayed()
         node("写周报").assertIsDisplayed()
         node("2026-03-05 · 60 分钟 · 工作 · 无提醒").assertIsDisplayed()
-        composeRule.onNodeWithTag("agenda-capacity-summary-2026-03-05", useUnmergedTree = true).assertIsDisplayed()
+        // 每个规划日分区都在时间轴区块内，排在只读摘要之下：先滚到它再断言可见。
+        composeRule.onNodeWithTag("agenda-capacity-summary-2026-03-05", useUnmergedTree = true)
+            .performScrollTo().assertIsDisplayed()
     }
 
     @Test
@@ -705,6 +707,7 @@ class AgendaScreenTest {
         // 这条用例只管**整页区块顺序**；「正在计时的条目固定在时间轴顶部」是时间轴内部的事，
         // 由 [the_running_schedule_is_pinned_to_the_top_of_the_timeline] 单独断言。
         // 计时区块只有真的有计时时才占位，所以这条用例必须注入一个运行中的计时。
+        // 六个区块不可能同时落在窗口内：顺序由语义树先序给出，坐标在这个长滚动页上没有意义。
         mount(
             planningDayScreenState(
                 selected = planningDay,
@@ -713,16 +716,22 @@ class AgendaScreenTest {
             ),
         )
 
-        val tops = listOf(
+        val tags = orderedTestTags()
+        val sections = listOf(
             "agenda-section-summary",
             "agenda-section-timeline",
             "agenda-section-timer",
             "agenda-section-add",
             "agenda-section-backfill",
             "agenda-section-recurrence",
-        ).map { tag -> sectionTop(tag) }
+        )
+        val indices = sections.map { section ->
+            tags.indexOf(section).also {
+                assertTrue("区块必须渲染：$section，实际顺序：$tags", it >= 0)
+            }
+        }
 
-        assertEquals(tops.sorted(), tops)
+        assertEquals("区块顺序：$tags", indices.sorted(), indices)
     }
 
     @Test
@@ -742,7 +751,8 @@ class AgendaScreenTest {
 
     @Test
     fun the_workbench_summarises_the_planning_day_read_only() {
-        // 工作台只读展示规划日界线、周起始日与每日容量摘要；摘要区里没有任何可编辑输入
+        // 工作台只读展示规划日界线、周起始日与每日容量摘要；完整设置表单不在工作台，
+        // 只由容量摘要卡指向统计页底部的「设置与数据」。
         mount(planningDayScreenState(planningDay))
 
         node("规划日 2026-03-05").assertIsDisplayed()
@@ -751,10 +761,17 @@ class AgendaScreenTest {
         node("每日容量 120 分钟").assertIsDisplayed()
         node("已安排 30 / 120 分钟").assertIsDisplayed()
 
-        val summaryBottom = composeRule.onNodeWithTag("agenda-section-summary", useUnmergedTree = true)
-            .fetchSemanticsNode().boundsInRoot.bottom
-        val editableFields = composeRule.onAllNodes(hasSetTextAction()).fetchSemanticsNodes()
-        assertTrue("摘要区里不提供完整设置表单", editableFields.all { it.boundsInRoot.top >= summaryBottom })
+        // #180 约束的是**设置读数**只读：规划日界线、周起始日与每日容量以只读文字给出，
+        // 完整表单住在统计页底部的「设置与数据」。摘要区里仍然住着日期范围与任意规划日的
+        // 视图控件（#180 story 38 要求在日程页切换到任意规划日），它们是筛选而不是设置表单，
+        // 因此只读性断在设置读数这一块，而不是整块摘要区都不能有输入。
+        assertTrue(
+            "容量与设置读数区里不提供任何可编辑输入",
+            composeRule.onAllNodes(
+                hasTestTag("agenda-open-settings") and hasAnyDescendant(hasSetTextAction()),
+                useUnmergedTree = true,
+            ).fetchSemanticsNodes().isEmpty(),
+        )
     }
 
     @Test
@@ -804,10 +821,16 @@ class AgendaScreenTest {
             ),
         )
 
-        assertTrue(
-            "正在计时的条目排在时间轴顶部",
-            sectionTop("schedule-timing-cue") < sectionTop("schedule-edit-e1"),
-        )
+        val tags = orderedTestTags()
+        val cueIndex = tags.indexOf("schedule-timing-cue")
+        val timingRowIndex = tags.indexOf("agenda-schedule-row-e3")
+        val otherRowIndex = tags.indexOf("agenda-schedule-row-e1")
+
+        assertTrue("计时线索必须渲染：" + tags, cueIndex >= 0)
+        assertTrue("正在计时的日程行必须渲染：" + tags, timingRowIndex >= 0)
+        assertTrue("其它日程行必须渲染：" + tags, otherRowIndex >= 0)
+        assertTrue("计时线索落在正在计时的那一行：" + tags, cueIndex == timingRowIndex + 1)
+        assertTrue("正在计时的条目排在时间轴顶部：" + tags, timingRowIndex < otherRowIndex)
         node("正在计时").assertIsDisplayed()
     }
 
@@ -879,18 +902,10 @@ class AgendaScreenTest {
     }
 
     /**
-     * 一个区块在页面上的纵向位置。
-     *
-     * 刻意不滚动：日程页是一个整体滚动列，滚到某个区块会改变其它区块在窗口里的位置，
-     * 因此比较顺序时必须在同一次布局快照上读取。
-     */
-    private fun sectionTop(tag: String): Float =
-        composeRule.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.top
-
-    /**
      * 一次布局快照里出现的全部 test tag，按语义树的先序排列。
      *
-     * 与 [sectionTop] 一样刻意不滚动：顺序必须在同一份布局上比较。
+     * 顺序必须在同一份布局上比较，因此这里刻意不滚动；也刻意不比较坐标：
+     * 折叠线之外的节点坐标会被裁到 0，只有先序能表达「谁排在谁前面」。
      */
     private fun orderedTestTags(): List<String> {
         val tags = mutableListOf<String>()
