@@ -12,8 +12,11 @@ import org.junit.Test
  * 清单与协议实际字段之间的一致性护栏。
  *
  * 这里不信任任何注释或人工阅读：清单条目通过 kotlinx.serialization 的描述符与
- * [AttentionBackup] 协议描述符逐条比对。给领域类型新增一个进入备份的字段、给备份新增一个字段、
+ * [AttentionBackup] 协议描述符逐条比对。给协议模型新增一个字段、给备份新增一个字段、
  * 把某个承载点从列表改成单值、或新增一个被承载的类型，本测试都会失败。
+ *
+ * 它守的是「协议自己的形状」：协议字段与**领域**字段是否一一对应，由
+ * `BackupDomainMappingTest` 负责。
  */
 class BackupProtocolPayloadTest {
 
@@ -28,7 +31,7 @@ class BackupProtocolPayloadTest {
         )
         assertEquals(
             "备份协议承载内容的清单与协议实际字段不一致：见 BackupProtocolPayloads。" +
-                "新增或删除协议字段、领域类型字段、或被承载的类型后，必须同步清单。" +
+                "新增或删除协议字段、协议模型字段、或被承载的类型后，必须同步清单。" +
                 diff(
                     actual.render(),
                     declared.map { it.field to CarryPoint(it.serialName, it.container, it.kind) }.render(),
@@ -42,11 +45,11 @@ class BackupProtocolPayloadTest {
     fun manifest_lists_exactly_the_fields_each_carried_type_serializes() {
         val actual = ProtocolCarryPoints.from(AttentionBackup.serializer().descriptor)
         val carriedTypes = BackupProtocolPayloads.payloads
-            .filter { it.kind == BackupPayloadKind.DOMAIN_RECORD }
+            .filter { it.kind == BackupPayloadKind.PROTOCOL_RECORD }
             .map { it.serialName }
             .toSet()
         assertEquals(
-            "被承载的数据类清单与协议实际存在的数据类不一致：${actual.dataTypes()} vs $carriedTypes",
+            "被承载的协议模型清单与协议实际存在的数据类不一致：${actual.dataTypes()} vs $carriedTypes",
             actual.dataTypes(),
             carriedTypes,
         )
@@ -61,7 +64,7 @@ class BackupProtocolPayloadTest {
             val declaredFields = entries.single().wireFieldNames()
             assertEquals(
                 "$serialName 的清单字段与协议实际字段不一致：见 BackupProtocolPayloads。" +
-                    "给领域类型新增或删除一个进入备份的字段后，必须同步 wireFields。",
+                    "给协议模型新增或删除一个字段后，必须同步 wireFields。",
                 descriptor.elementNames.sorted(),
                 declaredFields.sorted(),
             )
@@ -95,13 +98,21 @@ internal class ProtocolCarryPoints(
 
         /**
          * 从 [root] 开始遍历：顶层字段全部记下（标量也要记，否则新增标量字段不会被发现），
-         * 之后只在遇到 `:domain` 类型时继续下钻，记录嵌在领域类型里的承载点。
+         * 之后只在遇到「被承载的类型」时继续下钻，记录嵌在它里面的承载点。
+         *
+         * 被承载的类型有两种：协议自有的数据模型（`Backup*`），以及仍然直接承载的领域枚举
+         * （过渡状态，见 [BackupPayloadKind]）。嵌在协议模型里的普通标量不算承载点——它们是那个
+         * 类型自己的 `wireFields`，由 `manifest_lists_exactly_the_fields_each_carried_type_serializes`
+         * 覆盖。
          */
         fun from(root: SerialDescriptor): ProtocolCarryPoints {
             val carryPoints = linkedMapOf<String, CarryPoint>()
             val descriptors = linkedMapOf<String, SerialDescriptor>()
             val pending = ArrayDeque<Pair<String, SerialDescriptor>>()
             val visited = mutableSetOf<String>()
+
+            fun isCarried(serialName: String, descriptor: SerialDescriptor): Boolean =
+                descriptor.kind == StructureKind.CLASS || serialName.startsWith(DOMAIN_PREFIX)
 
             fun visit(path: String, field: SerialDescriptor, isProtocolLevel: Boolean) {
                 val container = if (field.kind == StructureKind.LIST) {
@@ -116,7 +127,7 @@ internal class ProtocolCarryPoints(
                 }
                 // 可空字段的描述符把 "?" 写进标识里；承载的类型仍然是同一个类型。
                 val serialName = carried.serialName.removeSuffix("?")
-                if (isProtocolLevel || serialName.startsWith(DOMAIN_PREFIX)) {
+                if (isProtocolLevel || isCarried(serialName, carried)) {
                     carryPoints[path] = CarryPoint(serialName, container, kindOf(serialName, carried))
                 }
                 if (carried.kind == StructureKind.CLASS) {
@@ -147,9 +158,11 @@ internal class ProtocolCarryPoints(
         }
 
         private fun kindOf(serialName: String, descriptor: SerialDescriptor): BackupPayloadKind = when {
-            !serialName.startsWith(DOMAIN_PREFIX) -> BackupPayloadKind.PROTOCOL_SCALAR
-            descriptor.kind == StructureKind.CLASS -> BackupPayloadKind.DOMAIN_RECORD
-            else -> BackupPayloadKind.DOMAIN_ENUM
+            BackupProtocolPayloads.isProtocolType(serialName) ->
+                if (descriptor.kind == StructureKind.CLASS) BackupPayloadKind.PROTOCOL_RECORD else BackupPayloadKind.PROTOCOL_ENUM
+            // 协议字段仍然直接承载领域枚举，是过渡状态（见 BackupPayloadKind 与 #205）。
+            serialName.startsWith(DOMAIN_PREFIX) -> BackupPayloadKind.DOMAIN_ENUM
+            else -> BackupPayloadKind.PROTOCOL_SCALAR
         }
     }
 }
