@@ -220,19 +220,21 @@ class AgendaScreenTest {
         mount(allDatesScreenState())
         openAddScheduleSheet()
 
-        composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true).assertIsDisplayed()
-        composeRule.onNodeWithTag("agenda-start-input", useUnmergedTree = true).assertIsDisplayed()
-        composeRule.onNodeWithTag("agenda-end-input", useUnmergedTree = true).assertIsDisplayed()
-        composeRule.onNodeWithTag("agenda-estimate-input", useUnmergedTree = true).assertIsDisplayed()
+        // 面板的内容列是可滚动的，展开「更多设置」之后次要字段会落在面板可视高度以下：
+        // 先在面板里滚到目标再断言「已显示」，断言本身仍然是「看得见」，不是「存在」。
+        composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-start-input", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-end-input", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-estimate-input", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
         composeRule.onAllNodesWithTag("agenda-reminder-input", useUnmergedTree = true).fetchSemanticsNodes().let {
             assertEquals("更多设置没展开时不渲染次要字段", emptyList<Any>(), it)
         }
 
         expandAddScheduleMoreSettings()
 
-        composeRule.onNodeWithTag("agenda-reminder-input", useUnmergedTree = true).assertIsDisplayed()
-        composeRule.onNodeWithTag("agenda-note-input", useUnmergedTree = true).assertIsDisplayed()
-        composeRule.onNodeWithTag("agenda-add-target", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-reminder-input", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-note-input", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-add-target", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
     }
 
     @Test
@@ -263,9 +265,10 @@ class AgendaScreenTest {
     fun the_free_timer_sheet_offers_the_unowned_activity_and_the_unarchived_plans() {
         mount(
             planningDayScreenState(selected = planningDay).copy(
+                // 面板自己给当前目标补「（当前）」，因此注入的是干净的选项名。
                 freeTimerOptions = listOf(
                     AgendaFreeTimerOption(null, "未归属活动"),
-                    AgendaFreeTimerOption("t1", "工作（当前）", selected = true),
+                    AgendaFreeTimerOption("t1", "工作", selected = true),
                 ),
             ),
         )
@@ -474,7 +477,9 @@ class AgendaScreenTest {
             .performScrollTo().assert(hasText("计时中"))
         node("计时中").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("计时中").assertExists()
-        node("已暂停").assertDoesNotExist()
+        // 断言「不存在」时不能用 node()：那个 helper 会先 performScrollTo，
+        // 而滚动一个不存在的节点本身就是失败，「已暂停」根本到不了断言。
+        composeRule.onNodeWithText("已暂停").assertDoesNotExist()
 
         composeRule.onNodeWithTag("agenda-running-timer-pause", useUnmergedTree = true).performScrollTo().performClick()
         composeRule.onNodeWithTag("agenda-running-timer-stop", useUnmergedTree = true).performScrollTo().performClick()
@@ -548,7 +553,7 @@ class AgendaScreenTest {
 
         composeRule.onNodeWithTag("agenda-running-timer-more", useUnmergedTree = true).performScrollTo().performClick()
 
-        composeRule.onNodeWithTag("agenda-running-timer-switch-t1", useUnmergedTree = true)
+        composeRule.onNodeWithTag("agenda-running-timer-switch-t1")
             .assert(hasText("切换到「工作」（当前）"))
     }
 
@@ -600,8 +605,19 @@ class AgendaScreenTest {
 
     @Test
     fun a_stop_reaching_the_plan_is_already_completed_and_asks_for_nothing() {
-        // 实际投入达到计划时日程已完成，用户不必再勾一次：面板不再摆出两个决定
-        mount(planningDayScreenState(planningDay, stopResult = shortStopResult().copy(completed = true, completionLabel = "已完成")))
+        // 实际投入达到计划时日程已完成，用户不必再勾一次：面板不再摆出两个决定。
+        // 是否还摆出两个决定由投影的 needsCompletionDecision 决定（没有计划时长、未完成时由用户自己决定），
+        // 所以这条用例必须把它和完成状态一起改成 false，否则页面照旧摆出两个决定。
+        mount(
+            planningDayScreenState(
+                planningDay,
+                stopResult = shortStopResult().copy(
+                    completed = true,
+                    completionLabel = "已完成",
+                    needsCompletionDecision = false,
+                ),
+            ),
+        )
 
         node("已完成").assertIsDisplayed()
         composeRule.onNodeWithTag("agenda-stop-keep-incomplete", useUnmergedTree = true).assertDoesNotExist()
@@ -675,9 +691,11 @@ class AgendaScreenTest {
         composeRule.onNodeWithTag("schedule-completion-check-e1", useUnmergedTree = true).performScrollTo().performClick()
         assertEquals(listOf("e1"), intents.confirmedCompletions)
 
+        // 更多菜单里真正发出完成意图的是「完成并记录」那一项：「编辑」只是打开编辑对话框，
+        // 本身不发 intent，因此不能拿它来断言「菜单发出了自己的意图」。
         composeRule.onNodeWithTag("schedule-more-e1", useUnmergedTree = true).performScrollTo().performClick()
-        composeRule.onNodeWithTag("schedule-more-edit-e1", useUnmergedTree = true).performClick()
-        assertEquals(listOf("e1"), intents.dataIntents)
+        composeRule.onNodeWithTag("schedule-more-completion-e1", useUnmergedTree = true).performClick()
+        assertEquals(listOf("e1", "e1"), intents.confirmedCompletions)
     }
 
     /** 一次停止后待核对的结果：投入不足计划，完成与否仍由用户决定。 */
@@ -1146,7 +1164,9 @@ class AgendaScreenTest {
         composeRule.onNodeWithTag(AttentionStateKind.ERROR.descriptionTag, useUnmergedTree = true)
             .assert(hasText("磁盘读不出来"))
         // 错误状态带的是「重试」而不是只有关闭。
-        composeRule.onNodeWithTag(AttentionStateKind.ERROR.actionTag, useUnmergedTree = true)
+        // 按钮是可点击节点，它的文字在合并语义树上：在 useUnmergedTree 上找得到按钮，
+        // 读不到按钮里的文字，因此这一处按合并树断言「重试」。
+        composeRule.onNodeWithTag(AttentionStateKind.ERROR.actionTag)
             .assertIsDisplayed()
             .assert(hasText(AGENDA_RETRY_LABEL))
 

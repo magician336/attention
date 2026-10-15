@@ -6,6 +6,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -959,6 +961,7 @@ private fun AgendaBackfillSection(
  * 能力没有删除：展开之后，创建重复规则与「停止未来生成」都仍然可用。默认折叠只是让它
  * 不再占据首屏主路径；折叠状态属于页面 module，不写入任何持久化。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AgendaRecurrenceSection(
     state: AgendaScreenState,
@@ -994,9 +997,12 @@ private fun AgendaRecurrenceSection(
                     }
                     when (form.frequency) {
                         ScheduleFrequency.WEEKLY -> {
-                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            // 七个星期自动换行，不再横向滚动。横向滚动容器会成为复选框最近的滚动祖先：
+                            // 重复日程是折叠的次级入口，整块被推到折叠线以下时，只滚动这一行的行为
+                            // 滚不动页面，复选框也就既到不了视口里也点不到。换行后七个星期一直可达。
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                                 (1..7).forEach { weekday ->
-                                    Row {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
                                         Checkbox(
                                             checked = weekday in form.weekdays,
                                             onCheckedChange = { checked -> form.toggleWeekday(weekday, checked) },
@@ -1004,7 +1010,7 @@ private fun AgendaRecurrenceSection(
                                             // 测试必须能指名这一个，而不是「页面上第一个可切换的控件」。
                                             modifier = Modifier.testTag("agenda-recurrence-weekday-$weekday"),
                                         )
-                                        Text(agendaWeekdayLabel(weekday), modifier = Modifier.padding(top = 12.dp))
+                                        Text(agendaWeekdayLabel(weekday))
                                     }
                                 }
                             }
