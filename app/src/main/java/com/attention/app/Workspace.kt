@@ -782,19 +782,22 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             onFeedbackMessage = { message -> feedbackScope.launch { feedback.showMessage(message) } },
         )
     }
-    // 日程页的选中规划日由页面 module 提供类型与迁移语义，组合根只持有一个实例来喂投影。
-    // 打开定位的优先级：外部日程请求点名的规划日 > 当前规划日。
+    // 日程页的选中范围由页面 module 提供类型与迁移语义，组合根只持有一个实例来喂投影。
+    // 这一个实例挂在组合根上、活过页面切换，因此会话内的日期筛选被保留；
+    // 它不写入任何持久化，重新启动时组合根新建实例，页面回到当前规划日。
+    // 组合根把当前规划日喂给选择状态问「你选的是什么」，不解释 null 与规划日之间的语义。
+    //
+    // 打开定位的优先级：外部日程请求点名的规划日 > 当前规划日（深链优先级由 #174 决定）。
     // 外部请求点名了规划日就定位到那一天（并由 openScheduleId 定位到条目本身）；
-    // 没有外部请求时回退到当前规划日，因此无有效历史也总落在当前规划日的日程上。
+    // 没有外部请求时选择状态没有显式选择，因此跟随当前规划日。
     val externalPlanningDate = externalSchedulePlanningDate(state, openScheduleDate, openScheduleId)
-    val agendaSelection = rememberAgendaSelection(
-        externalPlanningDate ?: state.planningDate(injectedNow, injectedZone),
-    )
+    val agendaSelection = rememberAgendaSelection(externalPlanningDate)
+    val agendaPlanningDay = state.planningDate(injectedNow, injectedZone)
     val agendaState = agendaScreenState(
         state = state,
         now = injectedNow,
         zone = injectedZone,
-        selectedDate = agendaSelection.selectedDate,
+        selectedDate = agendaSelection.selectedDate(agendaPlanningDay),
         openScheduleId = openScheduleId,
     )
 
