@@ -79,6 +79,14 @@ import com.attention.workspace.state.agendaWeekdayLabel
 import java.time.LocalDate
 
 /**
+ * 选中明天时「添加日程」入口旁的说明文案。
+ *
+ * 它回答的是「为什么突出」而不是「做什么」：做与为哪一天由按钮标题（投影里的
+ * `addScheduleHeadingLabel`）说出，因此这一行不重复那一句。
+ */
+private const val AGENDA_ADD_HIGHLIGHT_HINT = "切换规划日只换这一天：今天已有的日程不会带过来"
+
+/**
  * 日程页。它只接收自己的 [AgendaScreenState] 与 [AgendaActions]：
  * 不读完整领域状态，不读 ViewModel，也不读 Android API 与系统时间——
  * 规划日、日程条目、每日容量与提醒时间都由组合根注入的投影算好。
@@ -748,14 +756,16 @@ private fun AgendaAddScheduleSection(
 ) {
     val tokens = attentionTokens()
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = if (state.highlightAddSchedule) Modifier.testTag("agenda-add-highlight") else Modifier,
-        ) {
-            if (state.highlightAddSchedule) {
+        // 说明行只在突出时出现，它回答的是「为什么突出」；为哪一天安排由下面按钮的标题说出。
+        // 两者不再逐字重复，否则同一句话会在这一块里出现两次，页面与读屏都是。
+        if (state.highlightAddSchedule) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.testTag("agenda-add-highlight"),
+            ) {
                 Icon(Icons.AutoMirrored.Filled.EventNote, contentDescription = "为明天安排日程", modifier = Modifier.size(tokens.spacing.medium))
+                Text(AGENDA_ADD_HIGHLIGHT_HINT, style = tokens.typography.body)
             }
-            Text(state.addScheduleHeadingLabel, style = tokens.typography.body)
         }
         AttentionButton(onClick = onOpen, modifier = Modifier.testTag("agenda-open-add-sheet")) {
             Text(state.addScheduleHeadingLabel)
