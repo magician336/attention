@@ -141,7 +141,7 @@ class WorkspaceLaunchPriorityIntegrationTest {
         assertEquals(LaunchDestination.STATISTICS, state.launchDestination)
         // 不产生业务数据：目标与日程条目都还是种子里的那几条
         assertEquals(listOf(TARGET_ID), state.targets.map { it.id })
-        assertEquals(listOf(TODAY_ENTRY_ID, FAR_ENTRY_ID), state.schedules.map { it.id }.sorted())
+        assertEquals(listOf(TODAY_ENTRY_ID, FAR_ENTRY_ID).sorted(), state.schedules.map { it.id }.sorted())
         assertEquals(emptyList<String>(), state.timeEntries.map { it.id })
     }
 
