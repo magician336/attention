@@ -23,9 +23,9 @@ import com.attention.domain.Target
 import com.attention.domain.TargetMove
 import com.attention.domain.TimeEntry
 import com.attention.domain.TimerSegment
-import com.attention.domain.GoalCadence
-import com.attention.domain.ScheduleFrequency
-import com.attention.domain.TimeEntrySource
+import com.attention.domain.GoalCadenceSerializer
+import com.attention.domain.ScheduleFrequencySerializer
+import com.attention.domain.TimeEntrySourceSerializer
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
@@ -34,17 +34,23 @@ private val roomJson = Json { encodeDefaults = true; ignoreUnknownKeys = true }
 private val intListSerializer = ListSerializer(Int.serializer())
 private val timerSegmentListSerializer = ListSerializer(TimerSegment.serializer())
 
+/**
+ * 这里的枚举列同样按名存进 Room，所以同样走 `PersistedEnumSerializer` 的解析，而不是
+ * `valueOf`。应用升级后存量行还在本地库里：某个枚举值一旦改名或删除，`valueOf` 会抛
+ * `IllegalArgumentException` 把整库读取打穿，一条行读不出来就等于整个应用打不开。
+ */
+
 fun Target.toEntity() = TargetEntity(id, parentId, title, note, icon, colorHex, archived, sortOrder, expanded)
 
 fun TargetEntity.toDomain() = Target(id, parentId, title, note, icon, colorHex, archived, sortOrder, expanded)
 
 fun GoalStage.toEntity() = GoalStageEntity(id, targetId, cadence.name, targetMinutes, startDate, dueDate, completed)
 
-fun GoalStageEntity.toDomain() = GoalStage(id, targetId, GoalCadence.valueOf(cadence), targetMinutes, startDate, dueDate, completed)
+fun GoalStageEntity.toDomain() = GoalStage(id, targetId, GoalCadenceSerializer.fromPersistedName(cadence), targetMinutes, startDate, dueDate, completed)
 
 fun TimeEntry.toEntity() = TimeEntryEntity(id, planningDate, durationMinutes, targetId, source.name, occurredAtEpochMillis, note, scheduleEntryId)
 
-fun TimeEntryEntity.toDomain() = TimeEntry(id, planningDate, durationMinutes, targetId, TimeEntrySource.valueOf(source), occurredAtEpochMillis, note, scheduleEntryId)
+fun TimeEntryEntity.toDomain() = TimeEntry(id, planningDate, durationMinutes, targetId, TimeEntrySourceSerializer.fromPersistedName(source), occurredAtEpochMillis, note, scheduleEntryId)
 
 fun ScheduleEntry.toEntity() = ScheduleEntryEntity(id, planningDate, title, startMinute, endMinute, estimatedMinutes, note, targetId, completed, reminderEpochMillis, recurrenceRuleId)
 
@@ -69,7 +75,7 @@ fun RecurrenceRuleEntity.toDomain() = RecurrenceRule(
     id = id,
     title = title,
     startDate = startDate,
-    frequency = ScheduleFrequency.valueOf(frequency),
+    frequency = ScheduleFrequencySerializer.fromPersistedName(frequency),
     weekdays = roomJson.decodeFromString(intListSerializer, weekdays),
     dayOfMonth = dayOfMonth,
     untilDate = untilDate,
@@ -86,7 +92,7 @@ fun MigrationEntity.toDomain() = Migration(id, targetId, sourceStageId, minutes,
 
 fun FutureGoalRule.toEntity() = FutureGoalRuleEntity(id, targetId, stageId.ifBlank { null }, cadence.name, targetMinutes, effectiveFrom, dueDate)
 
-fun FutureGoalRuleEntity.toDomain() = FutureGoalRule(id, targetId, stageId.orEmpty(), GoalCadence.valueOf(cadence), targetMinutes, effectiveFrom, dueDate)
+fun FutureGoalRuleEntity.toDomain() = FutureGoalRule(id, targetId, stageId.orEmpty(), GoalCadenceSerializer.fromPersistedName(cadence), targetMinutes, effectiveFrom, dueDate)
 
 fun PeriodSnapshot.toEntity() = PeriodSnapshotEntity(
     id = id,
@@ -105,7 +111,7 @@ fun PeriodSnapshot.toEntity() = PeriodSnapshotEntity(
 fun PeriodSnapshotEntity.toDomain() = PeriodSnapshot(
     id = id,
     targetId = targetId,
-    cadence = GoalCadence.valueOf(cadence),
+    cadence = GoalCadenceSerializer.fromPersistedName(cadence),
     periodStart = periodStart,
     periodEnd = periodEnd,
     targetMinutes = targetMinutes,

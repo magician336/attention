@@ -5,6 +5,7 @@ import com.attention.app.data.room.mapper.toEntity
 import com.attention.domain.ActiveTimer
 import com.attention.domain.FutureGoalRule
 import com.attention.domain.GoalCadence
+import com.attention.domain.GoalCadenceSerializer
 import com.attention.domain.GoalStage
 import com.attention.domain.Migration
 import com.attention.domain.Milestone
@@ -89,5 +90,52 @@ class BusinessMappersTest {
         assertEquals(global, global.toEntity().toDomain())
         assertEquals("schedule", bound.toEntity().scheduleEntryId)
         assertNull(global.toEntity().scheduleEntryId)
+    }
+
+    /**
+     * 库里存着一行认不出来的枚举名时，这一行读成声明过的默认值，别的行照读。
+     *
+     * 这条比备份路径更要紧：备份要用户手动导出才会碰到，本地库则是**每次应用升级**都在。
+     * 枚举值改名或删除之后，存量行就永远留在库里，`valueOf` 会在读取时抛
+     * `IllegalArgumentException`——一行读不出来，整个应用就打不开。
+     */
+    @Test
+    fun a_row_with_an_unrecognized_enum_name_reads_as_the_declared_default() {
+        val stage = GoalStage("stage", "target", GoalCadence.WEEKLY, 120, "2026-10-01")
+        val staleStage = stage.toEntity().copy(cadence = "SPRINTLY")
+        assertEquals(GoalCadence.DAILY, staleStage.toDomain().cadence)
+        // 同一行里其它字段不因为这个降级而丢失
+        assertEquals(stage.id, staleStage.toDomain().id)
+        assertEquals(stage.targetMinutes, staleStage.toDomain().targetMinutes)
+
+        val entry = TimeEntry("entry", "2026-10-02", 45, "target", TimeEntrySource.TIMER)
+        assertEquals(
+            TimeEntrySource.MANUAL,
+            entry.toEntity().copy(source = "FROZEN_AT_MIDNIGHT").toDomain().source,
+        )
+
+        val rule = RecurrenceRule("rule", "阅读", "2026-10-01", ScheduleFrequency.WEEKLY, listOf(1, 3))
+        assertEquals(
+            ScheduleFrequency.DAILY,
+            rule.toEntity().copy(frequency = "EVERY_FORTNIGHT").toDomain().frequency,
+        )
+
+        val futureRule = FutureGoalRule("future", "target", "", GoalCadence.MONTHLY, 300, "2026-11-01")
+        assertEquals(
+            GoalCadence.DAILY,
+            futureRule.toEntity().copy(cadence = "WHENEVER").toDomain().cadence,
+        )
+
+        val snapshot = PeriodSnapshot("snapshot", "target", GoalCadence.WEEKLY, "2026-10-01", "2026-10-07", 120, 90, 30, 0, completed = false)
+        assertEquals(
+            GoalCadence.DAILY,
+            snapshot.toEntity().copy(cadence = "SPRINTLY").toDomain().cadence,
+        )
+
+        // 同一个名字在备份路径和 Room 路径上必须给出同一个答案
+        assertEquals(
+            GoalCadenceSerializer.fromPersistedName("SPRINTLY"),
+            staleStage.toDomain().cadence,
+        )
     }
 }
