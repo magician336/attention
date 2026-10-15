@@ -48,9 +48,9 @@ fun GoalStage.toEntity() = GoalStageEntity(id, targetId, cadence.name, targetMin
 
 fun GoalStageEntity.toDomain() = GoalStage(id, targetId, GoalCadenceSerializer.fromPersistedName(cadence), targetMinutes, startDate, dueDate, completed)
 
-fun TimeEntry.toEntity() = TimeEntryEntity(id, planningDate, durationMinutes, targetId, source.name, occurredAtEpochMillis, note, scheduleEntryId)
+fun TimeEntry.toEntity() = TimeEntryEntity(id, planningDate, durationMinutes, targetId, source.name, occurredAtEpochMillis, note, scheduleEntryId, backfillRequestId)
 
-fun TimeEntryEntity.toDomain() = TimeEntry(id, planningDate, durationMinutes, targetId, TimeEntrySourceSerializer.fromPersistedName(source), occurredAtEpochMillis, note, scheduleEntryId)
+fun TimeEntryEntity.toDomain() = TimeEntry(id, planningDate, durationMinutes, targetId, TimeEntrySourceSerializer.fromPersistedName(source), occurredAtEpochMillis, note, scheduleEntryId, backfillRequestId)
 
 fun ScheduleEntry.toEntity() = ScheduleEntryEntity(id, planningDate, title, startMinute, endMinute, estimatedMinutes, note, targetId, completed, reminderEpochMillis, recurrenceRuleId)
 

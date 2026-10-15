@@ -5,6 +5,23 @@ import java.time.LocalDate
 import java.time.ZoneId
 
 /**
+ * 保存日程条目时顺带补记的一段已经发生的时间。
+ *
+ * [targetId] 是用户选择归属的计划；null 表示这笔补记先保持为未归属活动，之后可以再归入计划。
+ *
+ * [requestId] 是这一次**提交意图**的标识，也是防重复的唯一粒度：同一次保存被重试、
+ * 被双击或被事务重放时沿用同一个值，重放只记一笔；下一次新的补记是新的值，必然被记录。
+ * 取值规则由调用方掌握——页面把草稿组装成 [ScheduleBackfill] 一次并复用该实例即可，
+ * 重试与重放复用同一个 [requestId]，用户再次主动补填时重新组装得到新的 [requestId]。
+ */
+data class ScheduleBackfill(
+    val durationMinutes: Int,
+    val targetId: String? = null,
+    val note: String = "",
+    val requestId: String = newId(),
+)
+
+/**
  * Typed seam for domain intents that change actual investment.
  *
  * A command is pure with respect to its inputs: callers provide the current state,
@@ -17,6 +34,43 @@ sealed interface AttentionCommand {
         now: Instant,
         zone: ZoneId = ZoneId.systemDefault(),
     ): AttentionCommandResult
+
+    /**
+     * 保存一条日程条目，并可选地顺带补记一笔事后补记来源的实际投入。
+     *
+     * 两件事在同一个 command 结果里完成：日程条目与那笔补记要么一起落库，要么都不落库，
+     * 不存在只有一半的中间状态。补记记录的来源是 [TimeEntrySource.MANUAL]，并带上日程关联；
+     * 它与 [TimeEntrySource.SCHEDULE_CONFIRMED]、[TimeEntrySource.TIMER] 三者不混。
+     *
+     * 防重复的粒度是**提交意图**而不是这条日程：同一次保存（重试、双击、事务重放）带着同一个
+     * [ScheduleBackfill.requestId] 时只记一笔；用户下一次显式补填是新的事实，即使这条日程已经
+     * 计时过或已被确认完成，也照样被记录下来。
+     */
+    data class SaveSchedule(
+        val entry: ScheduleEntry,
+        val backfill: ScheduleBackfill? = null,
+    ) : AttentionCommand {
+        override fun execute(state: AttentionState, now: Instant, zone: ZoneId): AttentionCommandResult {
+            val saved = if (state.schedules.any { it.id == entry.id }) state.updateSchedule(entry) else state.addSchedule(entry)
+            if (backfill == null || state.appliedBackfill(backfill.requestId) != null) {
+                return saved.withMilestonesFor(emptyList(), now.toEpochMilli())
+            }
+            val recorded = saved.addTimeEntry(
+                planningDate = entry.planningDate,
+                durationMinutes = backfill.durationMinutes,
+                targetId = backfill.targetId,
+                source = TimeEntrySource.MANUAL,
+                note = backfill.note,
+                scheduleEntryId = entry.id,
+                backfillRequestId = backfill.requestId,
+            )
+            return recorded.withMilestonesFor(
+                affectedPlanningDates = setOf(LocalDate.parse(entry.planningDate)),
+                achievedAtEpochMillis = now.toEpochMilli(),
+                generatedTimeEntries = listOf(recorded.timeEntries.last()),
+            )
+        }
+    }
 
     /** Adds one manually entered actual-investment record. */
     data class AddManualTimeEntry(
@@ -42,9 +96,18 @@ sealed interface AttentionCommand {
         }
     }
 
-    /** Confirms one planned entry as actual invested time. */
+    /**
+     * Confirms one planned entry as actual invested time.
+     *
+     * 幂等的粒度是**这个动作**：同一条日程重复确认仍是同一个动作，因此已存在关联该日程的
+     * [TimeEntrySource.SCHEDULE_CONFIRMED] 记录时只保证完成标记，不产生第二笔，投入经验与
+     * 达成里程碑都不重复发放。已存在的事后补记或计时结算是各自独立的事实，不阻止确认记账。
+     */
     data class ConfirmSchedule(val entryId: String, val durationMinutes: Int? = null) : AttentionCommand {
         override fun execute(state: AttentionState, now: Instant, zone: ZoneId): AttentionCommandResult {
+            if (state.hasConfirmedInvestmentFor(entryId)) {
+                return AttentionCommandResult(state.confirmScheduleCompleted(entryId, durationMinutes))
+            }
             val nextState = state.confirmScheduleCompleted(entryId, durationMinutes)
             val entry = nextState.timeEntries.last()
             return nextState.withMilestonesFor(
@@ -185,6 +248,7 @@ private fun AttentionState.validRecordTargetForCommand(targetId: String?): Boole
 
 typealias AddManualTimeEntryCommand = AttentionCommand.AddManualTimeEntry
 typealias ManualTimeEntryCommand = AttentionCommand.AddManualTimeEntry
+typealias SaveScheduleCommand = AttentionCommand.SaveSchedule
 typealias ConfirmScheduleCommand = AttentionCommand.ConfirmSchedule
 typealias ConfirmScheduleCompletedCommand = AttentionCommand.ConfirmSchedule
 typealias EditTimeEntryCommand = AttentionCommand.EditTimeEntry

@@ -476,6 +476,13 @@ fun AttentionState.appendOneTimeGoalStage(
     )
 }
 
+/**
+ * 追加一笔实际投入。
+ *
+ * [scheduleEntryId] 非空时这笔记录由某条日程条目产生，这条链接的判定只在 `:domain` 里做。
+ * [backfillRequestId] 只属于事后补记（[TimeEntrySource.MANUAL]）：它标识「这一次提交」，
+ * 重放同一次提交时用它避免重复记账，但绝不用来判定这条日程是否已经有投入。
+ */
 fun AttentionState.addTimeEntry(
     planningDate: String,
     durationMinutes: Int,
@@ -483,13 +490,50 @@ fun AttentionState.addTimeEntry(
     source: TimeEntrySource = TimeEntrySource.MANUAL,
     occurredAtEpochMillis: Long? = null,
     note: String = "",
+    scheduleEntryId: String? = null,
+    backfillRequestId: String? = null,
 ): AttentionState {
     LocalDate.parse(planningDate)
-    require(durationMinutes > 0)
+    require(durationMinutes > 0) { "时间记录时长必须为正数" }
     require(validRecordTarget(targetId)) { "时间记录只能归入未归档目标" }
-    return copy(timeEntries = timeEntries + TimeEntry(planningDate = planningDate, durationMinutes = durationMinutes, targetId = targetId, source = source, occurredAtEpochMillis = occurredAtEpochMillis, note = note))
+    require(scheduleEntryId == null || schedules.any { it.id == scheduleEntryId }) { "时间记录只能关联存在的日程条目" }
+    require(backfillRequestId == null || source == TimeEntrySource.MANUAL) { "只有事后补记带提交意图标识" }
+    require(backfillRequestId == null || backfillRequestId.isNotBlank()) { "提交意图标识不能为空" }
+    return copy(timeEntries = timeEntries + TimeEntry(planningDate = planningDate, durationMinutes = durationMinutes, targetId = targetId, source = source, occurredAtEpochMillis = occurredAtEpochMillis, note = note, scheduleEntryId = scheduleEntryId, backfillRequestId = backfillRequestId))
         .recalculateExperience()
 }
+
+/**
+ * 日程完成确认已经为这条日程条目记下的那笔实际投入。
+ *
+ * 这是「重复确认同一个动作」的幂等判据：同一条日程重复确认仍然是同一个动作，不该产生第二笔。
+ * 它只认 [TimeEntrySource.SCHEDULE_CONFIRMED]——事后补记和计时结算是各自独立的事实，
+ * 既不能让确认跳过记账，也不能反过来被确认吞掉。
+ */
+fun AttentionState.confirmedInvestmentForSchedule(scheduleEntryId: String): TimeEntry? =
+    timeEntries.firstOrNull { it.scheduleEntryId == scheduleEntryId && it.source == TimeEntrySource.SCHEDULE_CONFIRMED }
+
+/** [confirmedInvestmentForSchedule] 的布尔形式。 */
+fun AttentionState.hasConfirmedInvestmentFor(scheduleEntryId: String): Boolean =
+    confirmedInvestmentForSchedule(scheduleEntryId) != null
+
+/**
+ * 这条日程条目已经记录在案的事后补记，按提交先后排列。
+ *
+ * 一条日程可以有多笔补记：用户每显式提交一次都是一个新的事实，都必须被记录下来。
+ * 页面投影用它在日程条目上展示「已补记多久」，而不是用它决定补记入口是否出现。
+ */
+fun AttentionState.backfillsForSchedule(scheduleEntryId: String): List<TimeEntry> =
+    timeEntries.filter { it.scheduleEntryId == scheduleEntryId && it.source == TimeEntrySource.MANUAL }
+
+/**
+ * 这一次事后补记提交是否已经应用过。
+ *
+ * 重放判据：同一次保存（重试、双击、事务重放）沿用同一个提交意图标识，
+ * 因此第二次到达时命中已有记录，不会再记一笔。新的补记用新的标识，必然被记录。
+ */
+fun AttentionState.appliedBackfill(requestId: String): TimeEntry? =
+    timeEntries.firstOrNull { it.backfillRequestId == requestId }
 
 fun AttentionState.editTimeEntry(entryId: String, durationMinutes: Int, targetId: String?, note: String = ""): AttentionState {
     require(durationMinutes > 0 && validRecordTarget(targetId)) { "时间记录只能归入未归档目标" }
@@ -547,12 +591,17 @@ fun AttentionState.toggleScheduleCompleted(entryId: String): AttentionState {
 }
 
 /**
- * Completes a schedule entry and records the actual invested time it claimed. A record created
- * this way is schedule-confirmed: it carries no precise start or end timestamp, because the user
- * confirmed it against the plan rather than measuring it with the timer.
+ * 完成一条日程条目，并记下它声称的那笔实际投入。以这种方式产生的记录来源是
+ * `SCHEDULE_CONFIRMED`：它没有精确起止时刻，因为用户是按计划确认的，不是计时测出来的。
+ *
+ * 同一条日程重复确认是同一个动作，因此幂等：已经有 [TimeEntrySource.SCHEDULE_CONFIRMED]
+ * 记录时只保证完成标记，不再补第二笔，投入经验与达成里程碑因此不会被重复奖励。
+ * 这条判据不认事后补记与计时结算——那是各自独立的事实，不能互相吞掉。
  */
 fun AttentionState.confirmScheduleCompleted(entryId: String, durationMinutes: Int? = null): AttentionState {
     val entry = schedules.firstOrNull { it.id == entryId } ?: throw IllegalArgumentException("日程条目不存在")
+    val completedSchedules = schedules.map { schedule -> if (schedule.id == entryId) schedule.copy(completed = true) else schedule }
+    if (hasConfirmedInvestmentFor(entryId)) return copy(schedules = completedSchedules).recalculateExperience()
     val rangeMinutes = if (entry.startMinute != null && entry.endMinute != null) {
         entry.endMinute - entry.startMinute
     } else {
@@ -565,7 +614,7 @@ fun AttentionState.confirmScheduleCompleted(entryId: String, durationMinutes: In
     require(minutes > 0) { "时间记录时长必须为正数" }
     require(validRecordTarget(entry.targetId)) { "时间记录只能归入未归档目标" }
     return copy(
-        schedules = schedules.map { schedule -> if (schedule.id == entryId) schedule.copy(completed = true) else schedule },
+        schedules = completedSchedules,
         timeEntries = timeEntries + TimeEntry(
             planningDate = entry.planningDate,
             durationMinutes = minutes,

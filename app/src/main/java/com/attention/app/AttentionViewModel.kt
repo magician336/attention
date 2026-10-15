@@ -14,6 +14,7 @@ import com.attention.domain.FutureGoalRule
 import com.attention.domain.GoalCadence
 import com.attention.domain.LaunchDestination
 import com.attention.domain.RecurrenceRule
+import com.attention.domain.ScheduleBackfill
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.StoredSettings
 import com.attention.domain.TargetMove
@@ -194,6 +195,15 @@ class AttentionViewModel(
 
     fun addSchedule(entry: ScheduleEntry) = runCommand { it.addSchedule(entry) }
     fun updateSchedule(entry: ScheduleEntry) = runCommand { it.updateSchedule(entry) }
+
+    /**
+     * 保存一条日程条目，并可选地顺带补记一笔已经发生的时间。
+     *
+     * 日程条目与那笔事后补记由同一个 typed command 提交，因此要么都保存、要么都不保存；
+     * 补记的来源、关联、投入经验与达成里程碑仍由 `:domain` 计算，ViewModel 只提交命令。
+     */
+    fun saveSchedule(entry: ScheduleEntry, backfill: ScheduleBackfill? = null) =
+        runTypedCommand(AttentionCommand.SaveSchedule(entry, backfill))
     fun toggleScheduleCompleted(entryId: String) {
         scope.launch(Dispatchers.IO) {
             runCatching { repository.toggleScheduleCompleted(entryId) }
