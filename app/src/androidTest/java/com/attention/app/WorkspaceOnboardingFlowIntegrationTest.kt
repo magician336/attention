@@ -1,7 +1,9 @@
 package com.attention.app
 
 import android.content.Intent
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -104,7 +106,8 @@ class WorkspaceOnboardingFlowIntegrationTest {
         awaitGone("onboarding-screen")
         awaitTag("nav-agenda")
         composeRule.onNodeWithTag("agenda-filter").assertIsDisplayed()
-        composeRule.onNodeWithText("规划日 $TODAY", substring = true).assertIsDisplayed()
+        // 「规划日 …」在日程页上有不止一处文案（容量摘要里也会出现），因此断言落在筛选标题上
+        composeRule.onNodeWithTag("agenda-filter").assert(hasText("规划日 $TODAY"))
     }
 
     @Test
@@ -120,7 +123,8 @@ class WorkspaceOnboardingFlowIntegrationTest {
         awaitSettings { it.onboardingCompleted }
         awaitGone("onboarding-screen")
         composeRule.onNodeWithTag("agenda-filter").assertIsDisplayed()
-        composeRule.onNodeWithText("规划日 $TODAY", substring = true).assertIsDisplayed()
+        // 同上：规划日断言绑定在筛选标题这个元素上，不做全页文本搜索
+        composeRule.onNodeWithTag("agenda-filter").assert(hasText("规划日 $TODAY"))
     }
 
     @Test

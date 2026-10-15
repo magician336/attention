@@ -4,14 +4,12 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.attention.app.MainActivity
 import com.attention.app.ui.theme.AttentionTheme
 import com.attention.workspace.state.OnboardingActions
 import com.attention.workspace.state.OnboardingScreenState
@@ -25,6 +23,9 @@ import org.junit.runner.RunWith
  * 首次使用引导页的直接测试：只给它投影后的 screen state 与 fake actions，
  * 断言可见文案、三种离开方式与发出的 intent，不经过 ViewModel、Room 与 DataStore。
  *
+ * 引导页面本身不需要 Activity 上下文，因此用轻量的 [createComposeRule] 挂载：
+ * 这与其它页面测试一致，也不会顺带把整个应用的平台副作用拉起来。
+ *
  * 这条用例钉住本票的核心：引导页面上**没有**任何会写业务数据的动作接口——
  * 引导要离开时只发出 [OnboardingActions.completeOnboarding] 一条意图，
  * 旧引导卡片那种「创建计划、日程与设置」的能力在这一页上不存在。
@@ -33,7 +34,7 @@ import org.junit.runner.RunWith
 class OnboardingScreenTest {
 
     @get:Rule
-    val composeRule = createAndroidComposeRule<MainActivity>()
+    val composeRule = createComposeRule()
 
     @Test
     fun the_guide_explains_agenda_then_targets_then_statistics_in_that_order() {
