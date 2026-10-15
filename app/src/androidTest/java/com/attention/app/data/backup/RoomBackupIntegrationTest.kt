@@ -87,6 +87,48 @@ class RoomBackupIntegrationTest {
     }
 
     @Test
+    fun stale_plan_is_rejected_without_snapshot_rotation_or_state_write() = runBlocking {
+        val backupStore = InMemoryImportBackupStore()
+        val repository = RoomAttentionStateRepository(
+            RoomBusinessDataRepository(database),
+            settingsStore(),
+            backupStore,
+        )
+        repository.replace(AttentionState(targets = listOf(Target("current", title = "当前"))))
+        val plan = repository.backupWorkflow.prepareImport(
+            AttentionBackupCodec.encode(AttentionState(targets = listOf(Target("incoming", title = "导入")))),
+            ImportMode.REPLACE,
+        )
+        repository.updateBusiness { it.copy(targets = listOf(Target("edited", title = "后来修改"))) }
+
+        val result = repository.backupWorkflow.commit(plan)
+
+        assertTrue(result is BackupCommitResult.StalePlan)
+        assertEquals(listOf("edited"), repository.state.first().targets.map { it.id })
+        assertEquals(null, backupStore.read())
+    }
+
+    @Test
+    fun restore_workflow_exchanges_the_latest_snapshot_for_one_step_undo() = runBlocking {
+        val backupStore = InMemoryImportBackupStore()
+        val repository = RoomAttentionStateRepository(
+            RoomBusinessDataRepository(database),
+            settingsStore(),
+            backupStore,
+        )
+        val initial = AttentionState(targets = listOf(Target("initial", title = "初始")))
+        val imported = AttentionState(targets = listOf(Target("imported", title = "导入")))
+        repository.replace(initial)
+        repository.importJson(AttentionBackupCodec.encode(imported), clearExisting = true)
+
+        val restored = repository.restoreLatestImportBackup()
+
+        assertTrue(restored is BackupCommitResult.Committed)
+        assertEquals(listOf("initial"), repository.state.first().targets.map { it.id })
+        assertEquals(listOf("imported"), AttentionBackupCodec.decode(requireNotNull(backupStore.read())).targets.map { it.id })
+    }
+
+    @Test
     fun restoring_backup_recomputes_capacity_from_settings_and_schedules() = runBlocking {
         val day = "2026-10-08"
         val repository = RoomAttentionStateRepository(
@@ -301,6 +343,39 @@ class RoomBackupIntegrationTest {
         assertEquals(AttentionBackupCodec.encode(current), backupStore.read())
         assertTrue(reminders.rollbackObserved)
     }
+
+    @Test
+    fun failed_restore_keeps_imported_state_and_latest_snapshot_recoverable() = runBlocking {
+        val backupStore = InMemoryImportBackupStore()
+        val settings = FailNextSnapshotSettingsStore()
+        val repository = RoomAttentionStateRepository(
+            RoomBusinessDataRepository(database),
+            settings,
+            backupStore,
+        )
+        val initial = AttentionState(
+            settings = StoredSettings(planningDayBoundaryMinutes = 30),
+            targets = listOf(Target("restore-initial", title = "初始")),
+        )
+        val imported = AttentionState(
+            settings = StoredSettings(planningDayBoundaryMinutes = 120),
+            targets = listOf(Target("restore-imported", title = "导入")),
+        )
+
+        repository.replace(initial)
+        repository.importJson(AttentionBackupCodec.encode(imported), clearExisting = true)
+        assertEquals(AttentionBackupCodec.encode(initial), backupStore.read())
+
+        // The restore writes the current imported state to the exchange slot,
+        // then fails while replacing DataStore. Compensation must restore both
+        // runtime state and the original latest snapshot.
+        settings.failNextSnapshot = true
+        assertFalse(runCatching { repository.restoreLatestImportBackup() }.isSuccess)
+
+        assertEquals(imported.targets, repository.state.first().targets)
+        assertEquals(imported.settings, repository.state.first().settings)
+        assertEquals(AttentionBackupCodec.encode(initial), backupStore.read())
+    }
     @Test
     fun archived_import_timer_target_is_rejected_without_changing_current_timer() = runBlocking {
         val currentTarget = Target("current-target", title = "当前目标")
@@ -349,6 +424,40 @@ class RoomBackupIntegrationTest {
         assertEquals(AttentionBackupCodec.encode(current), backupStore.read())
         assertTrue(settings.rollbackSucceeded)
     }
+
+    @Test
+    fun room_replace_failure_compensates_settings_reminders_and_retains_latest_snapshot() = runBlocking {
+        val backupStore = InMemoryImportBackupStore()
+        val reminders = RecordingReminderCoordinator()
+        val failingBusiness = FailingRoomBusinessDataRepository(database)
+        val current = AttentionState(
+            settings = StoredSettings(planningDayBoundaryMinutes = 30),
+            targets = listOf(Target("room-current", title = "当前")),
+        )
+        val incoming = AttentionState(
+            settings = StoredSettings(planningDayBoundaryMinutes = 180),
+            targets = listOf(Target("room-incoming", title = "导入")),
+        )
+        RoomBusinessDataRepository(database).replace(current)
+        val repository = RoomAttentionStateRepository(
+            failingBusiness,
+            settingsStore().also { it.setSnapshot(current.toSettingsSnapshotForTest()) },
+            backupStore,
+            reminders,
+        )
+        backupStore.write("older-latest-snapshot")
+        failingBusiness.failNextReplace = true
+
+        assertFalse(runCatching {
+            repository.importJson(AttentionBackupCodec.encode(incoming), clearExisting = true)
+        }.isSuccess)
+
+        assertEquals(current.targets, repository.state.first().targets)
+        assertEquals(current.settings, repository.state.first().settings)
+        assertEquals("older-latest-snapshot", backupStore.read())
+        assertTrue(reminders.rollbackObserved)
+    }
+
 
     @Test
     fun file_backup_survives_a_new_store_instance() = runBlocking {
@@ -676,6 +785,60 @@ private class FailingSettingsStore : SettingsStore {
     }
 }
 
+private class FailNextSnapshotSettingsStore : SettingsStore {
+    private val current = MutableStateFlow(SettingsSnapshot())
+    var failNextSnapshot = false
+    override val settings: Flow<SettingsSnapshot> = current
+
+    override suspend fun setSnapshot(snapshot: SettingsSnapshot) {
+        current.value = snapshot
+        if (failNextSnapshot) {
+            failNextSnapshot = false
+            error("设置写入失败")
+        }
+    }
+
+    override suspend fun setPlannerSettings(settings: StoredSettings) {
+        current.value = current.value.copy(
+            planningDayBoundaryMinutes = settings.planningDayBoundaryMinutes,
+            weekStartDay = settings.weekStartDay,
+            dailyCapacityMinutes = settings.dailyCapacityMinutes,
+        )
+    }
+
+    override suspend fun setPlanningDayBoundaryMinutes(minutes: Int) {
+        current.value = current.value.copy(planningDayBoundaryMinutes = minutes)
+    }
+
+    override suspend fun setWeekStartDay(day: Int) {
+        current.value = current.value.copy(weekStartDay = day)
+    }
+
+    override suspend fun setDailyCapacityMinutes(minutes: Int?) {
+        current.value = current.value.copy(dailyCapacityMinutes = minutes)
+    }
+
+    override suspend fun setLaunchDestination(destination: LaunchDestination) {
+        current.value = current.value.copy(launchDestination = destination)
+    }
+
+    override suspend fun setLastOpenedDestination(destination: LaunchDestination) {
+        current.value = current.value.copy(lastOpenedDestination = destination)
+    }
+
+    override suspend fun setOnboardingCompleted(completed: Boolean) {
+        current.value = current.value.copy(onboardingCompleted = completed)
+    }
+
+    override suspend fun setNotificationsEnabled(enabled: Boolean) {
+        current.value = current.value.copy(notificationsEnabled = enabled)
+    }
+
+    override suspend fun reset() {
+        current.value = SettingsSnapshot()
+    }
+}
+
 private class FailingReminderCoordinator : ReminderCoordinator {
     var failNext = false
     var rollbackObserved = false
@@ -687,3 +850,37 @@ private class FailingReminderCoordinator : ReminderCoordinator {
         if (next.targets.any { it.id == "reminder-current" }) rollbackObserved = true
     }
 }
+
+private class RecordingReminderCoordinator : ReminderCoordinator {
+    var rollbackObserved = false
+
+    override fun sync(previous: AttentionState, next: AttentionState) {
+        if (previous.targets.any { it.id == "room-incoming" } && next.targets.any { it.id == "room-current" }) {
+            rollbackObserved = true
+        }
+    }
+}
+
+private class FailingRoomBusinessDataRepository(
+    database: AttentionDatabase,
+) : RoomBusinessDataRepository(database) {
+    var failNextReplace = false
+
+    override suspend fun replace(state: AttentionState) {
+        if (failNextReplace) {
+            failNextReplace = false
+            error("Room 替换失败")
+        }
+        super.replace(state)
+    }
+}
+
+private fun AttentionState.toSettingsSnapshotForTest() = SettingsSnapshot(
+    planningDayBoundaryMinutes = settings.planningDayBoundaryMinutes,
+    weekStartDay = settings.weekStartDay,
+    dailyCapacityMinutes = settings.dailyCapacityMinutes,
+    launchDestination = launchDestination,
+    lastOpenedDestination = lastOpenedDestination,
+    onboardingCompleted = onboardingCompleted,
+    notificationsEnabled = notificationsEnabled,
+)
