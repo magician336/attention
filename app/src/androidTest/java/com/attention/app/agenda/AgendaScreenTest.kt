@@ -1,6 +1,7 @@
 package com.attention.app.agenda
 
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -23,6 +24,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.attention.app.ui.components.AttentionFeedbackTags
+import com.attention.app.ui.components.AttentionStateKind
 import com.attention.app.ui.theme.AttentionTheme
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.ScheduleFrequency
@@ -41,6 +43,7 @@ import com.attention.workspace.state.AgendaScreenState
 import com.attention.workspace.state.AgendaTargetOption
 import com.attention.workspace.state.AgendaTimeRecord
 import com.attention.workspace.state.AgendaWorkbenchSummary
+import com.attention.workspace.state.AGENDA_RETRY_LABEL
 import java.time.LocalDate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -850,6 +853,85 @@ class AgendaScreenTest {
         recurrenceRules = emptyList(),
     )
 
+    // #195：首次读取本地数据期间的轻量时间轴骨架。加载与读取失败都是组合根注入的事实，
+    // 页面只按它们渲染；骨架复用既有的区块容器标识，因此区块结构与顺序没有被重排。
+    @Test
+    fun the_first_load_renders_a_light_timeline_skeleton_in_the_workbench_sections() {
+        mount(planningDayScreenState(planningDay).copy(loading = true))
+
+        composeRule.onNodeWithTag(AttentionStateKind.LOADING.rootTag, useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithTag("agenda-section-summary", useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithTag("agenda-section-timeline", useUnmergedTree = true).assertExists()
+        // 骨架是轻量的占位，不是把真实区块提前画出来：日程行与表单都不在。
+        composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true).assertDoesNotExist()
+        composeRule.onAllNodesWithTag("agenda-skeleton-row", useUnmergedTree = true)
+            .fetchSemanticsNodes()
+            .let { assertTrue("时间轴骨架至少要有占位行", it.isNotEmpty()) }
+        composeRule.onNodeWithTag(AttentionStateKind.ERROR.rootTag, useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun a_local_read_failure_shows_an_error_state_with_a_retry_instead_of_a_blank_page() {
+        val intents = RecordingAgendaActions()
+        mount(planningDayScreenState(planningDay).copy(loadError = "磁盘读不出来"), intents)
+
+        composeRule.onNodeWithTag(AttentionStateKind.ERROR.rootTag, useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithTag(AttentionStateKind.ERROR.descriptionTag, useUnmergedTree = true)
+            .assert(hasText("磁盘读不出来"))
+        // 错误状态带的是「重试」而不是只有关闭。
+        composeRule.onNodeWithTag(AttentionStateKind.ERROR.actionTag, useUnmergedTree = true)
+            .assertIsDisplayed()
+            .assert(hasText(AGENDA_RETRY_LABEL))
+
+        composeRule.onNodeWithTag(AttentionStateKind.ERROR.actionTag, useUnmergedTree = true).performClick()
+        assertEquals(1, intents.retriedLoads)
+    }
+
+    @Test
+    fun retrying_after_a_read_failure_lands_on_the_working_timeline() {
+        // 重试之后组合根重新注入一份读上来的状态：页面回到正常工作台，而不是停在错误或空白上。
+        // 组合根重读之后会注入一份读上来的状态。用可观察状态驱动重组，
+        // 否则改一个普通局部变量不会让页面重新渲染，断言的是上一次那一帧。
+        val actions = RecordingAgendaActions()
+        val screenState = mutableStateOf(
+            planningDayScreenState(planningDay).copy(loadError = "磁盘读不出来"),
+        )
+        composeRule.setContent {
+            AttentionTheme { AgendaScreen(state = screenState.value, actions = actions) }
+        }
+
+        composeRule.onNodeWithTag(AttentionStateKind.ERROR.actionTag, useUnmergedTree = true).performClick()
+        assertEquals(1, actions.retriedLoads)
+        composeRule.runOnIdle { screenState.value = planningDayScreenState(planningDay) }
+
+        composeRule.onNodeWithTag(AttentionStateKind.ERROR.rootTag, useUnmergedTree = true).assertDoesNotExist()
+        composeRule.onNodeWithTag(AttentionStateKind.LOADING.rootTag, useUnmergedTree = true).assertDoesNotExist()
+        node("开组会").assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-section-timeline", useUnmergedTree = true).assertExists()
+    }
+
+    @Test
+    fun the_capacity_summary_takes_the_user_to_the_full_settings() {
+        // 容量摘要是只读的，但它是通往完整设置（统计页底部的「设置与数据」）的入口：
+        // 页面只发出 intent，实际跳转由组合根完成。
+        val intents = RecordingAgendaActions()
+        mount(planningDayScreenState(planningDay), intents)
+
+        composeRule.onNodeWithTag("agenda-open-settings", useUnmergedTree = true).performScrollTo().performClick()
+
+        assertEquals(1, intents.openedSettings)
+    }
+
+    @Test
+    fun the_timeline_never_shows_a_notification_permission_error() {
+        // 通知权限提示只在首次启动计时或需要通知栏控制时出现；时间轴本身不持续显示权限错误。
+        mount(planningDayScreenState(planningDay, timelineRows = listOf(row(reportEntry, "2026-03-05 · 60 分钟 · 无提醒", true))))
+
+        composeRule.onAllNodesWithTag(AttentionStateKind.PERMISSION_NOT_GRANTED.rootTag, useUnmergedTree = true)
+            .fetchSemanticsNodes()
+            .let { assertEquals("时间轴不应持续显示通知权限错误", 0, it.size) }
+    }
+
     private fun mount(
         state: AgendaScreenState,
         actions: AgendaActions = RecordingAgendaActions(),
@@ -875,6 +957,8 @@ class AgendaScreenTest {
         var permissionRequests = 0
         var pausedTimers = 0
         var resumedTimers = 0
+        var retriedLoads = 0
+        var openedSettings = 0
         val switchedTimerTargets = mutableListOf<String>()
 
         override fun selectPlanningDate(date: LocalDate?) {
@@ -947,6 +1031,14 @@ class AgendaScreenTest {
 
         override fun deleteTime(entryId: String) {
             deletedRecords += entryId
+        }
+
+        override fun retryLoad() {
+            retriedLoads += 1
+        }
+
+        override fun openSettings() {
+            openedSettings += 1
         }
     }
 

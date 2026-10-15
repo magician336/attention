@@ -87,12 +87,15 @@ import com.attention.app.statistics.rememberStatisticsSelection
 import com.attention.app.targets.TargetsScreen
 import com.attention.app.targets.rememberTargetsSelection
 import com.attention.workspace.state.AgendaActions
+import com.attention.workspace.state.AgendaOperationFeedback
 import com.attention.workspace.state.AgendaRecurrenceDraft
 import com.attention.workspace.state.AgendaScheduleDraft
+import com.attention.workspace.state.AGENDA_UNDO_LABEL
 import com.attention.workspace.state.OnboardingActions
 import com.attention.workspace.state.SettingsActions
 import com.attention.workspace.state.StatisticsActions
 import com.attention.workspace.state.TargetsActions
+import com.attention.workspace.state.agendaFeedbackMessage
 import com.attention.workspace.state.agendaScreenState
 import com.attention.workspace.state.onboardingScreenState
 import com.attention.workspace.state.settingsScreenState
@@ -122,6 +125,23 @@ import java.time.LocalDate
 import java.time.ZoneId
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+
+/**
+ * 组合根交给日程页的两个加载事实。
+ *
+ * 「还在读」与「读失败」都由组合根判定（ADR-0005 第 1 节）：页面拿到的领域状态在读上来之前
+ * 是一份空的默认值，它自己分不出「用户真的没有数据」与「还没读到」，因此页面不去猜。
+ * 读取失败优先于加载中：失败时页面给的是带「重试」的错误状态，而不是一直转骨架。
+ */
+internal data class AgendaLoadFacts(
+    val loading: Boolean,
+    val loadError: String?,
+)
+
+internal fun agendaLoadFacts(stateLoaded: Boolean, loadError: String?): AgendaLoadFacts = AgendaLoadFacts(
+    loading = !stateLoaded && loadError == null,
+    loadError = loadError,
+)
 
 /**
  * 设置页的 actions adapter，在组合根一侧组装：页面发出 intent，这里落到 ViewModel、
@@ -212,6 +232,14 @@ private class AgendaActionsAdapter(
     private val onStopTimer: () -> Unit,
     private val onRecoverTimerFromNow: () -> Unit,
     private val onTimeRecordDeleted: (TimeEntry) -> Unit,
+    private val onOpenSettings: () -> Unit,
+    /**
+     * 短时成功确认的出口。
+     *
+     * 成功提示属于组合根的反馈宿主（ADR-0005 第 1 节）：页面只发 intent，这里把它交给
+     * 宿主展示，因此页面里没有 Toast，也没有第二套反馈方式。
+     */
+    private val onFeedback: (AgendaOperationFeedback) -> Unit,
 ) : AgendaActions {
     override fun selectPlanningDate(date: LocalDate?) {
         // 点击那一刻的规划日要一起交进去：范围高亮按它判定，之后跨过规划日界线也不会丢。
@@ -242,6 +270,7 @@ private class AgendaActionsAdapter(
                 },
             ),
         )
+        onFeedback(AgendaOperationFeedback.SCHEDULE_ADDED)
     }
 
     override fun updateSchedule(entry: ScheduleEntry, reminderMinuteOfDay: Int?) {
@@ -252,21 +281,32 @@ private class AgendaActionsAdapter(
                 },
             ),
         )
+        onFeedback(AgendaOperationFeedback.SCHEDULE_UPDATED)
     }
 
     override fun confirmScheduleCompleted(entryId: String) {
         viewModel.confirmScheduleCompleted(entryId)
+        onFeedback(AgendaOperationFeedback.SCHEDULE_COMPLETED)
     }
 
     override fun toggleScheduleCompleted(entryId: String) {
         viewModel.toggleScheduleCompleted(entryId)
+        // 切换完成与取消完成走同一条命令，确认因此只说「完成状态已更新」，
+        // 不去猜这一次到底是切到了哪一侧——结论由时间轴上的那一行自己说。
+        onFeedback(AgendaOperationFeedback.SCHEDULE_COMPLETION_TOGGLED)
     }
 
     // 条目一起带出，因此产出的时间记录保留同一个来源关联。
-    override fun startTimerFromEntry(entry: ScheduleEntry) = onStartTimerFromEntry(entry)
+    override fun startTimerFromEntry(entry: ScheduleEntry) {
+        onStartTimerFromEntry(entry)
+        onFeedback(AgendaOperationFeedback.TIMER_STARTED)
+    }
 
     // 运行中的计时只能从日程页停掉：平台动作（停前台计时服务、撤掉恢复提示）仍归组合根。
-    override fun stopRunningTimer() = onStopTimer()
+    override fun stopRunningTimer() {
+        onStopTimer()
+        onFeedback(AgendaOperationFeedback.TIMER_STOPPED)
+    }
 
     // 暂停、恢复、切换与从此刻继续都只是领域命令：通知栏是持久化状态的投影，
     // 因此这些动作不需要页面自己去碰前台服务（ADR-0005 第 4 节）。
@@ -287,6 +327,7 @@ private class AgendaActionsAdapter(
 
     override fun editTime(entryId: String, minutes: Int, targetId: String?, note: String) {
         viewModel.editTime(entryId, minutes, targetId, note)
+        onFeedback(AgendaOperationFeedback.TIME_RECORDED)
     }
 
     // 删除的可撤销提示由组合根展示：撤销要用回被删掉的那条记录本身。
@@ -297,13 +338,24 @@ private class AgendaActionsAdapter(
     override fun addRecurrenceAndMaterialize(draft: AgendaRecurrenceDraft) {
         val rule = draft.toRecurrenceRule()
         viewModel.addRecurrenceAndMaterialize(rule, LocalDate.parse(rule.startDate).plusDays(30))
+        onFeedback(AgendaOperationFeedback.RECURRENCE_ADDED)
     }
 
     override fun stopRecurrence(ruleId: String) {
         viewModel.stopRecurrence(ruleId)
+        onFeedback(AgendaOperationFeedback.RECURRENCE_STOPPED)
     }
 
     override fun requestReminderPermission() = onRequestReminderPermission()
+
+    // 重试就是重新读一次本地数据：重新订阅发生在组合根持有的仓储上，页面不碰持久化。
+    override fun retryLoad() {
+        viewModel.retryLoad()
+        onFeedback(AgendaOperationFeedback.LOAD_RETRYING)
+    }
+
+    // 完整设置住在统计页底部的「设置与数据」；工作台只发出这一条意图，跳转本身由组合根完成。
+    override fun openSettings() = onOpenSettings()
 }
 
 private class WorkspaceViewModelFactory(
@@ -736,6 +788,9 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     val externalPlanningDate = externalSchedulePlanningDate(state, openScheduleDate, openScheduleId)
     val agendaSelection = rememberAgendaSelection(externalPlanningDate)
     val agendaPlanningDay = state.planningDate(injectedNow, injectedZone)
+    // 「还在读」与「读失败」都是组合根掌握的事实：页面不调仓储，也不自己判断空白是不是加载中。
+    val loadError by viewModel.loadError.collectAsStateWithLifecycle()
+    val agendaLoad = agendaLoadFacts(stateLoaded, loadError)
     val agendaState = agendaScreenState(
         state = state,
         now = injectedNow,
@@ -744,6 +799,8 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         // 范围高亮来自选择状态自己记住的显式范围，跨规划日界线也不会丢。
         selectedScope = agendaSelection.selectedRangeScope(agendaPlanningDay),
         openScheduleId = openScheduleId,
+        loading = agendaLoad.loading,
+        loadError = agendaLoad.loadError,
     )
 
     // 统计页的周期选择由统计页 module 提供类型与迁移语义，组合根只持有一个实例来喂投影。
@@ -863,10 +920,24 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             onTimeRecordDeleted = { removed ->
                 feedbackScope.launch {
                     feedback.showUndoableMessage(
-                        message = "已删除这条实际投入，它不再计入目标进度与统计。",
+                        message = agendaFeedbackMessage(AgendaOperationFeedback.TIME_DELETED),
+                        undoLabel = AGENDA_UNDO_LABEL,
                         onUndo = { viewModel.restoreTimeEntry(removed) },
                     )
                 }
+            },
+            // 容量摘要的完整设置入口：设置仍然住在统计页底部的「设置与数据」，
+            // 因此这里先把顶级页面让给统计，再把设置页举起来，返回时自然回到统计页。
+            onOpenSettings = {
+                destinationChosen = true
+                destinationSettled = true
+                destination = LaunchDestination.STATISTICS
+                settingsOpen = true
+            },
+            // 成功确认走同一条反馈宿主通路：与删除撤销共用一个 Snackbar 出口，
+            // 因此整个工作区只有一套短时提示方式。
+            onFeedback = { operation ->
+                feedbackScope.launch { feedback.showMessage(agendaFeedbackMessage(operation)) }
             },
         )
     }

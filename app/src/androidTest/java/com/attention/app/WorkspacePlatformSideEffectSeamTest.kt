@@ -190,6 +190,8 @@ class WorkspacePlatformSideEffectSeamTest {
         override fun addRecurrenceAndMaterialize(draft: AgendaRecurrenceDraft) = Unit
         override fun stopRecurrence(ruleId: String) = Unit
         override fun requestReminderPermission() { permissionRequests += 1 }
+        override fun retryLoad() = Unit
+        override fun openSettings() = Unit
     }
 
     /** 设置页 adapter 的替身：同样只记录 intent，不触达 SAF、权限与 ViewModel。 */

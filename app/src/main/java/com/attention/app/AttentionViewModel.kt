@@ -66,7 +66,10 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -87,11 +90,34 @@ class AttentionViewModel(
         val schedules: String,
     )
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val loadedState: StateFlow<AttentionState> = repository.state.stateIn(
-        scope,
-        SharingStarted.WhileSubscribed(5_000),
-        AttentionState(),
-    )
+
+    /**
+     * 重新订阅本地数据的信号。
+     *
+     * 「重试」因此是一次真正的重新读取，而不是把同一份已经失败的数据再渲染一遍。
+     * 它只影响读取这一侧：写命令走 [repository]，不经过这里。
+     */
+    private val reloadSignals = MutableStateFlow(0)
+
+    private val _loadError = MutableStateFlow<String?>(null)
+
+    /**
+     * 本地数据**读取**失败时的说明；null 表示读取正常。
+     *
+     * 它与 [error] 分开：那条是某一次操作没保存成功（写失败），这条是「还没读上来」。
+     * 页面据此渲染带「重试」的读取失败状态，而不是把一个空工作台留给用户。
+     */
+    val loadError: StateFlow<String?> = _loadError
+
+    private val loadedState: StateFlow<AttentionState> = reloadSignals
+        // 每次重试都重新订阅仓储的状态流；读取失败只作为事实记下来，不让它把整条流拆掉。
+        .flatMapLatest { repository.state.onStart { _loadError.value = null } }
+        .catch { cause -> _loadError.value = cause.message ?: "读取本地数据失败" }
+        .stateIn(
+            scope,
+            SharingStarted.WhileSubscribed(5_000),
+            AttentionState(),
+        )
     val state: StateFlow<AttentionState> = loadedState
 
     /**
@@ -108,6 +134,17 @@ class AttentionViewModel(
         .stateIn(scope, SharingStarted.WhileSubscribed(5_000), false)
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
+
+    /**
+     * 重新读取本地数据。
+     *
+     * [state] 派生自 `repository.state`，重读就是重新订阅它：先清掉读取失败的事实，
+     * 让页面回到加载骨架，读上来之后 [stateLoaded] 与 [state] 自然跟上（#195 验收标准 2）。
+     */
+    fun retryLoad() {
+        _loadError.value = null
+        reloadSignals.value += 1
+    }
     private val _backupResult = MutableStateFlow<BackupCommitResult?>(null)
     /** Last typed commit/restore result, including stale and no-backup outcomes. */
     val backupResult: StateFlow<BackupCommitResult?> = _backupResult

@@ -1,6 +1,7 @@
 package com.attention.app.agenda
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,6 +28,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -42,7 +45,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.attention.app.ui.components.AttentionButton
 import com.attention.app.ui.components.AttentionConfirmDialog
+import com.attention.app.ui.components.AttentionErrorState
 import com.attention.app.ui.components.AttentionInlineError
+import com.attention.app.ui.components.AttentionLoadingState
 import com.attention.app.ui.components.AttentionOutlinedButton
 import com.attention.app.ui.components.AttentionSelectedIndicator
 import com.attention.app.ui.components.AttentionTextButton
@@ -59,6 +64,7 @@ import com.attention.workspace.state.AgendaScheduleRow
 import com.attention.workspace.state.AgendaTargetOption
 import com.attention.workspace.state.AgendaTimeRecord
 import com.attention.workspace.state.AgendaWorkbenchSection
+import com.attention.workspace.state.AGENDA_RETRY_LABEL
 import com.attention.workspace.state.agendaLabel
 import com.attention.workspace.state.agendaWeekdayLabel
 import kotlinx.coroutines.launch
@@ -123,8 +129,17 @@ internal fun AgendaScreen(
         Modifier.fillMaxSize().verticalScroll(scrollState).padding(tokens.spacing.large),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        state.workbenchSections.forEach { section ->
-            when (section) {
+        // 读取本地数据的两件事都是组合根注入的事实，页面只按它们渲染（ADR-0005 第 1 节）：
+        // 还没读到给轻量时间轴骨架，读失败给带「重试」的错误状态。两者都不重排区块——
+        // 骨架复用同一批区块容器标识，因此首屏结构与顺序在三种状态下始终一致。
+        val loadError = state.loadError
+        if (loadError != null) {
+            AgendaLoadFailure(loadError = loadError, onRetry = actions::retryLoad)
+        } else if (state.loading) {
+            AgendaLoadingSkeleton()
+        } else {
+            state.workbenchSections.forEach { section ->
+                when (section) {
                 AgendaWorkbenchSection.PLANNING_DAY_SUMMARY -> AgendaSummarySection(
                     state = state,
                     date = date,
@@ -178,6 +193,7 @@ internal fun AgendaScreen(
                     date = date,
                     actions = actions,
                 )
+                }
             }
         }
     }
@@ -212,9 +228,68 @@ internal fun AgendaScreen(
 }
 
 /**
+ * 首次读取本地数据时的轻量时间轴骨架。
+ *
+ * 读取期间 [AgendaScreenState] 里的行与标签都还是空投影，因此这里画的不是「提前渲染真实区块」，
+ * 而是复用同一批区块容器标识的占位：用户看到的位置与读上来之后一致，页面的高度不会在
+ * 加载结束时突然跳一下。首屏区块的顺序语义没有被改动，骨架只是同一结构的一种填充状态。
+ */
+@Composable
+private fun AgendaLoadingSkeleton() {
+    val tokens = attentionTokens()
+    Column(
+        Modifier.fillMaxWidth().testTag("agenda-skeleton"),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        AttentionLoadingState(
+            label = "正在读取本地数据",
+            description = "马上就好",
+        )
+        // 容量摘要与时间轴两块在读上来之后就在这个位置，因此骨架占住同样的容器标识。
+        Column(Modifier.fillMaxWidth().testTag("agenda-section-summary"), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            repeat(2) { AgendaSkeletonBar(tokens.spacing.medium) }
+        }
+        Column(Modifier.fillMaxWidth().testTag("agenda-section-timeline"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            repeat(4) { AgendaSkeletonBar(tokens.spacing.large) }
+        }
+    }
+}
+
+/** 一条骨架占位行。它不带任何文案，因此读屏用户听到的是加载状态而不是一串假内容。 */
+@Composable
+private fun AgendaSkeletonBar(height: androidx.compose.ui.unit.Dp) {
+    val tokens = attentionTokens()
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(height)
+            .testTag("agenda-skeleton-row"),
+        shape = RoundedCornerShape(tokens.radius.small),
+        color = tokens.colorScheme.surfaceContainerHigh,
+        content = {},
+    )
+}
+
+/**
+ * 本地数据读取失败时的错误状态。
+ *
+ * 它复用共享的 [AttentionErrorState]，因此错误在任意页面都是同一套标识与同一套表达；
+ * 动作是「重试」而不是只有关闭——用户自己能救回来，不必退出应用（#195 验收标准 8）。
+ */
+@Composable
+private fun AgendaLoadFailure(loadError: String, onRetry: () -> Unit) {
+    AttentionErrorState(
+        description = loadError,
+        retryLabel = AGENDA_RETRY_LABEL,
+        onRetry = onRetry,
+    )
+}
+
+/**
  * 首屏第一块：规划日与每日容量的只读摘要，外加切换查看范围的导航。
  *
  * 它只读不写——完整设置继续走统计页底部的「设置与数据」，因此这里没有任何设置表单。
+ * 容量摘要本身是那个入口：点它发出 [AgendaActions.openSettings] 意图，实际跳转由组合根完成。
  */
 @Composable
 private fun AgendaSummarySection(
@@ -293,7 +368,15 @@ private fun AgendaSummarySection(
             )
             AttentionOutlinedButton(onClick = onOpenPlanningDay) { Text("打开规划日") }
         }
-        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
+        Card(
+            Modifier
+                .fillMaxWidth()
+                // 容量摘要只读，但它是通往完整设置的入口：设置住在统计页底部的「设置与数据」，
+                // 工作台不复制一份设置表单，也不自己跳转，只发出这一条意图。
+                .clickable(onClick = actions::openSettings)
+                .testTag("agenda-open-settings"),
+            shape = RoundedCornerShape(tokens.radius.medium),
+        ) {
             Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("规划日与每日容量", style = tokens.typography.body)
                 Text(summary.planningDateLabel)
@@ -303,6 +386,8 @@ private fun AgendaSummarySection(
                 summary.capacityUsageLabel?.let { capacityLabel ->
                     Text(capacityLabel, modifier = Modifier.testTag("agenda-capacity-summary"))
                 }
+                // 完整设置在统计页底部的「设置与数据」；这里只给出路，不复制一份表单。
+                Text("打开设置与数据", style = tokens.typography.caption)
             }
         }
     }
