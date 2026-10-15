@@ -24,7 +24,9 @@ data class SettingsSnapshot(
     val planningDayBoundaryMinutes: Int = PlannerSettings.DEFAULT_BOUNDARY_MINUTES,
     val weekStartDay: Int = DEFAULT_WEEK_START_DAY,
     val dailyCapacityMinutes: Int? = null,
-    val launchDestination: LaunchDestination = LaunchDestination.TODAY,
+    // 没有有效偏好时，「启动入口」回退到日程入口：旧值 TODAY 语义等价于日程，
+    // 但继续以它为默认会把旧名称持续写回 DataStore。
+    val launchDestination: LaunchDestination = LaunchDestination.AGENDA,
     // 没有有效历史时，「上次打开」回退到日程入口。
     val lastOpenedDestination: LaunchDestination = LaunchDestination.AGENDA,
     val onboardingCompleted: Boolean = false,
@@ -185,7 +187,10 @@ private fun MutablePreferences.writeSnapshot(snapshot: SettingsSnapshot) {
 /**
  * 启动入口偏好的读取。旧版本值仍然按旧页面打开，兼容映射到「日程」只作用于
  * 「上次打开」的历史（见 [launchDestinationFromPersistedName]）。
+ *
+ * 无法解析的值是无效偏好而不是有效历史，因此回退到日程入口；旧枚举值本身仍然保留，
+ * 历史 DataStore 与备份里的 `TODAY` / `ALL_DATES` 依旧读得出来。
  */
 private fun String?.toLaunchDestination(): LaunchDestination = runCatching {
-    this?.let(LaunchDestination::valueOf) ?: LaunchDestination.TODAY
-}.getOrDefault(LaunchDestination.TODAY)
+    this?.let(LaunchDestination::valueOf) ?: LaunchDestination.AGENDA
+}.getOrDefault(LaunchDestination.AGENDA)

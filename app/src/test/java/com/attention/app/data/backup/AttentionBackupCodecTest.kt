@@ -138,6 +138,26 @@ class AttentionBackupCodecTest {
         )
     }
 
+    /**
+     * 新写出的备份不再使用旧入口名，历史备份里的旧名仍然读得出来。
+     *
+     * 两件事必须同时成立：默认值统一成 `AGENDA` 只改「新写什么」，不改「旧值还能不能读」——
+     * 旧枚举值仍然存在，因此历史备份解码后等价于日程而不是抛异常。
+     */
+    @Test
+    fun a_fresh_backup_uses_the_schedule_entry_name_and_legacy_names_still_decode() {
+        val fresh = AttentionBackupCodec.encode(AttentionState())
+        assertFalse("新备份不应再写出旧入口名", fresh.contains("\"TODAY\""))
+        assertTrue(fresh.contains("\"launchDestination\":\"AGENDA\""))
+
+        // 旧名仍然解码成功，并按兼容映射等价于日程
+        val legacy = """{"version":1,"settings":{},"targets":[],"goalStages":[],"timeEntries":[],"schedules":[],"recurrenceRules":[],"migrations":[],"futureGoalRules":[],"periodSnapshots":[],"targetMoves":[],"milestones":[],"experience":0,"activeTimer":null,"onboardingCompleted":true,"launchDestination":"TODAY","lastOpenedDestination":"TODAY","notificationsEnabled":true}"""
+        val restored = AttentionBackupCodec.decode(legacy)
+        assertEquals(LaunchDestination.TODAY, restored.launchDestination)
+        assertEquals(LaunchDestination.AGENDA, restored.launchDestination.asAgendaEntry())
+        assertEquals(LaunchDestination.AGENDA, restored.lastOpenedDestination.asAgendaEntry())
+    }
+
     @Test
     fun versioned_backup_round_trip_preserves_every_domain_field() {
         val target = Target("target", title = "学习")

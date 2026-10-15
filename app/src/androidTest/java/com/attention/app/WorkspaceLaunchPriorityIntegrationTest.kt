@@ -206,14 +206,16 @@ class WorkspaceLaunchPriorityIntegrationTest {
                         ),
                     ),
                 )
-                context.createSettingsStore().setSnapshot(
-                    SettingsSnapshot(
-                        launchDestination = launchDestination,
-                        lastOpenedDestination = lastOpened,
-                        onboardingCompleted = true,
-                    ),
-                )
             }
+            // 同一安装下别的测试类的 Activity 会把「上次打开」写回共享 DataStore，
+            // 因此播种之后必须读回确认它真的生效，否则本类的启动落点会被抢走。
+            WorkspaceHostSettingsBarrier.quiesceAndSeed(
+                SettingsSnapshot(
+                    launchDestination = launchDestination,
+                    lastOpenedDestination = lastOpened,
+                    onboardingCompleted = true,
+                ),
+            )
         } finally {
             database.close()
         }

@@ -4,6 +4,7 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.attention.domain.LaunchDestination
+import com.attention.domain.asAgendaEntry
 import com.attention.domain.resolveLaunchDestination
 import java.nio.file.Files
 import kotlinx.coroutines.CoroutineScope
@@ -101,7 +102,7 @@ class SettingsStoreTest {
     }
 
     @Test
-    fun unknown_launch_value_falls_back_to_today_without_overwriting_other_settings() = runBlocking {
+    fun unknown_launch_value_falls_back_to_the_agenda_entry_without_overwriting_other_settings() = runBlocking {
         val file = Files.createTempFile("attention-settings", ".preferences_pb").toFile()
         val dataStore = PreferenceDataStoreFactory.create { file }
         dataStore.edit {
@@ -110,7 +111,9 @@ class SettingsStoreTest {
         }
         val store = DataStoreSettingsStore(dataStore)
 
-        assertEquals(LaunchDestination.TODAY, store.settings.first().launchDestination)
+        // 无法解析的启动偏好是无效值而不是有效历史：回退到日程入口，
+        // 而不是把已删除的旧入口名 TODAY 当成默认值继续沿用。
+        assertEquals(LaunchDestination.AGENDA, store.settings.first().launchDestination)
         assertEquals(LaunchDestination.TARGETS, store.settings.first().lastOpenedDestination)
         store.setLaunchDestination(LaunchDestination.STATISTICS)
         val updated = store.settings.first()
@@ -132,9 +135,46 @@ class SettingsStoreTest {
             val store = DataStoreSettingsStore(dataStore)
 
             assertEquals(LaunchDestination.AGENDA, store.settings.first().lastOpenedDestination)
-            assertEquals(LaunchDestination.TODAY, store.settings.first().launchDestination)
+            // 旧枚举值本身仍然读得出来（它没有被删掉），但缺省值已经是 AGENDA
+            assertEquals(LaunchDestination.AGENDA, store.settings.first().launchDestination)
             file.delete()
         }
+        Unit
+    }
+
+    @Test
+    fun a_legacy_launch_value_is_still_readable_and_still_opens_the_schedule_entry() = runBlocking {
+        // 兼容红线：历史 DataStore 里的 TODAY / ALL_DATES 必须仍能读出来，
+        // 并且仍然等价于日程入口。默认值改成 AGENDA 不等于删掉旧值。
+        listOf("TODAY", "ALL_DATES").forEach { persisted ->
+            val file = Files.createTempFile("attention-settings", ".preferences_pb").toFile()
+            val dataStore = PreferenceDataStoreFactory.create { file }
+            dataStore.edit {
+                it[stringPreferencesKey("launch_destination")] = persisted
+            }
+            val store = DataStoreSettingsStore(dataStore)
+
+            val launch = store.settings.first().launchDestination
+            assertEquals(LaunchDestination.valueOf(persisted), launch)
+            assertEquals(LaunchDestination.AGENDA, launch.asAgendaEntry())
+            file.delete()
+        }
+        Unit
+    }
+
+    @Test
+    fun the_product_default_entry_is_the_agenda_entry() = runBlocking {
+        // 新的默认快照不再把旧入口名 TODAY 写回 DataStore
+        val file = Files.createTempFile("attention-settings", ".preferences_pb").toFile()
+        val dataStore = PreferenceDataStoreFactory.create(scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)) { file }
+        val store = DataStoreSettingsStore(dataStore)
+
+        assertEquals(LaunchDestination.AGENDA, SettingsSnapshot().launchDestination)
+        store.setSnapshot(SettingsSnapshot())
+        val persisted = dataStore.data.first().asMap()
+            .mapKeys { it.key.name }["launch_destination"]
+        assertEquals("AGENDA", persisted)
+        file.delete()
         Unit
     }
 
