@@ -634,7 +634,8 @@ class RoomBusinessDataRepositoryTest {
 
         val loaded = repository.read()
         assertEquals(result.state, loaded)
-        assertEquals(listOf(entry), loaded.schedules)
+        // 补记的 45 分钟已经超过预计 30 分钟，保存本身就把完成状态结算了；除此之外日程按填写落库。
+        assertEquals(listOf(entry.copy(completed = true)), loaded.schedules)
         val record = loaded.timeEntries.single()
         assertEquals(TimeEntrySource.MANUAL, record.source)
         assertEquals(entry.id, record.scheduleEntryId)
@@ -804,7 +805,10 @@ class RoomBusinessDataRepositoryTest {
             assertEquals(entry.id, confirmed.scheduleEntryId)
             assertEquals("request-1", manual.backfillRequestId)
             assertNull(confirmed.backfillRequestId)
-            assertEquals(10_075L, loaded.experience)
+            // 这个库只播种了目标，没有目标阶段，因此没有里程碑可发：经验就是两笔投入的分钟数。
+            // （里程碑的结算与重启一致性由上面那条带阶段的用例覆盖。）
+            assertTrue(loaded.milestones.isEmpty())
+            assertEquals(75L, loaded.experience)
             assertTrue(loaded.schedules.single().completed)
         } finally {
             secondDatabase.close()
