@@ -108,8 +108,9 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
             .performScrollTo()
             .assert(hasText("已安排 60 / 60 分钟", substring = true))
 
-        // JSON backup remains user-visible from statistics.
-        composeRule.onNode(hasText("统计") and hasClickAction()).performClick()
+        // JSON backup remains user-visible: #173 moved it off the statistics page into the
+        // standalone settings page reached from 「设置与数据」.
+        openSettingsFromStatistics()
         composeRule.onNodeWithText("预览 JSON 备份").performScrollTo().performClick()
         // The export launches the system document picker in its own process; the stubbed
         // intent keeps the round trip in-process so the Compose hierarchy stays alive.
@@ -126,13 +127,22 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
 
     @Test
     fun restore_import_backup_requires_explicit_confirmation() {
-        composeRule.onNode(hasText("统计") and hasClickAction()).performClick()
+        // 恢复入口随「设置与数据」搬到了设置页，确认对话框与取消行为不变（#173）
+        openSettingsFromStatistics()
         composeRule.onNodeWithText("恢复最近一次导入前备份").performScrollTo().performClick()
 
         composeRule.onNodeWithTag("restore-import-dialog", useUnmergedTree = true).assertExists()
         composeRule.onNodeWithTag("restore-import-confirm", useUnmergedTree = true).assertExists()
         composeRule.onNodeWithTag("restore-import-cancel", useUnmergedTree = true).performClick()
         composeRule.onNodeWithTag("restore-import-dialog", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    /** 从统计页底部的「设置与数据」进入独立设置页。 */
+    private fun openSettingsFromStatistics() {
+        composeRule.onNode(hasText("统计") and hasClickAction()).performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("statistics-open-settings").performScrollTo().performClick()
+        composeRule.waitForIdle()
     }
 
     private fun openAgenda() {

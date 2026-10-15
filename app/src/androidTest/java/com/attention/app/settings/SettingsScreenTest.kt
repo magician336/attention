@@ -4,7 +4,9 @@ import androidx.activity.compose.setContent
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsNodeInteraction
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -58,12 +60,23 @@ class SettingsScreenTest {
 
     @Test
     fun the_launch_destination_labels_are_agenda_targets_statistics_and_last_opened() {
-        // 启动选项对用户统一呈现为日程、目标树、统计、上次打开
+        // 启动选项对用户统一呈现为日程、目标树、统计、上次打开。
+        // 按标识逐项断言按钮上的文字：选中的那一项带「（当前）」后缀，所以按包含匹配。
         mount(state = screenState(LaunchDestination.TARGETS))
 
-        listOf("日程", "目标树", "统计", "上次打开").forEach { label ->
-            composeRule.onNodeWithText(label).assertIsDisplayed()
+        listOf(
+            LaunchDestination.AGENDA to "日程",
+            LaunchDestination.TARGETS to "目标树",
+            LaunchDestination.STATISTICS to "统计",
+            LaunchDestination.LAST_OPENED to "上次打开",
+        ).forEach { (destination, label) ->
+            composeRule.onNodeWithTag("launch-destination-$destination")
+                .performScrollTo()
+                .assert(hasText(label, substring = true))
         }
+        // 旧入口值不再作为选项出现：用户看到的只有上面四项
+        composeRule.onNodeWithText("今天").assertDoesNotExist()
+        composeRule.onNodeWithText("所有日期").assertDoesNotExist()
     }
 
     @Test
@@ -164,8 +177,18 @@ class SettingsScreenTest {
     }
 
     @Test
-    fun notification_status_and_the_permission_request_are_visible_here() {
-        // 通知不可用时给出说明与申请入口；这是平台事实，由组合根注入
+    fun an_available_notification_channel_is_reported_instead_of_a_request_button() {
+        // 通知已开启时只报告状态，不再给一个没有意义的申请入口
+        mount(state = screenState(LaunchDestination.TARGETS, notificationsEnabled = true))
+
+        node("通知").assertIsDisplayed()
+        node("通知已开启。").assertIsDisplayed()
+        composeRule.onNodeWithTag("settings-request-notification").assertDoesNotExist()
+    }
+
+    @Test
+    fun the_notification_permission_can_be_requested_from_here() {
+        // 通知不可用时给出说明与申请入口；权限申请由组合根执行
         val intents = RecordingSettingsActions()
         mount(state = screenState(LaunchDestination.TARGETS, notificationsEnabled = false), actions = intents)
 
@@ -174,11 +197,6 @@ class SettingsScreenTest {
         composeRule.onNodeWithTag("settings-request-notification").performScrollTo().performClick()
 
         assertEquals(1, intents.notificationRequests)
-
-        composeRule.setContent {
-            AttentionTheme { SettingsScreen(state = screenState(LaunchDestination.TARGETS), actions = intents) }
-        }
-        node("通知已开启。").assertIsDisplayed()
     }
 
     @Test
@@ -216,7 +234,7 @@ class SettingsScreenTest {
         val intents = RecordingSettingsActions()
         mount(state = screenState(LaunchDestination.TARGETS), actions = intents)
 
-        composeRule.onNodeWithTag("settings-back").performClick()
+        composeRule.onNodeWithTag("settings-back").performScrollTo().performClick()
 
         assertEquals(1, intents.closed)
     }
