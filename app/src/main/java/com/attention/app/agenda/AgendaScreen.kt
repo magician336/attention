@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.EventNote
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
@@ -28,9 +29,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.attention.app.ui.components.AttentionButton
@@ -45,13 +49,16 @@ import com.attention.app.ui.theme.attentionTokens
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.ScheduleFrequency
 import com.attention.workspace.state.AgendaActions
+import com.attention.workspace.state.AgendaActiveTimer
 import com.attention.workspace.state.AgendaRangeScope
 import com.attention.workspace.state.AgendaScreenState
 import com.attention.workspace.state.AgendaScheduleRow
 import com.attention.workspace.state.AgendaTargetOption
 import com.attention.workspace.state.AgendaTimeRecord
+import com.attention.workspace.state.AgendaWorkbenchSection
 import com.attention.workspace.state.agendaLabel
 import com.attention.workspace.state.agendaWeekdayLabel
+import kotlinx.coroutines.launch
 import java.time.LocalDate
 
 /**
@@ -61,6 +68,13 @@ import java.time.LocalDate
  *
  * 原来的今天工作台与日程页在这一页合并：今天、明天、所有日期与任意规划日
  * 是同一页上的日期范围，共享同一套列表、编辑、完成、提醒与从条目开始计时的交互。
+ *
+ * ## 首屏顺序
+ *
+ * 页面按投影给出的 [AgendaScreenState.workbenchSections] 自上而下渲染：
+ * 规划日与每日容量摘要、时间轴、进行中的计时状态、添加日程入口、事后补记，
+ * 重复日程作为折叠的次级入口排在最后。页面因此没有自己的顺序副本，
+ * 「首屏固定为这个顺序」是一条由投影与测试共同钉住的约定。
  *
  * 提醒权限不在这里申请：页面只发出 [AgendaActions.requestReminderPermission] intent，
  * 权限检查与申请由组合根 adapter 完成（ADR-0005 第 4 节「Android adapter 归属组合根」）。
@@ -78,6 +92,11 @@ internal fun AgendaScreen(
     var dateError by remember { mutableStateOf(false) }
     val scheduleForm = rememberAgendaScheduleForm()
     val recurrenceForm = rememberAgendaRecurrenceForm()
+    // 重复日程折叠在页面 module 内：它是次级入口，能力没有删除，只是收在一次点击之后。
+    val disclosure = rememberAgendaDisclosureState()
+    val scrollState = rememberScrollState()
+    val scope = rememberCoroutineScope()
+    var addScheduleTop by remember { mutableStateOf(0f) }
     var editingRow by remember { mutableStateOf<AgendaScheduleRow?>(null) }
     var editingRecord by remember { mutableStateOf<AgendaTimeRecord?>(null) }
     var pendingDeleteRecordId by remember { mutableStateOf<String?>(null) }
@@ -93,275 +112,67 @@ internal fun AgendaScreen(
         date = value?.toString() ?: today
         dateError = false
     }
+    fun openPlanningDay() {
+        val parsed = runCatching { LocalDate.parse(date) }.getOrNull()
+        if (parsed == null) dateError = true else selectDate(parsed)
+    }
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(tokens.spacing.large),
+        Modifier.fillMaxSize().verticalScroll(scrollState).padding(tokens.spacing.large),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text(state.headingLabel, style = tokens.typography.display, modifier = Modifier.testTag("agenda-filter"))
-        Text("日程条目可带预计时长；它不会自动变成实际投入。")
-        // 运行中的计时留在日程页：计时卡下线之后，用户仍然必须看得见并停得掉正在跑的计时。
-        state.activeTimer?.let { timer ->
-            Card(Modifier.fillMaxWidth().testTag("agenda-running-timer"), shape = RoundedCornerShape(tokens.radius.medium)) {
-                Row(
-                    Modifier.padding(tokens.spacing.medium),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            "正在计时：${timer.targetLabel} · ${timer.elapsedMinutes} 分钟" +
-                                if (timer.paused) "（已暂停）" else "",
-                            style = tokens.typography.body,
-                        )
-                    }
-                    AttentionTextButton(
-                        onClick = actions::stopRunningTimer,
-                        modifier = Modifier.testTag("agenda-running-timer-stop"),
-                    ) { Text("停止计时") }
-                }
-            }
-        }
-        // 日期范围切换：今天、明天与所有日期是同一页上的三个范围，不是三个顶级入口。
-        // 选中态用填充色之外的图标与语义表达，不依赖颜色单独传达。
-        if (state.ranges.isNotEmpty()) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                state.ranges.forEach { range ->
-                    val selected = range.selected
-                    val tag = when (range.scope) {
-                        AgendaRangeScope.TODAY -> "agenda-range-today"
-                        AgendaRangeScope.TOMORROW -> "agenda-range-tomorrow"
-                        AgendaRangeScope.ALL_DATES -> "agenda-range-all-dates"
-                    }
-                    if (selected) {
-                        AttentionSelectedIndicator(
-                            selected = true,
-                            label = range.label,
-                            modifier = Modifier.testTag(tag),
-                        )
-                    } else {
-                        AttentionTextButton(
-                            onClick = {
-                                if (range.scope == AgendaRangeScope.ALL_DATES) actions.selectAllDates()
-                                else range.date?.let(actions::selectPlanningDate)
-                            },
-                            modifier = Modifier.testTag(tag),
-                        ) { Text(range.label) }
-                    }
-                }
-            }
-        }
-        Box {
-            AttentionOutlinedButton(onClick = { dateMenuExpanded = true }, modifier = Modifier.testTag("agenda-date-menu")) {
-                Text(state.filterLabel)
-            }
-            DropdownMenu(expanded = dateMenuExpanded, onDismissRequest = { dateMenuExpanded = false }) {
-                DropdownMenuItem(
-                    text = { Text("所有日期") },
-                    onClick = { selectDate(null); dateMenuExpanded = false },
-                    modifier = Modifier.testTag("agenda-all-dates"),
+        state.workbenchSections.forEach { section ->
+            when (section) {
+                AgendaWorkbenchSection.PLANNING_DAY_SUMMARY -> AgendaSummarySection(
+                    state = state,
+                    date = date,
+                    dateError = dateError,
+                    onDateChange = { value -> date = value; dateError = false },
+                    onOpenPlanningDay = ::openPlanningDay,
+                    onSelectDate = ::selectDate,
+                    dateMenuExpanded = dateMenuExpanded,
+                    onDateMenuChange = { dateMenuExpanded = it },
+                    actions = actions,
                 )
-                state.availableDates.forEach { availableDate ->
-                    DropdownMenuItem(
-                        text = { Text(availableDate.label) },
-                        onClick = { selectDate(availableDate.date); dateMenuExpanded = false },
-                        modifier = Modifier.testTag("agenda-date-${availableDate.date}"),
-                    )
+
+                AgendaWorkbenchSection.TIMELINE -> AgendaTimelineSection(
+                    state = state,
+                    actions = actions,
+                    onEditRow = { editingRow = it },
+                    onAddFirstSchedule = {
+                        // 空态直接给出添加日程入口：把添加表单滚进视野，而不是让用户自己找
+                        scope.launch { scrollState.animateScrollTo(addScheduleTop.toInt()) }
+                    },
+                )
+
+                AgendaWorkbenchSection.RUNNING_TIMER -> state.activeTimer?.let { timer ->
+                    AgendaRunningTimerSection(timer = timer, actions = actions)
                 }
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(date, { date = it; dateError = false }, label = { Text("新增日程规划日 YYYY-MM-DD") }, modifier = Modifier.weight(1f), singleLine = true, isError = dateError, supportingText = if (dateError) ({ Text("请输入有效的规划日") }) else null)
-            AttentionOutlinedButton(onClick = {
-                val parsed = runCatching { LocalDate.parse(date) }.getOrNull()
-                if (parsed == null) dateError = true else selectDate(parsed)
-            }) { Text("打开规划日") }
-        }
-        state.selectedCapacityLabel?.let { capacityLabel ->
-            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
-                Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("每日容量", style = tokens.typography.body)
-                    Text(capacityLabel, modifier = Modifier.testTag("agenda-capacity-summary"))
-                }
-            }
-        }
-        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
-            Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("重复日程", style = tokens.typography.body)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OutlinedTextField(recurrenceForm.title, recurrenceForm::changeTitle, label = { Text("重复标题") }, modifier = Modifier.weight(1f), singleLine = true)
-                    ScheduleFrequency.entries.forEach { value ->
-                        if (recurrenceForm.frequency == value) AttentionButton(onClick = {}) { Text(value.agendaLabel()) }
-                        else AttentionOutlinedButton(onClick = { recurrenceForm.selectFrequency(value) }) { Text(value.agendaLabel()) }
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(recurrenceForm.untilDate, recurrenceForm::changeUntilDate, label = { Text("结束规划日（可选）") }, modifier = Modifier.weight(1f), singleLine = true)
-                    OutlinedTextField(recurrenceForm.estimatedMinutes, recurrenceForm::changeEstimatedMinutes, label = { Text("预计分钟（可选）") }, modifier = Modifier.width(140.dp), singleLine = true)
-                    OutlinedTextField(recurrenceForm.reminderTime, recurrenceForm::changeReminderTime, label = { Text("提醒 HH:mm（可选）") }, modifier = Modifier.width(150.dp).testTag("recurrence-reminder-input"), singleLine = true)
-                }
-                when (recurrenceForm.frequency) {
-                    ScheduleFrequency.WEEKLY -> {
-                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                            (1..7).forEach { weekday ->
-                                Row {
-                                    Checkbox(
-                                        checked = weekday in recurrenceForm.weekdays,
-                                        onCheckedChange = { checked -> recurrenceForm.toggleWeekday(weekday, checked) },
-                                    )
-                                    Text(agendaWeekdayLabel(weekday), modifier = Modifier.padding(top = 12.dp))
-                                }
-                            }
-                        }
-                    }
-                    ScheduleFrequency.MONTHLY -> {
-                        OutlinedTextField(recurrenceForm.dayOfMonth, recurrenceForm::changeDayOfMonth, label = { Text("每月日期 1-31") }, modifier = Modifier.width(160.dp), singleLine = true)
-                    }
-                    ScheduleFrequency.DAILY -> Unit
-                }
-                Box {
-                    AttentionOutlinedButton(onClick = { recurrenceForm.toggleTargetMenu(true) }) {
-                        Text(state.targets.firstOrNull { it.targetId == recurrenceForm.targetId }?.title ?: "关联计划（可选）")
-                    }
-                    DropdownMenu(
-                        expanded = recurrenceForm.targetMenuExpanded,
-                        onDismissRequest = { recurrenceForm.toggleTargetMenu(false) },
+
+                AgendaWorkbenchSection.ADD_SCHEDULE -> {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .onGloballyPositioned { coordinates -> addScheduleTop = coordinates.positionInParent().y },
                     ) {
-                        DropdownMenuItem(text = { Text("不关联计划") }, onClick = { recurrenceForm.selectTarget(null) })
-                        state.targets.forEach { target ->
-                            DropdownMenuItem(text = { Text(target.title) }, onClick = { recurrenceForm.selectTarget(target.targetId) })
-                        }
+                        AgendaAddScheduleSection(state = state, scheduleForm = scheduleForm, date = date, actions = actions)
                     }
                 }
-                recurrenceForm.error?.let { AttentionInlineError(message = it) }
-                AttentionButton(onClick = {
-                    val parsedDate = runCatching { LocalDate.parse(date) }.getOrNull()
-                    val untilDateText = recurrenceForm.untilDate.trim()
-                    val parsedUntilDate = untilDateText.takeIf(String::isNotEmpty)?.let { value ->
-                        runCatching { LocalDate.parse(value) }.getOrNull()
-                    }
-                    val estimatedMinutesText = recurrenceForm.estimatedMinutes.trim()
-                    val parsedEstimatedMinutes = estimatedMinutesText.takeIf(String::isNotEmpty)?.toIntOrNull()
-                    val parsedReminderMinute = parseScheduleMinute(recurrenceForm.reminderTime)
-                    val parsedDayOfMonth = recurrenceForm.dayOfMonth.trim().takeIf(String::isNotEmpty)?.toIntOrNull()
-                    val error = validateRecurrenceForm(
-                        recurrenceForm.title,
-                        parsedDate,
-                        untilDateText,
-                        parsedUntilDate,
-                        recurrenceForm.frequency,
-                        recurrenceForm.weekdays,
-                        parsedDayOfMonth,
-                        estimatedMinutesText,
-                        parsedEstimatedMinutes,
-                        recurrenceForm.reminderTime,
-                        parsedReminderMinute,
-                    )
-                    if (error != null) {
-                        recurrenceForm.showError(error)
-                    } else {
-                        actions.addRecurrenceAndMaterialize(recurrenceForm.toDraft(parsedDate!!))
-                        if (parsedReminderMinute != null) actions.requestReminderPermission()
-                        recurrenceForm.reset()
-                    }
-                }) { Text("创建并生成未来 30 天") }
-                state.recurrenceRules.forEach { rule ->
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(rule.label, Modifier.weight(1f))
-                        if (rule.active) AttentionTextButton(onClick = { actions.stopRecurrence(rule.ruleId) }) { Text("停止未来生成") }
-                        else Text("已停止")
-                    }
-                }
-            }
-        }
-        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
-            Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                // 选中明天时突出添加日程：颜色之外还有图标与文案，说明在为哪一天安排。
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = if (state.highlightAddSchedule) Modifier.testTag("agenda-add-highlight") else Modifier,
-                ) {
-                    if (state.highlightAddSchedule) {
-                        Icon(Icons.AutoMirrored.Filled.EventNote, contentDescription = "为明天安排日程", modifier = Modifier.size(tokens.spacing.medium))
-                    }
-                    Text(state.addScheduleHeadingLabel, style = tokens.typography.body)
-                }
-                OutlinedTextField(scheduleForm.title, scheduleForm::changeTitle, label = { Text("日程标题") }, modifier = Modifier.fillMaxWidth().testTag("agenda-title-input"), singleLine = true)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(scheduleForm.startTime, scheduleForm::changeStartTime, label = { Text("开始时间 HH:mm（可选）") }, modifier = Modifier.weight(1f).testTag("agenda-start-input"), singleLine = true)
-                    OutlinedTextField(scheduleForm.endTime, scheduleForm::changeEndTime, label = { Text("结束时间 HH:mm（可选）") }, modifier = Modifier.weight(1f).testTag("agenda-end-input"), singleLine = true)
-                    OutlinedTextField(scheduleForm.estimate, scheduleForm::changeEstimate, label = { Text("预计分钟") }, modifier = Modifier.width(110.dp).testTag("agenda-estimate-input"), singleLine = true)
-                }
-                OutlinedTextField(scheduleForm.reminderTime, scheduleForm::changeReminderTime, label = { Text("提醒 HH:mm（可选）") }, modifier = Modifier.fillMaxWidth().testTag("agenda-reminder-input"), singleLine = true)
-                OutlinedTextField(scheduleForm.note, scheduleForm::changeNote, label = { Text("备注（可选）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                Box {
-                    AttentionOutlinedButton(onClick = { scheduleForm.toggleTargetMenu(true) }) {
-                        Text(state.targets.firstOrNull { it.targetId == scheduleForm.targetId }?.title ?: "关联计划（可选）")
-                    }
-                    DropdownMenu(
-                        expanded = scheduleForm.targetMenuExpanded,
-                        onDismissRequest = { scheduleForm.toggleTargetMenu(false) },
-                    ) {
-                        DropdownMenuItem(text = { Text("不关联计划") }, onClick = { scheduleForm.selectTarget(null) })
-                        state.targets.forEach { target ->
-                            DropdownMenuItem(text = { Text(target.title) }, onClick = { scheduleForm.selectTarget(target.targetId) })
-                        }
-                    }
-                }
-                scheduleForm.error?.let { AttentionInlineError(message = it) }
-                AttentionButton(modifier = Modifier.testTag("agenda-add-submit"), onClick = {
-                    val parsedDate = runCatching { LocalDate.parse(date) }.getOrNull()
-                    val parsedStart = parseScheduleMinute(scheduleForm.startTime)
-                    val parsedEnd = parseScheduleMinute(scheduleForm.endTime, allowEndOfDay = true)
-                    val estimated = scheduleForm.estimate.trim().takeIf(String::isNotEmpty)?.toIntOrNull()
-                    val parsedReminder = parseScheduleMinute(scheduleForm.reminderTime)
-                    val error = validateScheduleForm(
-                        ScheduleFormInput(
-                            title = scheduleForm.title,
-                            date = parsedDate,
-                            startText = scheduleForm.startTime,
-                            endText = scheduleForm.endTime,
-                            estimateText = scheduleForm.estimate,
-                            startMinute = parsedStart,
-                            endMinute = parsedEnd,
-                            estimateMinutes = estimated,
-                            reminderText = scheduleForm.reminderTime,
-                            reminderMinute = parsedReminder,
-                        ),
-                    )
-                    if (error != null) {
-                        scheduleForm.showError(error)
-                    } else {
-                        actions.addSchedule(scheduleForm.toDraft(parsedDate!!))
-                        if (parsedReminder != null) actions.requestReminderPermission()
-                        scheduleForm.reset()
-                    }
-                }) { Text("添加日程") }
-            }
-        }
-        state.emptyLabel?.let { emptyLabel ->
-            Text(emptyLabel, modifier = Modifier.testTag("agenda-empty"))
-        }
-        state.dateSections.forEach { section ->
-            Text("规划日 ${section.planningDate}", style = tokens.typography.title)
-            Text(section.capacityLabel, modifier = Modifier.testTag("agenda-capacity-summary-${section.planningDate}"))
-            section.rows.forEach { row ->
-                AgendaScheduleRowCard(row, actions = actions, onEdit = { editingRow = it })
-            }
-        }
-        state.selectedRows.forEach { row ->
-            AgendaScheduleRowCard(row, actions = actions, onEdit = { editingRow = it })
-        }
-        // 所选规划日上的实际投入：手动时间账本的编辑与删除跟着合并后的日程页走。
-        if (state.timeRecords.isNotEmpty()) {
-            Text("实际投入记录", style = tokens.typography.title)
-            if (state.recordedMinutesLabel.isNotBlank()) Text(state.recordedMinutesLabel)
-            state.timeRecords.forEach { record ->
-                AgendaTimeRecordCard(
-                    record = record,
-                    targets = state.targets,
-                    isEditing = editingRecord?.entryId == record.entryId,
-                    onEdit = { editingRecord = record },
-                    onStopEdit = { editingRecord = null },
-                    onDelete = { pendingDeleteRecordId = record.entryId },
+
+                AgendaWorkbenchSection.BACKFILL -> AgendaBackfillSection(
+                    state = state,
+                    editingRecord = editingRecord,
+                    onEditRecord = { editingRecord = it },
+                    onStopEditingRecord = { editingRecord = null },
+                    onDeleteRecord = { pendingDeleteRecordId = it },
+                    actions = actions,
+                )
+
+                AgendaWorkbenchSection.RECURRENCE -> AgendaRecurrenceSection(
+                    state = state,
+                    form = recurrenceForm,
+                    expanded = disclosure.recurrenceVisible,
+                    onToggle = disclosure::toggleRecurrence,
+                    date = date,
                     actions = actions,
                 )
             }
@@ -397,35 +208,503 @@ internal fun AgendaScreen(
     }
 }
 
-/** 一条日程条目行。展示与可点击的动作都来自投影，页面只发 intent。 */
+/**
+ * 首屏第一块：规划日与每日容量的只读摘要，外加切换查看范围的导航。
+ *
+ * 它只读不写——完整设置继续走统计页底部的「设置与数据」，因此这里没有任何设置表单。
+ */
+@Composable
+private fun AgendaSummarySection(
+    state: AgendaScreenState,
+    date: String,
+    dateError: Boolean,
+    onDateChange: (String) -> Unit,
+    onOpenPlanningDay: () -> Unit,
+    onSelectDate: (LocalDate?) -> Unit,
+    dateMenuExpanded: Boolean,
+    onDateMenuChange: (Boolean) -> Unit,
+    actions: AgendaActions,
+) {
+    val tokens = attentionTokens()
+    val summary = state.workbenchSummary
+    Column(Modifier.fillMaxWidth().testTag("agenda-section-summary"), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(state.headingLabel, style = tokens.typography.display, modifier = Modifier.testTag("agenda-filter"))
+        Text("日程条目可带预计时长；它不会自动变成实际投入。")
+        // 日期范围切换：今天、明天与所有日期是同一页上的三个范围，不是三个顶级入口。
+        // 选中态用填充色之外的图标与语义表达，不依赖颜色单独传达。
+        if (state.ranges.isNotEmpty()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                state.ranges.forEach { range ->
+                    val selected = range.selected
+                    val tag = when (range.scope) {
+                        AgendaRangeScope.TODAY -> "agenda-range-today"
+                        AgendaRangeScope.TOMORROW -> "agenda-range-tomorrow"
+                        AgendaRangeScope.ALL_DATES -> "agenda-range-all-dates"
+                    }
+                    if (selected) {
+                        AttentionSelectedIndicator(
+                            selected = true,
+                            label = range.label,
+                            modifier = Modifier.testTag(tag),
+                        )
+                    } else {
+                        AttentionTextButton(
+                            onClick = {
+                                if (range.scope == AgendaRangeScope.ALL_DATES) actions.selectAllDates()
+                                else range.date?.let(actions::selectPlanningDate)
+                            },
+                            modifier = Modifier.testTag(tag),
+                        ) { Text(range.label) }
+                    }
+                }
+            }
+        }
+        Box {
+            AttentionOutlinedButton(onClick = { onDateMenuChange(true) }, modifier = Modifier.testTag("agenda-date-menu")) {
+                Text(state.filterLabel)
+            }
+            DropdownMenu(expanded = dateMenuExpanded, onDismissRequest = { onDateMenuChange(false) }) {
+                DropdownMenuItem(
+                    text = { Text("所有日期") },
+                    onClick = { onSelectDate(null); onDateMenuChange(false) },
+                    modifier = Modifier.testTag("agenda-all-dates"),
+                )
+                state.availableDates.forEach { availableDate ->
+                    DropdownMenuItem(
+                        text = { Text(availableDate.label) },
+                        onClick = { onSelectDate(availableDate.date); onDateMenuChange(false) },
+                        modifier = Modifier.testTag("agenda-date-${availableDate.date}"),
+                    )
+                }
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                date,
+                onDateChange,
+                label = { Text("新增日程规划日 YYYY-MM-DD") },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                isError = dateError,
+                supportingText = if (dateError) ({ Text("请输入有效的规划日") }) else null,
+            )
+            AttentionOutlinedButton(onClick = onOpenPlanningDay) { Text("打开规划日") }
+        }
+        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
+            Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("规划日与每日容量", style = tokens.typography.body)
+                Text(summary.planningDateLabel)
+                Text(summary.boundaryLabel, modifier = Modifier.testTag("agenda-planning-day-boundary"))
+                Text(summary.weekStartLabel, modifier = Modifier.testTag("agenda-week-start"))
+                Text(summary.capacitySettingLabel, modifier = Modifier.testTag("agenda-capacity-setting"))
+                summary.capacityUsageLabel?.let { capacityLabel ->
+                    Text(capacityLabel, modifier = Modifier.testTag("agenda-capacity-summary"))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 首屏第二块：时间轴。有具体时间的日程按开始/结束时间排列，正在计时的固定在最前；
+ * 没有具体时间的日程进入独立的「未安排时间」区域。当天没有日程时给出「安排今天第一件事」。
+ *
+ * 顺序、行上的计划投入与实际投入、以及「已超出容量」提示都来自投影，页面只按给定顺序渲染。
+ */
+@Composable
+private fun AgendaTimelineSection(
+    state: AgendaScreenState,
+    actions: AgendaActions,
+    onEditRow: (AgendaScheduleRow) -> Unit,
+    onAddFirstSchedule: () -> Unit,
+) {
+    val tokens = attentionTokens()
+    Column(Modifier.fillMaxWidth().testTag("agenda-section-timeline"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("时间轴", style = tokens.typography.title, modifier = Modifier.testTag("agenda-timeline"))
+        state.emptyLabel?.let { emptyLabel ->
+            Text(emptyLabel, modifier = Modifier.testTag("agenda-empty"))
+        }
+        if (state.dateSections.isEmpty()) {
+            if (state.timelineRows.isEmpty() && state.unscheduledRows.isEmpty()) {
+                state.workbenchEmptyLabel?.let { emptyLabel ->
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.testTag("agenda-workbench-empty")) {
+                        Text(emptyLabel)
+                        AttentionButton(onClick = onAddFirstSchedule, modifier = Modifier.testTag("agenda-first-schedule")) {
+                            Text("添加日程")
+                        }
+                    }
+                }
+            }
+            AgendaTimelineRows(state.timelineRows, actions, onEditRow)
+            AgendaUnscheduledGroup(state.unscheduledRows, actions, onEditRow)
+        } else {
+            state.dateSections.forEach { section ->
+                Text("规划日 ${section.planningDate}", style = tokens.typography.title)
+                Text(section.capacityLabel, modifier = Modifier.testTag("agenda-capacity-summary-${section.planningDate}"))
+                AgendaTimelineRows(section.timelineRows, actions, onEditRow)
+                AgendaUnscheduledGroup(section.unscheduledRows, actions, onEditRow)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgendaTimelineRows(
+    rows: List<AgendaScheduleRow>,
+    actions: AgendaActions,
+    onEditRow: (AgendaScheduleRow) -> Unit,
+) {
+    rows.forEach { row ->
+        AgendaScheduleRowCard(row, actions = actions, onEdit = { onEditRow(row) })
+    }
+}
+
+/** 没有具体时间的日程。它们仍然属于这一天，只是不假装有一个固定时段。 */
+@Composable
+private fun AgendaUnscheduledGroup(
+    rows: List<AgendaScheduleRow>,
+    actions: AgendaActions,
+    onEditRow: (AgendaScheduleRow) -> Unit,
+) {
+    if (rows.isEmpty()) return
+    val tokens = attentionTokens()
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.testTag("agenda-unscheduled")) {
+        Text("未安排时间", style = tokens.typography.title, modifier = Modifier.testTag("agenda-unscheduled-heading"))
+        rows.forEach { row ->
+            AgendaScheduleRowCard(row, actions = actions, onEdit = { onEditRow(row) })
+        }
+    }
+}
+
+/**
+ * 首屏第三块：进行中的计时状态。
+ *
+ * 计时卡下线之后，运行中的计时仍然必须看得见并停得掉；正在计时的那条日程由时间轴置顶强调，
+ * 这里只保留状态与「停止计时」。
+ */
+@Composable
+private fun AgendaRunningTimerSection(
+    timer: AgendaActiveTimer,
+    actions: AgendaActions,
+) {
+    val tokens = attentionTokens()
+    Card(
+        Modifier.fillMaxWidth().testTag("agenda-running-timer"),
+        shape = RoundedCornerShape(tokens.radius.medium),
+    ) {
+        Row(
+            Modifier.padding(tokens.spacing.medium),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "正在计时：${timer.targetLabel} · ${timer.elapsedMinutes} 分钟" +
+                        if (timer.paused) "（已暂停）" else "",
+                    style = tokens.typography.body,
+                )
+            }
+            AttentionTextButton(
+                onClick = actions::stopRunningTimer,
+                modifier = Modifier.testTag("agenda-running-timer-stop"),
+            ) { Text("停止计时") }
+        }
+    }
+}
+
+/** 首屏第四块：添加日程入口。表单本身仍是页面本地状态，提交时只发一个草稿 intent。 */
+@Composable
+private fun AgendaAddScheduleSection(
+    state: AgendaScreenState,
+    scheduleForm: AgendaScheduleForm,
+    date: String,
+    actions: AgendaActions,
+) {
+    val tokens = attentionTokens()
+    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
+        Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // 选中明天时突出添加日程：颜色之外还有图标与文案，说明在为哪一天安排。
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = if (state.highlightAddSchedule) Modifier.testTag("agenda-add-highlight") else Modifier,
+            ) {
+                if (state.highlightAddSchedule) {
+                    Icon(Icons.AutoMirrored.Filled.EventNote, contentDescription = "为明天安排日程", modifier = Modifier.size(tokens.spacing.medium))
+                }
+                Text(state.addScheduleHeadingLabel, style = tokens.typography.body)
+            }
+            OutlinedTextField(scheduleForm.title, scheduleForm::changeTitle, label = { Text("日程标题") }, modifier = Modifier.fillMaxWidth().testTag("agenda-title-input"), singleLine = true)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(scheduleForm.startTime, scheduleForm::changeStartTime, label = { Text("开始时间 HH:mm（可选）") }, modifier = Modifier.weight(1f).testTag("agenda-start-input"), singleLine = true)
+                OutlinedTextField(scheduleForm.endTime, scheduleForm::changeEndTime, label = { Text("结束时间 HH:mm（可选）") }, modifier = Modifier.weight(1f).testTag("agenda-end-input"), singleLine = true)
+                OutlinedTextField(scheduleForm.estimate, scheduleForm::changeEstimate, label = { Text("预计分钟") }, modifier = Modifier.width(110.dp).testTag("agenda-estimate-input"), singleLine = true)
+            }
+            OutlinedTextField(scheduleForm.reminderTime, scheduleForm::changeReminderTime, label = { Text("提醒 HH:mm（可选）") }, modifier = Modifier.fillMaxWidth().testTag("agenda-reminder-input"), singleLine = true)
+            OutlinedTextField(scheduleForm.note, scheduleForm::changeNote, label = { Text("备注（可选）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            Box {
+                AttentionOutlinedButton(onClick = { scheduleForm.toggleTargetMenu(true) }) {
+                    Text(state.targets.firstOrNull { it.targetId == scheduleForm.targetId }?.title ?: "关联计划（可选）")
+                }
+                DropdownMenu(
+                    expanded = scheduleForm.targetMenuExpanded,
+                    onDismissRequest = { scheduleForm.toggleTargetMenu(false) },
+                ) {
+                    DropdownMenuItem(text = { Text("不关联计划") }, onClick = { scheduleForm.selectTarget(null) })
+                    state.targets.forEach { target ->
+                        DropdownMenuItem(text = { Text(target.title) }, onClick = { scheduleForm.selectTarget(target.targetId) })
+                    }
+                }
+            }
+            scheduleForm.error?.let { AttentionInlineError(message = it) }
+            AttentionButton(modifier = Modifier.testTag("agenda-add-submit"), onClick = {
+                val parsedDate = runCatching { LocalDate.parse(date) }.getOrNull()
+                val parsedStart = parseScheduleMinute(scheduleForm.startTime)
+                val parsedEnd = parseScheduleMinute(scheduleForm.endTime, allowEndOfDay = true)
+                val estimated = scheduleForm.estimate.trim().takeIf(String::isNotEmpty)?.toIntOrNull()
+                val parsedReminder = parseScheduleMinute(scheduleForm.reminderTime)
+                val error = validateScheduleForm(
+                    ScheduleFormInput(
+                        title = scheduleForm.title,
+                        date = parsedDate,
+                        startText = scheduleForm.startTime,
+                        endText = scheduleForm.endTime,
+                        estimateText = scheduleForm.estimate,
+                        startMinute = parsedStart,
+                        endMinute = parsedEnd,
+                        estimateMinutes = estimated,
+                        reminderText = scheduleForm.reminderTime,
+                        reminderMinute = parsedReminder,
+                    ),
+                )
+                if (error != null) {
+                    scheduleForm.showError(error)
+                } else {
+                    actions.addSchedule(scheduleForm.toDraft(parsedDate!!))
+                    if (parsedReminder != null) actions.requestReminderPermission()
+                    scheduleForm.reset()
+                }
+            }) { Text("添加日程") }
+        }
+    }
+}
+
+/**
+ * 首屏最后一块：事后补记——所选规划日上已经记录的实际投入。
+ *
+ * 手动时间账本的编辑与删除跟着合并后的日程页走，因此这里既能补上遗漏的投入，也能更正与删除。
+ */
+@Composable
+private fun AgendaBackfillSection(
+    state: AgendaScreenState,
+    editingRecord: AgendaTimeRecord?,
+    onEditRecord: (AgendaTimeRecord) -> Unit,
+    onStopEditingRecord: () -> Unit,
+    onDeleteRecord: (String) -> Unit,
+    actions: AgendaActions,
+) {
+    val tokens = attentionTokens()
+    Column(
+        Modifier.fillMaxWidth().testTag("agenda-section-backfill"),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("事后补记", style = tokens.typography.title, modifier = Modifier.testTag("agenda-backfill"))
+        if (state.timeRecords.isNotEmpty() && state.recordedMinutesLabel.isNotBlank()) {
+            Text(state.recordedMinutesLabel)
+        }
+        state.timeRecords.forEach { record ->
+            AgendaTimeRecordCard(
+                record = record,
+                targets = state.targets,
+                isEditing = editingRecord?.entryId == record.entryId,
+                onEdit = { onEditRecord(record) },
+                onStopEdit = onStopEditingRecord,
+                onDelete = { onDeleteRecord(record.entryId) },
+                actions = actions,
+            )
+        }
+    }
+}
+
+/**
+ * 重复日程的次级入口。
+ *
+ * 能力没有删除：展开之后，创建重复规则与「停止未来生成」都仍然可用。默认折叠只是让它
+ * 不再占据首屏主路径；折叠状态属于页面 module，不写入任何持久化。
+ */
+@Composable
+private fun AgendaRecurrenceSection(
+    state: AgendaScreenState,
+    form: AgendaRecurrenceForm,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    date: String,
+    actions: AgendaActions,
+) {
+    val tokens = attentionTokens()
+    Column(
+        Modifier.fillMaxWidth().testTag("agenda-section-recurrence"),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        AttentionOutlinedButton(onClick = onToggle, modifier = Modifier.testTag("agenda-recurrence-toggle")) {
+            Text(if (expanded) "收起重复日程" else "重复日程（次级入口）")
+        }
+        if (expanded) {
+            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
+                Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("重复日程", style = tokens.typography.body)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        OutlinedTextField(form.title, form::changeTitle, label = { Text("重复标题") }, modifier = Modifier.weight(1f), singleLine = true)
+                        ScheduleFrequency.entries.forEach { value ->
+                            if (form.frequency == value) AttentionButton(onClick = {}) { Text(value.agendaLabel()) }
+                            else AttentionOutlinedButton(onClick = { form.selectFrequency(value) }) { Text(value.agendaLabel()) }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(form.untilDate, form::changeUntilDate, label = { Text("结束规划日（可选）") }, modifier = Modifier.weight(1f), singleLine = true)
+                        OutlinedTextField(form.estimatedMinutes, form::changeEstimatedMinutes, label = { Text("预计分钟（可选）") }, modifier = Modifier.width(140.dp), singleLine = true)
+                        OutlinedTextField(form.reminderTime, form::changeReminderTime, label = { Text("提醒 HH:mm（可选）") }, modifier = Modifier.width(150.dp).testTag("recurrence-reminder-input"), singleLine = true)
+                    }
+                    when (form.frequency) {
+                        ScheduleFrequency.WEEKLY -> {
+                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                                (1..7).forEach { weekday ->
+                                    Row {
+                                        Checkbox(
+                                            checked = weekday in form.weekdays,
+                                            onCheckedChange = { checked -> form.toggleWeekday(weekday, checked) },
+                                        )
+                                        Text(agendaWeekdayLabel(weekday), modifier = Modifier.padding(top = 12.dp))
+                                    }
+                                }
+                            }
+                        }
+                        ScheduleFrequency.MONTHLY -> {
+                            OutlinedTextField(form.dayOfMonth, form::changeDayOfMonth, label = { Text("每月日期 1-31") }, modifier = Modifier.width(160.dp), singleLine = true)
+                        }
+                        ScheduleFrequency.DAILY -> Unit
+                    }
+                    Box {
+                        AttentionOutlinedButton(onClick = { form.toggleTargetMenu(true) }) {
+                            Text(state.targets.firstOrNull { it.targetId == form.targetId }?.title ?: "关联计划（可选）")
+                        }
+                        DropdownMenu(
+                            expanded = form.targetMenuExpanded,
+                            onDismissRequest = { form.toggleTargetMenu(false) },
+                        ) {
+                            DropdownMenuItem(text = { Text("不关联计划") }, onClick = { form.selectTarget(null) })
+                            state.targets.forEach { target ->
+                                DropdownMenuItem(text = { Text(target.title) }, onClick = { form.selectTarget(target.targetId) })
+                            }
+                        }
+                    }
+                    form.error?.let { AttentionInlineError(message = it) }
+                    AttentionButton(modifier = Modifier.testTag("agenda-recurrence-submit"), onClick = {
+                        val parsedDate = runCatching { LocalDate.parse(date) }.getOrNull()
+                        val untilDateText = form.untilDate.trim()
+                        val parsedUntilDate = untilDateText.takeIf(String::isNotEmpty)?.let { value ->
+                            runCatching { LocalDate.parse(value) }.getOrNull()
+                        }
+                        val estimatedMinutesText = form.estimatedMinutes.trim()
+                        val parsedEstimatedMinutes = estimatedMinutesText.takeIf(String::isNotEmpty)?.toIntOrNull()
+                        val parsedReminderMinute = parseScheduleMinute(form.reminderTime)
+                        val parsedDayOfMonth = form.dayOfMonth.trim().takeIf(String::isNotEmpty)?.toIntOrNull()
+                        val error = validateRecurrenceForm(
+                            form.title,
+                            parsedDate,
+                            untilDateText,
+                            parsedUntilDate,
+                            form.frequency,
+                            form.weekdays,
+                            parsedDayOfMonth,
+                            estimatedMinutesText,
+                            parsedEstimatedMinutes,
+                            form.reminderTime,
+                            parsedReminderMinute,
+                        )
+                        if (error != null) {
+                            form.showError(error)
+                        } else {
+                            actions.addRecurrenceAndMaterialize(form.toDraft(parsedDate!!))
+                            if (parsedReminderMinute != null) actions.requestReminderPermission()
+                            form.reset()
+                        }
+                    }) { Text("创建并生成未来 30 天") }
+                    state.recurrenceRules.forEach { rule ->
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(rule.label, Modifier.weight(1f))
+                            if (rule.active) {
+                                AttentionTextButton(
+                                    onClick = { actions.stopRecurrence(rule.ruleId) },
+                                    modifier = Modifier.testTag("agenda-recurrence-stop-${rule.ruleId}"),
+                                ) { Text("停止未来生成") }
+                            } else {
+                                Text("已停止")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 一条日程条目行。展示与可点击的动作都来自投影，页面只发 intent。
+ *
+ * 计划投入、实际投入、完成状态与「已超出容量」都由投影给出，页面不比较分钟数，
+ * 因此预计时长永远不会被当成实际投入展示。正在计时的那条用文字与图标说明状态，
+ * 锈橙色只是补充语义。
+ */
 @Composable
 private fun AgendaScheduleRowCard(
     row: AgendaScheduleRow,
     actions: AgendaActions,
-    onEdit: (AgendaScheduleRow) -> Unit,
+    onEdit: () -> Unit,
 ) {
     val tokens = attentionTokens()
     val entry: ScheduleEntry = row.entry
     Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(row.title, style = tokens.typography.body)
-                Text(row.detailLabel)
-                if (row.note.isNotBlank()) Text(row.note)
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            if (row.timing) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("schedule-timing-cue")) {
+                    Icon(
+                        Icons.Filled.Timer,
+                        contentDescription = "正在计时",
+                        tint = tokens.brand.timingInProgress.accent,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Text(
+                        "正在计时",
+                        style = tokens.typography.caption,
+                        color = tokens.brand.timingInProgress.accent,
+                        modifier = Modifier.padding(start = tokens.spacing.small),
+                    )
+                }
             }
-            AttentionTextButton(onClick = { onEdit(row) }, modifier = Modifier.testTag("schedule-edit-${entry.id}")) { Text("编辑") }
-            AttentionTextButton(
-                onClick = { actions.startTimerFromEntry(entry) },
-                enabled = row.canStartTimer,
-                modifier = Modifier.testTag("schedule-start-timer-${entry.id}"),
-            ) { Text("开始计时") }
-            AttentionTextButton(
-                onClick = {
-                    if (entry.completed) actions.toggleScheduleCompleted(entry.id)
-                    else actions.confirmScheduleCompleted(entry.id)
-                },
-                modifier = Modifier.testTag("schedule-completion-${entry.id}"),
-            ) { Text(if (entry.completed) "取消完成" else "完成并记录") }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(row.title, style = tokens.typography.body)
+                    Text(row.detailLabel)
+                    row.targetLabel?.let { Text("关联计划：$it") }
+                    if (row.investmentLabel.isNotBlank()) Text(row.investmentLabel)
+                    row.capacityNotice?.let { notice ->
+                        Text(notice, color = tokens.brand.error.accent, modifier = Modifier.testTag("schedule-capacity-notice-${entry.id}"))
+                    }
+                    if (row.note.isNotBlank()) Text(row.note)
+                }
+                AttentionTextButton(onClick = onEdit, modifier = Modifier.testTag("schedule-edit-${entry.id}")) { Text("编辑") }
+                AttentionTextButton(
+                    onClick = { actions.startTimerFromEntry(entry) },
+                    enabled = row.canStartTimer,
+                    modifier = Modifier.testTag("schedule-start-timer-${entry.id}"),
+                ) { Text("开始计时") }
+                AttentionTextButton(
+                    onClick = {
+                        if (entry.completed) actions.toggleScheduleCompleted(entry.id)
+                        else actions.confirmScheduleCompleted(entry.id)
+                    },
+                    modifier = Modifier.testTag("schedule-completion-${entry.id}"),
+                ) { Text(if (entry.completed) "取消完成" else "完成并记录") }
+            }
         }
     }
 }

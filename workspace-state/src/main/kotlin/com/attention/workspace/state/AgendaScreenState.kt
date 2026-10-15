@@ -6,12 +6,18 @@ import com.attention.domain.RecurrenceRule
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.ScheduleFrequency
 import com.attention.domain.TimeEntrySource
-import com.attention.domain.agendaEntries
+import com.attention.domain.agendaDayTimelines
+import com.attention.domain.agendaTimeline
 import com.attention.domain.capacitySummary
 import com.attention.domain.elapsedMillis
+import com.attention.domain.exceedsDailyCapacity
 import com.attention.domain.formatMinuteOfDay
+import com.attention.domain.isScheduleInvestmentMet
 import com.attention.domain.planningDate
+import com.attention.domain.plannedMinutes
+import com.attention.domain.scheduleInvestedMinutes
 import com.attention.domain.timerTargetLabel
+import com.attention.domain.timingScheduleEntryId
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -27,6 +33,9 @@ data class AgendaDateOption(
 /**
  * 日程页上的一条日程条目行。展示文本与编辑表单的初值都由投影给出，
  * [entry] 只带这条条目自身的字段，不带整个领域状态。
+ *
+ * 计划投入、实际投入、完成状态与「已超出容量」都是领域判定的结果：页面不自己比较分钟数，
+ * 也不把预计时长当成实际投入展示（[investmentLabel] 是唯一给这两种投入的口径）。
  */
 data class AgendaScheduleRow(
     val entry: ScheduleEntry,
@@ -40,15 +49,57 @@ data class AgendaScheduleRow(
     val targetId: String?,
     /** 没有计时在进行时才允许从日程条目起计时。 */
     val canStartTimer: Boolean,
+    /** 计划投入、实际投入与完成状态，页面原样展示。 */
+    val investmentLabel: String = "",
+    /** 关联计划的名字；没有关联计划时为 null。 */
+    val targetLabel: String? = null,
+    /** 单条日程自己超出每日容量时的提示；没超载或未设置每日容量时为 null。 */
+    val capacityNotice: String? = null,
+    /** 这条日程就是正在计时的那一条：它固定在时间轴顶部，并由页面用文字与图标标明。 */
+    val timing: Boolean = false,
+    /** 完成状态的事实。判定来自领域的 `isScheduleInvestmentMet` 与条目自身的完成标记。 */
+    val completed: Boolean = false,
 )
 
 /**
- * 所有日期特殊视图下的一个规划日分组：一天的条目与这一天的每日容量。
+ * 所有日期特殊视图下的一个规划日分组：一天的时间轴与这一天的每日容量。
+ *
+ * [timelineRows] 是有具体时间、按开始/结束时间排列的条目（正在计时的固定在最前），
+ * [unscheduledRows] 是这一天里没有具体时间的条目。
  */
 data class AgendaDateSection(
     val planningDate: String,
     val capacityLabel: String,
-    val rows: List<AgendaScheduleRow>,
+    val timelineRows: List<AgendaScheduleRow>,
+    val unscheduledRows: List<AgendaScheduleRow>,
+)
+
+/**
+ * 工作台首屏的一个区块。顺序由投影给出，页面按这个顺序渲染，因此
+ * 「首屏自上而下固定为……」是一条可以被测试钉住的约定，而不是页面里的硬编码顺序。
+ */
+enum class AgendaWorkbenchSection {
+    PLANNING_DAY_SUMMARY,
+    TIMELINE,
+    RUNNING_TIMER,
+    ADD_SCHEDULE,
+    BACKFILL,
+    /** 重复日程折叠后的次级入口：它不占首屏主路径，但创建与停止未来生成仍然可达。 */
+    RECURRENCE,
+}
+
+/**
+ * 工作台顶部的只读摘要：规划日、规划日界线、周起始日与每日容量。
+ *
+ * 这里只读不写：完整设置继续走统计页底部的「设置与数据」，工作台不提供设置表单。
+ */
+data class AgendaWorkbenchSummary(
+    val planningDateLabel: String,
+    val boundaryLabel: String,
+    val weekStartLabel: String,
+    val capacitySettingLabel: String,
+    /** 所选规划日的已安排与容量读数；所有日期视图为 null。 */
+    val capacityUsageLabel: String?,
 )
 
 /**
@@ -122,8 +173,16 @@ data class AgendaScreenState(
     val availableDates: List<AgendaDateOption>,
     /** 选中规划日时的每日容量标签；所有日期视图为 null。 */
     val selectedCapacityLabel: String?,
-    /** 选中规划日时的条目。 */
-    val selectedRows: List<AgendaScheduleRow>,
+    /** 首屏顶部的只读规划日与每日容量摘要。 */
+    val workbenchSummary: AgendaWorkbenchSummary,
+    /** 首屏区块的自上而下顺序。页面按它渲染，不自己排顺序。 */
+    val workbenchSections: List<AgendaWorkbenchSection> = AgendaWorkbenchSection.entries.toList(),
+    /** 所选规划日没有任何日程条目时的空态引导；页面据此直接给出添加日程入口。 */
+    val workbenchEmptyLabel: String? = null,
+    /** 选中规划日时有具体时间、按开始/结束时间排列的条目，正在计时的固定在最前。 */
+    val timelineRows: List<AgendaScheduleRow> = emptyList(),
+    /** 选中规划日里没有具体时间的条目。 */
+    val unscheduledRows: List<AgendaScheduleRow> = emptyList(),
     /** 所有日期视图按规划日分组的条目。 */
     val dateSections: List<AgendaDateSection>,
     val emptyLabel: String?,
@@ -163,7 +222,6 @@ fun agendaScreenState(
     openScheduleId: String? = null,
 ): AgendaScreenState {
     val planningDay = state.planningDate(now, zone)
-    val entries = state.agendaEntries(selectedDate)
     val tomorrow = planningDay.plusDays(1)
     val availableDates = (state.schedules.mapNotNull { runCatching { LocalDate.parse(it.planningDate) }.getOrNull() } + planningDay)
         .distinct()
@@ -171,7 +229,10 @@ fun agendaScreenState(
         .map { date -> AgendaDateOption(date, "规划日 $date") }
     val targetTitles = state.targets.associate { it.id to it.title }
     val canStartTimer = state.activeTimer == null
-    fun row(entry: ScheduleEntry) = agendaRow(entry, targetTitles, zone, canStartTimer)
+    val runningEntryId = state.timingScheduleEntryId()
+    fun row(entry: ScheduleEntry) = agendaRow(state, entry, targetTitles, zone, canStartTimer, runningEntryId)
+    // 时间轴分组、每天的容量与空态都来自领域结果；页面只把它们读成行与标签
+    val selectedTimeline = if (selectedDate == null) null else state.agendaTimeline(selectedDate)
     // 所选规划日上的时间记录只筛一次：列表与合计读的是同一份，否则两处可能落在不同的数据上。
     val selectedTimeEntries = selectedDate
         ?.let { date -> state.timeEntries.filter { it.planningDate == date.toString() } }
@@ -185,20 +246,39 @@ fun agendaScreenState(
         selectedCapacityLabel = selectedDate?.let { date ->
             capacitySummaryLabel(state.capacitySummary(date.toString()))
         },
-        selectedRows = if (selectedDate == null) emptyList() else entries.map(::row),
+        workbenchSummary = AgendaWorkbenchSummary(
+            planningDateLabel = if (selectedDate == null) "所有日期" else "规划日 $selectedDate",
+            boundaryLabel = "规划日界线 " + formatAgendaMinute(state.settings.planningDayBoundaryMinutes),
+            weekStartLabel = "周起始日 " + weekDayLabel(state.settings.weekStartDay),
+            capacitySettingLabel = state.settings.dailyCapacityMinutes
+                ?.let { "每日容量 $it 分钟" }
+                ?: "每日容量未设置",
+            capacityUsageLabel = selectedDate?.let { date ->
+                capacitySummaryLabel(state.capacitySummary(date.toString()))
+            },
+        ),
+        workbenchEmptyLabel = if (selectedTimeline != null && selectedTimeline.timed.isEmpty() && selectedTimeline.unscheduled.isEmpty()) {
+            "安排今天第一件事"
+        } else {
+            null
+        },
+        timelineRows = selectedTimeline?.timed?.map(::row).orEmpty(),
+        unscheduledRows = selectedTimeline?.unscheduled?.map(::row).orEmpty(),
         dateSections = if (selectedDate != null) {
             emptyList()
         } else {
-            entries.groupBy { it.planningDate }.map { (date, dayEntries) ->
+            state.agendaDayTimelines().map { day ->
                 AgendaDateSection(
-                    planningDate = date,
-                    capacityLabel = capacitySummaryLabel(state.capacitySummary(date)),
-                    rows = dayEntries.map(::row),
+                    planningDate = day.planningDate,
+                    capacityLabel = capacitySummaryLabel(state.capacitySummary(day.planningDate)),
+                    timelineRows = day.timeline.timed.map(::row),
+                    unscheduledRows = day.timeline.unscheduled.map(::row),
                 )
             }
         },
         emptyLabel = when {
-            entries.isNotEmpty() -> null
+            selectedTimeline != null && (selectedTimeline.timed.isNotEmpty() || selectedTimeline.unscheduled.isNotEmpty()) -> null
+            selectedTimeline == null && state.schedules.isNotEmpty() -> null
             selectedDate == null -> "所有日期暂无日程条目。"
             else -> "规划日 $selectedDate 暂无日程条目。"
         },
@@ -250,17 +330,31 @@ fun agendaScreenState(
     )
 }
 
+/**
+ * 一条日程条目行。
+ *
+ * 计划投入来自领域的 `plannedMinutes()`（预计时长优先，回退到完整时间段），实际投入来自
+ * `scheduleInvestedMinutes()`（所有 `scheduleEntryId` 指向它的记录之和），完成状态来自
+ * `isScheduleInvestmentMet()` 与条目自身的完成标记，超载来自 `exceedsDailyCapacity()`。
+ * 页面拿到的都是结论，不再自己比较分钟数——因此预计时长永远不会被当成实际投入展示。
+ */
 private fun agendaRow(
+    state: AttentionState,
     entry: ScheduleEntry,
     targetTitles: Map<String, String>,
     zone: ZoneId,
     canStartTimer: Boolean,
+    runningEntryId: String?,
 ): AgendaScheduleRow {
     val start = entry.startMinute
     val end = entry.endMinute
     val time = if (start != null && end != null) " · ${formatAgendaMinute(start)}-${formatAgendaMinute(end)}" else ""
-    val target = entry.targetId?.let(targetTitles::get)?.let { " · $it" } ?: ""
+    val targetTitle = entry.targetId?.let(targetTitles::get)
+    val target = targetTitle?.let { " · $it" } ?: ""
     val reminder = entry.reminderEpochMillis?.let { " · 提醒 ${formatAgendaReminderEpoch(it, zone)}" } ?: " · 无提醒"
+    val planned = entry.plannedMinutes()
+    val invested = state.scheduleInvestedMinutes(entry.id)
+    val investmentMet = state.isScheduleInvestmentMet(entry.id)
     return AgendaScheduleRow(
         entry = entry,
         title = entry.title,
@@ -273,6 +367,16 @@ private fun agendaRow(
         reminderText = entry.reminderEpochMillis?.let { formatAgendaReminderEpoch(it, zone) } ?: "",
         targetId = entry.targetId,
         canStartTimer = canStartTimer,
+        investmentLabel = "计划投入 " + (planned?.let { "$it 分钟" } ?: "未设置") +
+            " · 实际投入 $invested 分钟" +
+            " · " + when {
+                entry.completed || investmentMet -> "已完成"
+                else -> "未完成"
+            },
+        targetLabel = targetTitle,
+        capacityNotice = if (state.exceedsDailyCapacity(entry)) "已超出容量" else null,
+        timing = entry.id == runningEntryId,
+        completed = entry.completed || investmentMet,
     )
 }
 

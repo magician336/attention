@@ -20,6 +20,7 @@ import com.attention.workspace.state.AgendaScheduleDraft
 import com.attention.workspace.state.AgendaScheduleRow
 import com.attention.workspace.state.AgendaScreenState
 import com.attention.workspace.state.AgendaTargetOption
+import com.attention.workspace.state.AgendaWorkbenchSummary
 import com.attention.workspace.state.LaunchDestinationOption
 import com.attention.workspace.state.SettingsActions
 import com.attention.workspace.state.SettingsScreenState
@@ -132,7 +133,14 @@ class WorkspacePlatformSideEffectSeamTest {
             filterLabel = "规划日 $day",
             availableDates = emptyList(),
             selectedCapacityLabel = null,
-            selectedRows = listOf(row),
+            workbenchSummary = AgendaWorkbenchSummary(
+                planningDateLabel = "规划日 $day",
+                boundaryLabel = "规划日界线 03:00",
+                weekStartLabel = "周起始日 周一",
+                capacitySettingLabel = "每日容量未设置",
+                capacityUsageLabel = null,
+            ),
+            timelineRows = listOf(row),
             dateSections = emptyList(),
             emptyLabel = null,
             recurrenceRules = emptyList(),
