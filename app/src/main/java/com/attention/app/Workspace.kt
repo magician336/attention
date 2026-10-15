@@ -111,8 +111,10 @@ import com.attention.domain.StoredSettings
 import com.attention.domain.TimeEntry
 import com.attention.domain.asAgendaEntry
 import com.attention.domain.capacitySummary
+import com.attention.domain.externalSchedulePlanningDate
 import com.attention.domain.planningDate
 import com.attention.domain.reminderEpochMillis
+import com.attention.domain.resolveInitialLaunchDestination
 import com.attention.domain.resolveLaunchDestination
 import java.time.Instant
 import java.time.LocalDate
@@ -566,8 +568,10 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     val feedback = rememberAttentionFeedbackHostState()
     val feedbackScope = rememberCoroutineScope()
     val hasExternalScheduleRequest = openScheduleDate != null || openScheduleId != null
+    // 启动优先级（外部日程请求 > 保存的启动入口 > 上次打开 > 当前规划日的日程）只在 :domain 解析，
+    // 组合根不再自己实现一份（ADR-0005 第 1 节与「后续页面不得重复」）。
     var destination by remember {
-        mutableStateOf(initialLaunchDestination(hasExternalScheduleRequest, state.launchDestination, state.lastOpenedDestination))
+        mutableStateOf(resolveInitialLaunchDestination(hasExternalScheduleRequest, state.launchDestination, state.lastOpenedDestination))
     }
     var destinationChosen by remember { mutableStateOf(hasExternalScheduleRequest) }
     var settingsOpen by remember { mutableStateOf(false) }
@@ -782,9 +786,12 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     // 这一个实例挂在组合根上、活过页面切换，因此会话内的日期筛选被保留；
     // 它不写入任何持久化，重新启动时组合根新建实例，页面回到当前规划日。
     // 组合根把当前规划日喂给选择状态问「你选的是什么」，不解释 null 与规划日之间的语义。
-    val agendaSelection = rememberAgendaSelection(
-        openScheduleDate?.let { value -> runCatching { LocalDate.parse(value) }.getOrNull() },
-    )
+    //
+    // 打开定位的优先级：外部日程请求点名的规划日 > 当前规划日（深链优先级由 #174 决定）。
+    // 外部请求点名了规划日就定位到那一天（并由 openScheduleId 定位到条目本身）；
+    // 没有外部请求时选择状态没有显式选择，因此跟随当前规划日。
+    val externalPlanningDate = externalSchedulePlanningDate(state, openScheduleDate, openScheduleId)
+    val agendaSelection = rememberAgendaSelection(externalPlanningDate)
     val agendaPlanningDay = state.planningDate(injectedNow, injectedZone)
     val agendaState = agendaScreenState(
         state = state,
@@ -1146,16 +1153,6 @@ private fun Context.findActivity(): Activity? = when (this) {
 }
 
 private const val REMINDER_PERMISSION_REQUEST_CODE = 4101
-
-internal fun initialLaunchDestination(
-    hasExternalScheduleRequest: Boolean,
-    requested: LaunchDestination,
-    lastOpened: LaunchDestination,
-): LaunchDestination = if (hasExternalScheduleRequest) {
-    LaunchDestination.AGENDA
-} else {
-    resolveLaunchDestination(requested, lastOpened)
-}
 
 internal fun shouldPersistLastOpened(settingsLoaded: Boolean, settingsOpen: Boolean): Boolean =
     settingsLoaded && !settingsOpen
