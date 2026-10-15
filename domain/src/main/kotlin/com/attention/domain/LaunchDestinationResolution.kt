@@ -1,5 +1,7 @@
 package com.attention.domain
 
+import java.time.LocalDate
+
 /**
  * 「日程」是启动入口与「上次打开」解析中的正式语义。
  *
@@ -44,4 +46,40 @@ fun resolveLaunchDestination(
     LaunchDestination.LAST_OPENED ->
         if (lastOpened in restorableWorkspaces) lastOpened else LaunchDestination.AGENDA
     else -> requested
+}
+
+/**
+ * 启动位置的统一优先级：外部日程请求 > 保存的启动入口 > 上次打开 > 当前规划日的日程。
+ *
+ * 外部日程请求是提醒或通知带来的打开定位：它只决定这一次落在哪里，不被保存的启动入口拦截，
+ * 也不改写保存的启动入口或产生任何业务数据。没有外部请求时按保存的入口解析，
+ * 其中「上次打开」只解析出日程、目标树、统计；历史无效时回退到日程，由调用方打开当前规划日。
+ */
+fun resolveInitialLaunchDestination(
+    hasExternalScheduleRequest: Boolean,
+    requested: LaunchDestination,
+    lastOpened: LaunchDestination,
+): LaunchDestination = if (hasExternalScheduleRequest) {
+    LaunchDestination.AGENDA
+} else {
+    resolveLaunchDestination(requested, lastOpened)
+}
+
+/**
+ * 外部日程请求要定位的规划日。
+ *
+ * 请求点名的规划日优先；它缺失或无法解析时退回被点名条目自身的规划日，页面因此总是落在
+ * 条目所在的那一天而不是当前规划日。没有任何可定位的目标时返回 null，由调用方回退到当前规划日。
+ */
+fun externalSchedulePlanningDate(
+    state: AttentionState,
+    requestedPlanningDate: String?,
+    requestedEntryId: String?,
+): LocalDate? {
+    val requested = requestedPlanningDate?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+    if (requested != null) return requested
+    val entryPlanningDate = requestedEntryId
+        ?.let { id -> state.schedules.firstOrNull { it.id == id }?.planningDate }
+        ?: return null
+    return runCatching { LocalDate.parse(entryPlanningDate) }.getOrNull()
 }
