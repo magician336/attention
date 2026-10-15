@@ -70,6 +70,14 @@ data class TimeEntry(
     val occurredAtEpochMillis: Long? = null,
     val note: String = "",
     val scheduleEntryId: String? = null,
+    /**
+     * 事后补记这一次提交意图的标识。
+     *
+     * 只有 [TimeEntrySource.MANUAL] 的事后补记带它；它回答的是「这一次提交是否已经落库」，
+     * 而不是「这条日程是否已经有投入」。同一次保存重试、双击或事务重放时沿用同一个值，
+     * 因此重放只会命中已有记录而不会再记一笔；下一次新的补记则是新的值，必然被记录。
+     */
+    val backfillRequestId: String? = null,
 )
 
 @Serializable

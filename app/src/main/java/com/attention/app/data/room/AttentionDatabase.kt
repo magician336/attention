@@ -49,7 +49,7 @@ import com.attention.app.data.room.entity.TimeEntryEntity
         ExperienceEntity::class,
         ActiveTimerEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 abstract class AttentionDatabase : RoomDatabase() {
@@ -69,7 +69,7 @@ abstract class AttentionDatabase : RoomDatabase() {
 
     companion object {
         const val DATABASE_NAME = "attention.db"
-        const val DATABASE_VERSION = 5
+        const val DATABASE_VERSION = 6
 
         val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -89,6 +89,17 @@ abstract class AttentionDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Purely additive: the submission-intent link that only a manual backfill carries.
+         * Historical rows keep a null intent, because a past record must never be guessed
+         * to be a replay of anything.
+         */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE time_entries ADD COLUMN backfillRequestId TEXT")
+            }
+        }
+
         fun create(context: Context): AttentionDatabase = Room.databaseBuilder(
             context.applicationContext,
             AttentionDatabase::class.java,
@@ -97,7 +108,7 @@ abstract class AttentionDatabase : RoomDatabase() {
         // contract. Restrict the destructive fallback to the schema versions
         // created by the pre-release Room foundation instead of silently applying
         // it to an unknown future version.
-        ).addMigrations(MIGRATION_3_4, MIGRATION_4_5)
+        ).addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
             .fallbackToDestructiveMigrationFrom(true, 1, 2)
             .build()
     }

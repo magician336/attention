@@ -5,23 +5,29 @@ import java.time.LocalDate
 import java.time.ZoneId
 
 /**
+ * 保存日程条目时顺带补记的一段已经发生的时间。
+ *
+ * [targetId] 是用户选择归属的计划；null 表示这笔补记先保持为未归属活动，之后可以再归入计划。
+ *
+ * [requestId] 是这一次**提交意图**的标识，也是防重复的唯一粒度：同一次保存被重试、
+ * 被双击或被事务重放时沿用同一个值，重放只记一笔；下一次新的补记是新的值，必然被记录。
+ * 取值规则由调用方掌握——页面把草稿组装成 [ScheduleBackfill] 一次并复用该实例即可，
+ * 重试与重放复用同一个 [requestId]，用户再次主动补填时重新组装得到新的 [requestId]。
+ */
+data class ScheduleBackfill(
+    val durationMinutes: Int,
+    val targetId: String? = null,
+    val note: String = "",
+    val requestId: String = newId(),
+)
+
+/**
  * Typed seam for domain intents that change actual investment.
  *
  * A command is pure with respect to its inputs: callers provide the current state,
  * execution time, and zone explicitly, and receive an immutable result containing
  * the next state plus facts produced by the command.
  */
-/**
- * 保存日程条目时顺带补记的一段已经发生的时间。
- *
- * [targetId] 是用户选择归属的计划；null 表示这笔补记先保持为未归属活动，之后可以再归入计划。
- */
-data class ScheduleBackfill(
-    val durationMinutes: Int,
-    val targetId: String? = null,
-    val note: String = "",
-)
-
 sealed interface AttentionCommand {
     fun execute(
         state: AttentionState,
@@ -36,8 +42,9 @@ sealed interface AttentionCommand {
      * 不存在只有一半的中间状态。补记记录的来源是 [TimeEntrySource.MANUAL]，并带上日程关联；
      * 它与 [TimeEntrySource.SCHEDULE_CONFIRMED]、[TimeEntrySource.TIMER] 三者不混。
      *
-     * 这条日程条目已经有一笔按关联认领的实际投入时（日程完成确认、计时结算或更早的补记），
-     * 只保存日程条目本身，不再凭空多出第二笔投入，投入经验与达成里程碑也不重复发放。
+     * 防重复的粒度是**提交意图**而不是这条日程：同一次保存（重试、双击、事务重放）带着同一个
+     * [ScheduleBackfill.requestId] 时只记一笔；用户下一次显式补填是新的事实，即使这条日程已经
+     * 计时过或已被确认完成，也照样被记录下来。
      */
     data class SaveSchedule(
         val entry: ScheduleEntry,
@@ -45,7 +52,7 @@ sealed interface AttentionCommand {
     ) : AttentionCommand {
         override fun execute(state: AttentionState, now: Instant, zone: ZoneId): AttentionCommandResult {
             val saved = if (state.schedules.any { it.id == entry.id }) state.updateSchedule(entry) else state.addSchedule(entry)
-            if (backfill == null || state.hasActualInvestmentFor(entry.id)) {
+            if (backfill == null || state.appliedBackfill(backfill.requestId) != null) {
                 return saved.withMilestonesFor(emptyList(), now.toEpochMilli())
             }
             val recorded = saved.addTimeEntry(
@@ -55,6 +62,7 @@ sealed interface AttentionCommand {
                 source = TimeEntrySource.MANUAL,
                 note = backfill.note,
                 scheduleEntryId = entry.id,
+                backfillRequestId = backfill.requestId,
             )
             return recorded.withMilestonesFor(
                 affectedPlanningDates = setOf(LocalDate.parse(entry.planningDate)),
@@ -91,12 +99,13 @@ sealed interface AttentionCommand {
     /**
      * Confirms one planned entry as actual invested time.
      *
-     * 幂等：该日程条目已有按关联认领的实际投入时只保证完成标记，不产生第二笔，
-     * 因此重试与重复点击都不会重复发放投入经验与达成里程碑。
+     * 幂等的粒度是**这个动作**：同一条日程重复确认仍是同一个动作，因此已存在关联该日程的
+     * [TimeEntrySource.SCHEDULE_CONFIRMED] 记录时只保证完成标记，不产生第二笔，投入经验与
+     * 达成里程碑都不重复发放。已存在的事后补记或计时结算是各自独立的事实，不阻止确认记账。
      */
     data class ConfirmSchedule(val entryId: String, val durationMinutes: Int? = null) : AttentionCommand {
         override fun execute(state: AttentionState, now: Instant, zone: ZoneId): AttentionCommandResult {
-            if (state.hasActualInvestmentFor(entryId)) {
+            if (state.hasConfirmedInvestmentFor(entryId)) {
                 return AttentionCommandResult(state.confirmScheduleCompleted(entryId, durationMinutes))
             }
             val nextState = state.confirmScheduleCompleted(entryId, durationMinutes)

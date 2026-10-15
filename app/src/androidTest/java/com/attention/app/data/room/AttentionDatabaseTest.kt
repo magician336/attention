@@ -160,6 +160,63 @@ class AttentionDatabaseTest {
         }
     }
 
+    @Test
+    fun schema_v5_adds_the_backfill_submission_intent_without_rewriting_history() {
+        val databaseName = "attention-migration-v5.db"
+        val legacy = migrationHelper.createDatabase(databaseName, 5)
+        legacy.execSQL(
+            "INSERT INTO targets (id, parentId, title, note, icon, colorHex, archived, sortOrder, expanded) " +
+                "VALUES ('target', NULL, '阅读', '', NULL, NULL, 0, 0, 1)",
+        )
+        legacy.execSQL(
+            "INSERT INTO schedule_entries (id, planningDate, title, startMinute, endMinute, estimatedMinutes, note, " +
+                "targetId, completed, reminderEpochMillis, recurrenceRuleId) " +
+                "VALUES ('schedule', '2026-10-08', '阅读', NULL, NULL, 45, '', 'target', 1, NULL, NULL)",
+        )
+        legacy.execSQL(
+            "INSERT INTO time_entries (id, planningDate, durationMinutes, targetId, source, occurredAtEpochMillis, note, scheduleEntryId) " +
+                "VALUES ('confirmed-entry', '2026-10-08', 30, 'target', 'SCHEDULE_CONFIRMED', NULL, '', 'schedule')",
+        )
+        legacy.execSQL(
+            "INSERT INTO time_entries (id, planningDate, durationMinutes, targetId, source, occurredAtEpochMillis, note, scheduleEntryId) " +
+                "VALUES ('timer-entry', '2026-10-08', 60, 'target', 'TIMER', 1000, '', 'schedule')",
+        )
+        legacy.close()
+
+        val migrated = migrationHelper.runMigrationsAndValidate(
+            databaseName,
+            6,
+            true,
+            AttentionDatabase.MIGRATION_5_6,
+        )
+        try {
+            // Historical rows keep their source and schedule link, and are never guessed
+            // to be a replay of any submission intent.
+            migrated.query("SELECT id, source, scheduleEntryId, backfillRequestId FROM time_entries ORDER BY id").use { cursor ->
+                assertEquals(2, cursor.count)
+                val rows = buildList {
+                    while (cursor.moveToNext()) {
+                        add(cursor.getString(0) to (cursor.getString(1) to (cursor.getString(2) to cursor.getString(3))))
+                    }
+                }
+                assertEquals(
+                    listOf(
+                        "confirmed-entry" to ("SCHEDULE_CONFIRMED" to ("schedule" to null)),
+                        "timer-entry" to ("TIMER" to ("schedule" to null)),
+                    ),
+                    rows,
+                )
+            }
+            migrated.query("SELECT SUM(durationMinutes) FROM time_entries").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(90L, cursor.getLong(0))
+            }
+        } finally {
+            migrated.close()
+            ApplicationProvider.getApplicationContext<Context>().deleteDatabase(databaseName)
+        }
+    }
+
     private fun createLegacyDatabase(context: Context, version: Int, identityHash: String) {
         context.deleteDatabase(AttentionDatabase.DATABASE_NAME)
         val legacy = context.openOrCreateDatabase(AttentionDatabase.DATABASE_NAME, Context.MODE_PRIVATE, null)

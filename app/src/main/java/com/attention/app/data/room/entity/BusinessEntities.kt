@@ -75,6 +75,7 @@ data class TimeEntryEntity(
     val occurredAtEpochMillis: Long?,
     val note: String,
     val scheduleEntryId: String?,
+    val backfillRequestId: String?,
 )
 
 @Entity(
