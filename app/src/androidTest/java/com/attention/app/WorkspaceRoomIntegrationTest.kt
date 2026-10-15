@@ -39,6 +39,7 @@ class WorkspaceRoomIntegrationTest {
         private const val STAGE_ID = "ui-append-stage"
         private const val ENTRY_ID = "ui-append-entry"
         private const val TARGET_TITLE = "UI-一次性阶段"
+        private const val TIMEOUT = 10_000L
 
         @JvmStatic
         @BeforeClass
@@ -95,7 +96,13 @@ class WorkspaceRoomIntegrationTest {
 
         composeRule.onNodeWithTag("append-goal-minutes").performTextInput("45")
         composeRule.onNodeWithTag("append-goal-submit").performClick()
-        composeRule.waitForIdle()
+        // 追加阶段是一次异步写入：waitForIdle() 可能在 Room 写回流并触发重组之前就返回，
+        // 于是新阶段还没出现就断言。这里等目标真的出现（#185 前的一次间歇失败）。
+        composeRule.waitUntil(TIMEOUT) {
+            runCatching {
+                composeRule.onAllNodesWithText("一次性目标 0/45 分钟", substring = true).fetchSemanticsNodes()
+            }.getOrDefault(emptyList()).isNotEmpty()
+        }
 
         composeRule.onAllNodesWithText("一次性目标 0/45 分钟", substring = true).assertCountEquals(2)
 

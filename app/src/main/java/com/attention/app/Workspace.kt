@@ -490,8 +490,11 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     // 下一个 LaunchedEffect 才把它纠正成用户保存的入口。这个纠正与「上次打开」的写回
     // 发生在同一次重组里：写回那条 effect 捕获到的是纠正之前的暂定值，于是会把暂定值
     // 当成用户真正停留的页面写回去，把「上次打开」永久改成日程（#179 设备实跑间歇失败）。
-    // 因此写回额外要求落点已经确定：要么来自外部请求，要么已被纠正，要么用户自己点过。
-    var destinationSettled by remember { mutableStateOf(hasExternalScheduleRequest) }
+    // 因此写回额外要求落点已经确定：要么已被状态纠正，要么用户自己点过。
+    // 外部请求**不算**落点已确定：它只是把用户送到日程，用户并没有因此选择过它（#185）。
+    // 这一次外部送达由 [LastOpenedWriteBackFacts.fromExternalRequest] 单独挡住；
+    // 用户在外部打开之后亲手点别的入口，onSelect 会把它置为已确定，那次切换照常记录。
+    var destinationSettled by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
     // 引导是否被用户重新打开：设置页的「重新打开引导」把它举起来。
     // 自动出现的那一次由持久化的引导状态决定，不由这个变量决定。
@@ -655,7 +658,16 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     val stateLoaded by viewModel.stateLoaded.collectAsStateWithLifecycle()
     androidx.compose.runtime.LaunchedEffect(destination, settingsOpen, persistedSettingsLoaded, stateLoaded, destinationSettled) {
         // 底部导航只有三项，因此「上次打开」写入的永远是它自己：旧入口值先按领域兼容映射落成日程。
-        if (shouldPersistLastOpened(persistedSettingsLoaded, settingsOpen, stateLoaded, destinationSettled)) {
+        if (shouldPersistLastOpened(
+                LastOpenedWriteBackFacts(
+                    settingsLoaded = persistedSettingsLoaded,
+                    settingsOpen = settingsOpen,
+                    stateLoaded = stateLoaded,
+                    destinationSettled = destinationSettled,
+                    fromExternalRequest = hasExternalScheduleRequest,
+                ),
+            )
+        ) {
             viewModel.saveLastOpened(destination.asAgendaEntry())
         }
     }
@@ -1121,23 +1133,41 @@ private fun Context.findActivity(): Activity? = when (this) {
 private const val REMINDER_PERMISSION_REQUEST_CODE = 4101
 
 /**
+ * 「上次打开」写回的事实。五个条件都成立才允许写回。
+ *
+ * 它们挡的是**同一个**后果：把用户上次真正停留的页面永久改成别的页面。因此用命名事实承载，
+ * 而不是五个相邻的布尔——调用点必须逐个说清楚，否则「哪个 true 挡住了写回」无从读起。
+ */
+internal data class LastOpenedWriteBackFacts(
+    /** 持久化设置确实读到了（不是首次组合时那份还没落地的快照）。 */
+    val settingsLoaded: Boolean,
+    /** 当前是否在设置页；设置页不是顶级工作区，不该被记成上次打开。 */
+    val settingsOpen: Boolean,
+    /** 领域状态是否真的加载完成；之前 [state] 只是一份空默认值。 */
+    val stateLoaded: Boolean,
+    /** 启动落点是否已经确定（已被状态纠正，或用户亲手点过）。 */
+    val destinationSettled: Boolean,
+    /** 这次打开是不是由外部日程请求送达的。 */
+    val fromExternalRequest: Boolean,
+)
+
+/**
  * 「上次打开」能不能写回去。
  *
- * 四个条件缺一不可：设置确实读到了（[settingsLoaded]）、当前不在设置页（[settingsOpen] 为假，
- * 设置页不是顶级工作区）、**领域状态已经真的加载**（[stateLoaded]），以及**启动落点已经确定**
- * （[destinationSettled]）。
+ * 前两个条件是边界：[settingsLoaded] 没成立说明设置还没读上来，[settingsOpen] 时用户人在设置页。
  *
- * 后两个条件是必须的，它们挡的是同一种写回：[state] 在加载完成之前是一份空的默认值，
- * 启动落点 [WorkspaceApp] 里的 [destination] 初值又是由这份空默认值解析出来的暂定值，
- * 据此写回去会永久覆盖用户上次真正停留的页面。状态纠正与写回发生在同一次重组里，
- * 所以「状态已加载」并不蕴含「落点已纠正」——两者必须分别判断。
+ * 后三个条件挡的是同一种写回：[state] 在加载完成之前是一份空的默认值，启动落点 [WorkspaceApp] 里的
+ * [destination] 初值又是由那份空默认值解析出来的暂定值，据此写回去会永久覆盖用户上次真正停留的页面。
+ * 状态纠正与写回发生在同一次重组里，所以「状态已加载」并不蕴含「落点已纠正」——两者必须分别判断。
+ *
+ * [LastOpenedWriteBackFacts.fromExternalRequest] 挡的是另一件事：外部日程请求只负责把用户送到指定规划日
+ * 与指定条目，用户因此被动看到日程页。若把这次送达记成上次打开，启动入口为「上次打开」的用户会在一次提醒
+ * 之后被永久钉在日程页，「上次打开」也就不是上次打开了。外部请求打开之后用户亲手切换工作区不算外部送达，
+ * 那一次切换照常记录。
  */
-internal fun shouldPersistLastOpened(
-    settingsLoaded: Boolean,
-    settingsOpen: Boolean,
-    stateLoaded: Boolean,
-    destinationSettled: Boolean,
-): Boolean = settingsLoaded && !settingsOpen && stateLoaded && destinationSettled
+internal fun shouldPersistLastOpened(facts: LastOpenedWriteBackFacts): Boolean =
+    facts.settingsLoaded && !facts.settingsOpen && facts.stateLoaded &&
+        facts.destinationSettled && !facts.fromExternalRequest
 
 /**
  * 一次返回键按下时它该落在哪里。返回键处理是平台行为，因此决策点留在组合根侧，
