@@ -743,13 +743,18 @@ class RoomBusinessDataRepositoryTest {
 
             val settled = repository.read()
             assertTrue(settled.schedules.single().completed)
-            assertEquals(listOf(45, 30), settled.timeEntries.map { it.durationMinutes })
-            assertEquals(
-                listOf(TimeEntrySource.MANUAL, TimeEntrySource.SCHEDULE_CONFIRMED),
-                settled.timeEntries.map { it.source },
-            )
-            assertEquals("request-restart", settled.timeEntries.first().backfillRequestId)
-            assertNull(settled.timeEntries.last().backfillRequestId)
+            // 同一规划日里的这两笔记录都没有精确时刻（occurredAtEpochMillis 为 null），读路径按
+            // (规划日, occurredAtEpochMillis, id) 排序会并列落到随机 id 上，因此这里按来源取事实，
+            // 不依赖列表顺序——否则这条用例每次跑的结论都不一样。
+            assertEquals(2, settled.timeEntries.size)
+            val manualRecord = settled.timeEntries.single { it.source == TimeEntrySource.MANUAL }
+            val confirmedRecord = settled.timeEntries.single { it.source == TimeEntrySource.SCHEDULE_CONFIRMED }
+            assertEquals(45, manualRecord.durationMinutes)
+            assertEquals(entry.id, manualRecord.scheduleEntryId)
+            assertEquals("request-restart", manualRecord.backfillRequestId)
+            assertEquals(30, confirmedRecord.durationMinutes)
+            assertEquals(entry.id, confirmedRecord.scheduleEntryId)
+            assertNull(confirmedRecord.backfillRequestId)
             assertEquals(10_075L, settled.experience)
             assertEquals(1, settled.milestones.size)
         } finally {
@@ -791,9 +796,14 @@ class RoomBusinessDataRepositoryTest {
         val secondDatabase = Room.databaseBuilder(context, AttentionDatabase::class.java, name).build()
         try {
             val loaded = RoomBusinessDataRepository(secondDatabase).read()
-            assertEquals(listOf(TimeEntrySource.MANUAL, TimeEntrySource.SCHEDULE_CONFIRMED), loaded.timeEntries.map { it.source })
-            assertEquals(listOf(entry.id, entry.id), loaded.timeEntries.map { it.scheduleEntryId })
-            assertEquals("request-1", loaded.timeEntries.first().backfillRequestId)
+            // 同上：两笔记录都缺精确时刻，顺序由随机 id 决定，按来源取事实而不是按下标。
+            assertEquals(2, loaded.timeEntries.size)
+            val manual = loaded.timeEntries.single { it.source == TimeEntrySource.MANUAL }
+            val confirmed = loaded.timeEntries.single { it.source == TimeEntrySource.SCHEDULE_CONFIRMED }
+            assertEquals(entry.id, manual.scheduleEntryId)
+            assertEquals(entry.id, confirmed.scheduleEntryId)
+            assertEquals("request-1", manual.backfillRequestId)
+            assertNull(confirmed.backfillRequestId)
             assertEquals(10_075L, loaded.experience)
             assertTrue(loaded.schedules.single().completed)
         } finally {

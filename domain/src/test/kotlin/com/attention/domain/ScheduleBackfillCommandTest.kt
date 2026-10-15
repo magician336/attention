@@ -52,7 +52,9 @@ class ScheduleBackfillCommandTest {
 
         val result = AttentionCommand.SaveSchedule(newEntry(target.id), fill).execute(state, now, zone)
 
-        assertEquals(listOf(newEntry(target.id)), result.state.schedules)
+        // 补记的 45 分钟已经超过计划时长 30 分钟，所以保存本身就把完成状态结算了。
+        // 除了这一位，日程条目仍然是用户填进来的那一份。
+        assertEquals(listOf(newEntry(target.id).copy(completed = true)), result.state.schedules)
         val record = result.generatedTimeEntries.single()
         assertEquals(TimeEntrySource.MANUAL, record.source)
         assertEquals(newEntry(target.id).id, record.scheduleEntryId)

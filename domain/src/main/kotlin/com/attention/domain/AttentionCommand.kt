@@ -64,7 +64,9 @@ sealed interface AttentionCommand {
                 scheduleEntryId = entry.id,
                 backfillRequestId = backfill.requestId,
             )
-            return recorded.withMilestonesFor(
+            // 补记同样会把实际投入推上去，所以保存之后也要结算完成状态：否则用户用补记把投入
+            // 凑满计划时长，日程仍停在未完成，直到别处碰一次别的命令才对上。
+            return recorded.completeScheduleMetByInvestment(entry.id).withMilestonesFor(
                 affectedPlanningDates = setOf(LocalDate.parse(entry.planningDate)),
                 achievedAtEpochMillis = now.toEpochMilli(),
                 generatedTimeEntries = listOf(recorded.timeEntries.last()),

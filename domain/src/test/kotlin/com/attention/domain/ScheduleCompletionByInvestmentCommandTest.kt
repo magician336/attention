@@ -167,4 +167,32 @@ class ScheduleCompletionByInvestmentCommandTest {
         assertEquals(listOf(TimeEntrySource.SCHEDULE_CONFIRMED), confirmed.generatedTimeEntries.map { it.source })
         assertEquals(entry.id, confirmed.generatedTimeEntries.single().scheduleEntryId)
     }
+
+    @Test
+    fun saving_a_schedule_with_a_backfill_settles_completion_too() {
+        val entry = schedule(estimatedMinutes = 30)
+
+        val saved = AttentionCommand.SaveSchedule(
+            entry,
+            ScheduleBackfill(durationMinutes = 30, targetId = "target", requestId = "request-1"),
+        ).execute(stateOf(entry), now, utc)
+
+        assertTrue(
+            "补记凑满计划时长后，保存本身就应当把日程结算成完成，而不是等下一次别的命令",
+            saved.state.schedules.single().completed,
+        )
+        assertEquals(listOf(TimeEntrySource.MANUAL), saved.generatedTimeEntries.map { it.source })
+    }
+
+    @Test
+    fun saving_a_schedule_with_a_short_backfill_stays_incomplete() {
+        val entry = schedule(estimatedMinutes = 30)
+
+        val saved = AttentionCommand.SaveSchedule(
+            entry,
+            ScheduleBackfill(durationMinutes = 20, targetId = "target", requestId = "request-1"),
+        ).execute(stateOf(entry), now, utc)
+
+        assertFalse(saved.state.schedules.single().completed)
+    }
 }
