@@ -466,14 +466,18 @@ private fun AgendaSummarySection(
             shape = RoundedCornerShape(tokens.radius.medium),
         ) {
             Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("规划日与每日容量", style = tokens.typography.body)
-                Text(summary.planningDateLabel)
+                // 摘要不复述筛选器的标题：正在查看哪一天已经由页首标题与筛选按钮给出，
+                // 这里只讲事实读数——容量怎么算、这一范围已经用掉多少。
+                Text("容量与设置读数", style = tokens.typography.body)
                 Text(summary.boundaryLabel, modifier = Modifier.testTag("agenda-planning-day-boundary"))
                 Text(summary.weekStartLabel, modifier = Modifier.testTag("agenda-week-start"))
                 Text(summary.capacitySettingLabel, modifier = Modifier.testTag("agenda-capacity-setting"))
                 summary.capacityUsageLabel?.let { capacityLabel ->
                     Text(capacityLabel, modifier = Modifier.testTag("agenda-capacity-summary"))
-                }
+                } ?: Text(
+                    // 所有日期不是一个范围，不存在可加总的单日读数；按天读数在时间轴各分区内。
+                    "按天读数见下方时间轴各规划日分区。",
+                )
                 // 完整设置在统计页底部的「设置与数据」；这里只给出路，不复制一份表单。
                 Text("打开设置与数据", style = tokens.typography.caption)
             }
@@ -583,7 +587,6 @@ private fun AgendaRunningTimerSection(
                 Box(
                     Modifier
                         .background(rust.container, RoundedCornerShape(tokens.radius.small))
-                        .testTag("agenda-running-timer-tint")
                         .padding(tokens.spacing.small),
                 ) {
                     Icon(
@@ -591,7 +594,9 @@ private fun AgendaRunningTimerSection(
                         // 图标本身也带语义：读屏用户不靠颜色也知道现在是暂停还是运行。
                         contentDescription = timer.statusLabel,
                         tint = rust.onContainer,
-                        modifier = Modifier.size(tokens.spacing.medium),
+                        // 强调标记与它的状态语义放在同一个节点上：非合并语义树里父节点
+                        // 不继承子节点的 contentDescription，标记挂在容器上时读屏会丢掉状态。
+                        modifier = Modifier.size(tokens.spacing.medium).testTag("agenda-running-timer-tint"),
                     )
                 }
                 Column(Modifier.weight(1f)) {
