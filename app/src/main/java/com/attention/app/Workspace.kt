@@ -251,15 +251,56 @@ private class TodayActionsAdapter(
 }
 
 /**
- * 设置页的 actions adapter，在组合根一侧组装：页面发出 intent，这里落到 ViewModel。
- * ViewModel、Room 与 DataStore 因此只出现在组合根侧，页面拿不到它们。
+ * 设置页的 actions adapter，在组合根一侧组装：页面发出 intent，这里落到 ViewModel、
+ * 通知权限申请，以及导入导出与恢复所依赖的 SAF 文件选择器和确认对话框。
+ * ViewModel、Room、DataStore 与平台能力因此只出现在组合根侧，页面拿不到它们（ADR-0005 第 1、4 节）。
  */
 private class SettingsActionsAdapter(
     private val viewModel: AttentionViewModel,
+    private val currentWeekStartDay: () -> Int,
+    private val context: Context,
+    private val onRequestReminderPermission: () -> Unit,
+    private val onPreviewJsonBackup: () -> Unit,
+    private val onImportJson: () -> Unit,
+    private val onExportTimeEntriesCsv: () -> Unit,
+    private val onPreviewCsv: () -> Unit,
+    private val onExportSchedulesCsv: () -> Unit,
+    private val onExportCsvBundle: () -> Unit,
+    private val onRequestRestoreImportBackup: () -> Unit,
+    private val onClose: () -> Unit,
 ) : SettingsActions {
     override fun selectLaunchDestination(destination: LaunchDestination) {
         viewModel.setLaunchDestination(destination)
     }
+
+    // 界线与容量一起写进同一份规划设置；周起始日当前的值由组合根读出来一起提交。
+    override fun savePlanningDaySettings(boundaryMinutes: Int, dailyCapacityMinutes: Int?) {
+        viewModel.setSettings(StoredSettings(boundaryMinutes, currentWeekStartDay(), dailyCapacityMinutes))
+    }
+
+    override fun selectWeekStartDay(day: Int) {
+        viewModel.setWeekStart(day)
+    }
+
+    override fun requestNotificationPermission() = onRequestReminderPermission()
+
+    override fun previewJsonBackup() = onPreviewJsonBackup()
+
+    override fun importJson() = onImportJson()
+
+    override fun exportTimeEntriesCsv() = onExportTimeEntriesCsv()
+
+    override fun previewCsv() = onPreviewCsv()
+
+    override fun exportSchedulesCsv() = onExportSchedulesCsv()
+
+    override fun exportCsvBundle() = onExportCsvBundle()
+
+    // 恢复导入前备份需要用户显式确认：页面只发出 intent，由组合根打开确认对话框，
+    // 真正的恢复由对话框确认后调用 ViewModel 的结果化命令完成。workflow 与迁移前一致。
+    override fun restoreLastImportBackup() = onRequestRestoreImportBackup()
+
+    override fun close() = onClose()
 }
 
 /**
@@ -360,20 +401,14 @@ private class WorkspaceViewModelFactory(
 }
 
 /**
- * 统计页的 actions adapter，在组合根一侧组装：页面发出 intent，这里落到 ViewModel、
- * 周期位移与 SAF 文件选择器。ViewModel 与平台能力因此只出现在组合根侧。
+ * 统计页的 actions adapter，在组合根一侧组装：页面发出 intent，这里落到 ViewModel 与周期位移。
+ * ViewModel 与平台能力因此只出现在组合根侧。
  */
 private class StatisticsActionsAdapter(
     private val viewModel: AttentionViewModel,
     private val selection: StatisticsSelection,
     private val currentDate: () -> LocalDate,
-    private val onPreviewJsonBackup: () -> Unit,
-    private val onImportJson: () -> Unit,
-    private val onExportTimeEntriesCsv: () -> Unit,
-    private val onPreviewCsv: () -> Unit,
-    private val onExportSchedulesCsv: () -> Unit,
-    private val onExportCsvBundle: () -> Unit,
-    private val onRequestRestoreImportBackup: () -> Unit,
+    private val onOpenSettings: () -> Unit,
 ) : StatisticsActions {
     override fun selectPreviousPeriod() = shift(-1)
 
@@ -399,27 +434,8 @@ private class StatisticsActionsAdapter(
         viewModel.awardMilestones()
     }
 
-    override fun selectLaunchDestination(destination: LaunchDestination) {
-        viewModel.setLaunchDestination(destination)
-    }
-
-    // 恢复导入前备份需要用户显式确认：页面只发出 intent，由组合根打开确认对话框，
-    // 真正的恢复由对话框确认后调用 ViewModel 的结果化命令完成。
-    override fun restoreLastImportBackup() {
-        onRequestRestoreImportBackup()
-    }
-
-    override fun previewJsonBackup() = onPreviewJsonBackup()
-
-    override fun importJson() = onImportJson()
-
-    override fun exportTimeEntriesCsv() = onExportTimeEntriesCsv()
-
-    override fun previewCsv() = onPreviewCsv()
-
-    override fun exportSchedulesCsv() = onExportSchedulesCsv()
-
-    override fun exportCsvBundle() = onExportCsvBundle()
+    // 设置页从统计页进入：顶级页面仍然是统计，因此这里不改变 destination。
+    override fun openSettings() = onOpenSettings()
 }
 
 /**
@@ -560,7 +576,6 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         )
     }
     val viewModel: AttentionViewModel = viewModel(factory = WorkspaceViewModelFactory(repository))
-    val settingsActions: SettingsActions = remember(viewModel) { SettingsActionsAdapter(viewModel) }
     val state by viewModel.state.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val tokens = attentionTokens()
@@ -816,6 +831,19 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             viewModel = viewModel,
             selection = statisticsSelection,
             currentDate = { currentStatisticsDate },
+            // 设置页只是统计页底部的一个去处：顶级页面不变，因此「上次打开」不受影响。
+            onOpenSettings = { settingsOpen = true },
+        )
+    }
+
+    // 设置页的 adapter 在组合根组装：备份与恢复原本在统计页，现在挂在设置页上，
+    // 但落地的 SAF 文件选择器、导入预览与恢复确认一个都没变，因此 workflow 与迁移前一致。
+    val settingsActions: SettingsActions = remember(viewModel) {
+        SettingsActionsAdapter(
+            viewModel = viewModel,
+            currentWeekStartDay = { currentWeekStartDay },
+            context = context,
+            onRequestReminderPermission = { requestReminderPermission(context) },
             onPreviewJsonBackup = {
                 jsonExportMessage = null
                 viewModel.exportJsonDocument { document ->
@@ -851,6 +879,8 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                 }
             },
             onRequestRestoreImportBackup = { restoreImportPromptVisible = true },
+            // 返回时回到统计页：设置页从统计进入，所以 destination 一直是统计。
+            onClose = { settingsOpen = false },
         )
     }
 
@@ -904,7 +934,8 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         topBar = { TopAppBar(title = { Text("Attention") }) },
         bottomBar = {
             // 主工作区收敛为日程、目标树、统计三个入口：今天/明天/所有日期是日程页里的范围，
-            // 不再是顶级入口。每一项同时有 Material 图标与中文标签，选中态带可访问语义。
+            // 设置不再是顶级入口——它从统计页底部的「设置与数据」进入，返回时回到统计页。
+            // 每一项同时有 Material 图标与中文标签，选中态带可访问语义。
             Row(Modifier.fillMaxWidth().padding(6.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
                 listOf(
                     Triple(LaunchDestination.AGENDA, "日程", Icons.Filled.Event),
@@ -914,8 +945,10 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                     WorkspaceNavigationItem(
                         label = label,
                         icon = icon,
-                        selected = !settingsOpen && destination.asAgendaEntry() == item,
+                        // 设置页挂在统计页底下，因此停留在设置页时统计仍然处于选中态。
+                        selected = destination.asAgendaEntry() == item,
                         onSelect = {
+                            // 从设置页切回主工作区：先离开设置，再换顶级页面。
                             settingsOpen = false
                             destinationChosen = true
                             destination = item
@@ -923,8 +956,6 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                         modifier = Modifier.testTag("nav-${item.name.lowercase()}"),
                     )
                 }
-                if (settingsOpen) AttentionButton(onClick = {}, modifier = Modifier.testTag("nav-settings")) { Text("设置") }
-                else AttentionOutlinedButton(onClick = { settingsOpen = true }, modifier = Modifier.testTag("nav-settings")) { Text("设置") }
             }
         },
     // 短时提示宿主挂在 Scaffold 上，因此五个页面共用同一个出口，流程不被打断。
@@ -945,6 +976,8 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                         state = state,
                         now = injectedNow,
                         zone = injectedZone,
+                        // 通知是否可用是平台事实，由组合根查好后注入，页面自己不判断。
+                        notificationsEnabled = notificationsEnabled(context),
                     ),
                     actions = settingsActions,
                 )

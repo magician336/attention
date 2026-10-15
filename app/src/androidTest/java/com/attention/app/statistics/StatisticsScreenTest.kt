@@ -3,13 +3,13 @@ package com.attention.app.statistics
 import androidx.activity.compose.setContent
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.attention.app.ui.theme.AttentionTheme
 import com.attention.domain.GoalCadence
-import com.attention.domain.LaunchDestination
 import com.attention.workspace.state.StatisticsActions
 import com.attention.workspace.state.StatisticsCadenceOption
 import com.attention.workspace.state.StatisticsMigrationLine
@@ -156,39 +156,19 @@ class StatisticsScreenTest {
     }
 
     @Test
-    fun picking_a_launch_destination_and_restoring_the_backup_emit_intents() {
-        // 首屏入口与恢复备份都只发出 intent
+    fun the_settings_and_data_entry_opens_the_standalone_settings_page() {
+        // 设置与数据是统计页底部唯一的入口：底部导航不再有第四个设置按钮
         val intents = RecordingStatisticsActions()
         mount(screenState(), intents)
 
-        node("首屏入口", substring = true).assertIsDisplayed()
-        node("目标树").performClick()
-        node("恢复最近一次导入前备份").performClick()
+        node("设置与数据").assertIsDisplayed()
+        composeRule.onNodeWithTag("statistics-open-settings").performScrollTo().performClick()
 
-        assertEquals(listOf(LaunchDestination.TARGETS), intents.launchDestinations)
-        assertEquals(1, intents.restoredBackups)
-    }
-
-    @Test
-    fun export_and_import_buttons_only_emit_intents() {
-        // 可点击的导入导出按钮各发一个 intent，不触碰 SAF
-        val intents = RecordingStatisticsActions()
-        mount(screenState(), intents)
-
-        node("预览 JSON 备份").performClick()
-        node("导入 JSON").performClick()
-        node("导出时间记录 CSV").performClick()
-
-        assertEquals(listOf("previewJson", "importJson", "exportTimeEntries"), intents.dataIntents)
-    }
-
-    @Test
-    fun every_export_button_is_rendered_by_the_page() {
-        // 六个导入导出按钮都由页面渲染；后三个在窄屏上横向溢出，只能断言存在
-        mount(screenState())
-
-        listOf("预览 JSON 备份", "导入 JSON", "导出时间记录 CSV", "预览 CSV", "导出日程 CSV", "导出两个 CSV 文件")
-            .forEach { label -> composeRule.onNodeWithText(label).assertExists() }
+        assertEquals(1, intents.openedSettings)
+        // 启动入口与备份数据都已经搬进设置页，统计页不再重复呈现它们
+        node("首屏入口").assertDoesNotExist()
+        composeRule.onNodeWithText("预览 JSON 备份").assertDoesNotExist()
+        composeRule.onNodeWithText("恢复最近一次导入前备份").assertDoesNotExist()
     }
 
     /** 统计页是可滚动长页，断言与点击前先滚到目标节点。 */
@@ -274,11 +254,9 @@ class StatisticsScreenTest {
         val periodShifts = mutableListOf<String>()
         val cadences = mutableListOf<GoalCadence>()
         val cancelledMigrations = mutableListOf<String>()
-        val launchDestinations = mutableListOf<LaunchDestination>()
-        val dataIntents = mutableListOf<String>()
         var settleSnapshots = 0
         var awardedMilestones = 0
-        var restoredBackups = 0
+        var openedSettings = 0
 
         override fun selectPreviousPeriod() {
             periodShifts += "previous"
@@ -304,36 +282,8 @@ class StatisticsScreenTest {
             awardedMilestones++
         }
 
-        override fun selectLaunchDestination(destination: LaunchDestination) {
-            launchDestinations += destination
-        }
-
-        override fun restoreLastImportBackup() {
-            restoredBackups++
-        }
-
-        override fun previewJsonBackup() {
-            dataIntents += "previewJson"
-        }
-
-        override fun importJson() {
-            dataIntents += "importJson"
-        }
-
-        override fun exportTimeEntriesCsv() {
-            dataIntents += "exportTimeEntries"
-        }
-
-        override fun previewCsv() {
-            dataIntents += "previewCsv"
-        }
-
-        override fun exportSchedulesCsv() {
-            dataIntents += "exportSchedules"
-        }
-
-        override fun exportCsvBundle() {
-            dataIntents += "exportCsvBundle"
+        override fun openSettings() {
+            openedSettings++
         }
     }
 }

@@ -48,8 +48,9 @@ class WorkspaceAgendaNavigationIntegrationTest {
 
     @Test
     fun the_bottom_bar_has_three_workspaces_with_icons_labels_and_a_selected_semantic() {
-        // 三个工作区入口 + 设置入口；今天/明天/所有日期不再产生额外顶级入口
-        composeRule.onAllNodes(hasNavTagPrefix()).assertCountEquals(4)
+        // #173 把设置从主导航退出：底部只有日程、目标树、统计三个工作区入口，
+        // 设置改从统计页底部的「设置与数据」进入；今天/明天/所有日期仍不产生额外顶级入口
+        composeRule.onAllNodes(hasNavTagPrefix()).assertCountEquals(3)
 
         composeRule.onNodeWithTag("nav-agenda").assert(hasText("日程"))
         composeRule.onNodeWithTag("nav-targets").assert(hasText("目标树"))
