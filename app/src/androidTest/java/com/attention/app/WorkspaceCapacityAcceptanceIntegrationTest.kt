@@ -78,6 +78,10 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
             .assert(hasText("已安排 60 / 60 分钟", substring = true))
 
         // Adding an estimated-duration entry is allowed even when it makes the day overloaded.
+        // #180 把添加表单收进了底部面板：面板打开时规划日已经填成正在看的那一天，
+        // 因此这里先从页面上的入口打开它，再在表单里填标题与预计分钟。
+        click("agenda-open-add-sheet")
+        composeRule.waitForIdle()
         replace("agenda-title-input", "UI-新增超载")
         replace("agenda-estimate-input", "1")
         click("agenda-add-submit")

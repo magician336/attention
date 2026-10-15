@@ -47,6 +47,7 @@ class WorkspaceGoalSummaryCorrectionIntegrationTest {
         private const val OWNED_ENTRY_ID = "ui-summary-correction-owned"
         private const val UNOWNED_ENTRY_ID = "ui-summary-correction-unowned"
         private const val TARGET_TITLE = "UI-汇总纠错"
+        private const val TIMEOUT = 5_000L
         private lateinit var planningDate: String
 
         @JvmStatic
@@ -104,13 +105,29 @@ class WorkspaceGoalSummaryCorrectionIntegrationTest {
         composeRule.onNodeWithTag("delete-time-$OWNED_ENTRY_ID").performScrollTo().performClick()
         composeRule.waitForIdle()
         // Deleting a time record is destructive, so it is confirmed before anything changes.
-        composeRule.onNodeWithTag(AttentionFeedbackTags.CONFIRM_DIALOG, useUnmergedTree = true).assertIsDisplayed()
+        // 确认弹窗住在独立窗口里：节点先出现在语义树上，窗口完成布局之后才谈得上「显示出来」。
+        // 这里等的是同一个断言成立，而不是换一个更弱的断言。
+        waitUntilDisplayed(AttentionFeedbackTags.CONFIRM_DIALOG)
         composeRule.onNodeWithTag(AttentionFeedbackTags.CONFIRM_DIALOG_CONFIRM, useUnmergedTree = true).performClick()
         composeRule.waitUntil(5_000) {
             composeRule.onAllNodesWithTag("delete-time-$OWNED_ENTRY_ID").fetchSemanticsNodes().isEmpty()
         }
         openTargetDetails()
         assertSummary(5)
+    }
+
+    /**
+     * 等带 [tag] 的节点真的显示出来。
+     *
+     * 弹窗与底部提示都住在各自的宿主窗口里：节点进入语义树与它在屏幕内完成布局
+     * 是两件事，因此这里重试的是同一条 [assertIsDisplayed] 断言本身，超时仍然失败。
+     */
+    private fun waitUntilDisplayed(tag: String) {
+        composeRule.waitUntil(TIMEOUT) {
+            runCatching {
+                composeRule.onNodeWithTag(tag, useUnmergedTree = true).assertIsDisplayed()
+            }.isSuccess
+        }
     }
 
     private fun assertSummary(actualMinutes: Int) {
