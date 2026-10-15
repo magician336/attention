@@ -210,6 +210,7 @@ private class AgendaActionsAdapter(
     private val onStartTimerFromEntry: (ScheduleEntry) -> Unit,
     private val onRequestReminderPermission: () -> Unit,
     private val onStopTimer: () -> Unit,
+    private val onRecoverTimerFromNow: () -> Unit,
     private val onTimeRecordDeleted: (TimeEntry) -> Unit,
 ) : AgendaActions {
     override fun selectPlanningDate(date: LocalDate?) {
@@ -266,6 +267,23 @@ private class AgendaActionsAdapter(
 
     // 运行中的计时只能从日程页停掉：平台动作（停前台计时服务、撤掉恢复提示）仍归组合根。
     override fun stopRunningTimer() = onStopTimer()
+
+    // 暂停、恢复、切换与从此刻继续都只是领域命令：通知栏是持久化状态的投影，
+    // 因此这些动作不需要页面自己去碰前台服务（ADR-0005 第 4 节）。
+    override fun pauseRunningTimer() {
+        viewModel.pauseTimer()
+    }
+
+    override fun resumeRunningTimer() {
+        viewModel.resumeTimer()
+    }
+
+    // 从此刻继续意味着用户已经对上一次被打断的计时做了决定，恢复提示要一并撤掉。
+    override fun recoverRunningTimerFromNow() = onRecoverTimerFromNow()
+
+    override fun switchRunningTimerTarget(targetId: String?) {
+        viewModel.switchTimer(targetId)
+    }
 
     override fun editTime(entryId: String, minutes: Int, targetId: String?, note: String) {
         viewModel.editTime(entryId, minutes, targetId, note)
@@ -835,6 +853,11 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                 viewModel.stopTimer(onSuccess = {
                     AttentionBootReceiver.cancelRecoveryPrompt(context)
                     context.stopService(AttentionTimerService.intent(context))
+                })
+            },
+            onRecoverTimerFromNow = {
+                viewModel.recoverTimer(onSuccess = {
+                    AttentionBootReceiver.cancelRecoveryPrompt(context)
                 })
             },
             onTimeRecordDeleted = { removed ->

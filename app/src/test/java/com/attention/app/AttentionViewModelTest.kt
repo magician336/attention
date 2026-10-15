@@ -35,6 +35,7 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -186,6 +187,37 @@ class AttentionViewModelTest {
             advanceUntilIdle()
 
             assertEquals(1, repository.state.value.milestones.count { it.kind == "one_time_goal" })
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun a_timer_started_from_a_schedule_entry_keeps_that_link_and_a_free_one_does_not() = runTest {
+        // 日程页的「从日程开始计时」与自由计时走同一条领域命令，差别只在 scheduleEntryId：
+        // 组合根 adapter 必须把它带下去，否则这条计时就丢了来源关联。
+        // 结算后的记录上带不带关联由领域层用显式时刻钉住（AttentionEngineTest 的两条计时用例），
+        // 这里只钉住 adapter 这一段：intent 有没有把条目 id 传到底。
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val date = AttentionState().planningDate(Instant.now(), ZoneOffset.UTC)
+            val target = Target("target-1", title = "写周报")
+            val schedule = ScheduleEntry("schedule-1", date.toString(), "写周报", estimatedMinutes = 45, targetId = target.id)
+            val repository = FakeRepository(AttentionState(targets = listOf(target), schedules = listOf(schedule)))
+            val viewModel = AttentionViewModel(repository, ZoneOffset.UTC)
+
+            viewModel.startTimer(target.id, schedule.id)
+            advanceUntilIdle()
+            assertEquals(schedule.id, repository.state.value.activeTimer?.scheduleEntryId)
+
+            viewModel.stopTimer()
+            advanceUntilIdle()
+
+            // 自由计时不伪造日程来源：没有条目可带，计时上就没有 scheduleEntryId。
+            viewModel.startTimer(target.id)
+            advanceUntilIdle()
+            assertNull(repository.state.value.activeTimer?.scheduleEntryId)
         } finally {
             Dispatchers.resetMain()
         }

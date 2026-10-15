@@ -68,6 +68,21 @@ fun updateSchedule(entry: ScheduleEntry, reminderMinuteOfDay: Int?)
      */
     fun stopRunningTimer()
 
+    /** 暂停运行中的计时。暂停只是冻结已投入，还没有保存。 */
+    fun pauseRunningTimer()
+
+    /** 恢复被暂停的计时，从暂停那一刻继续累计。 */
+    fun resumeRunningTimer()
+
+    /**
+     * 从此刻继续：把计时的起点重置到现在的这一刻。用于计时被系统打断、
+     * 上次会话结束时不确定该怎么接着算的情况；恢复提示的撤除由组合根完成。
+     */
+    fun recoverRunningTimerFromNow()
+
+    /** 把运行中的计时切到另一个目标；[targetId] 为 null 表示切到未归属活动。 */
+    fun switchRunningTimerTarget(targetId: String?)
+
     /**
      * 编辑一条实际投入，只调整时长、目标归属与备注。
      * 记录的规划日与来源由领域层保持不变，因此这里不接收它们。

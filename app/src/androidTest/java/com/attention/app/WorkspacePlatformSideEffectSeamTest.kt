@@ -181,6 +181,10 @@ class WorkspacePlatformSideEffectSeamTest {
         override fun toggleScheduleCompleted(entryId: String) = Unit
         override fun startTimerFromEntry(entry: ScheduleEntry) { startedTimerEntries += entry }
         override fun stopRunningTimer() = Unit
+        override fun pauseRunningTimer() = Unit
+        override fun resumeRunningTimer() = Unit
+        override fun recoverRunningTimerFromNow() = Unit
+        override fun switchRunningTimerTarget(targetId: String?) = Unit
         override fun editTime(entryId: String, minutes: Int, targetId: String?, note: String) = Unit
         override fun deleteTime(entryId: String) = Unit
         override fun addRecurrenceAndMaterialize(draft: AgendaRecurrenceDraft) = Unit

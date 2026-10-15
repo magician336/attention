@@ -7,12 +7,14 @@ import com.attention.domain.ScheduleEntry
 import com.attention.domain.ScheduleFrequency
 import com.attention.domain.StoredSettings
 import com.attention.domain.Target
+import com.attention.domain.TimerSegment
 import com.attention.domain.occurrences
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -431,6 +433,77 @@ class AgendaScreenStateTest {
         assertFalse(timer?.paused ?: true)
         assertEquals(1, timer?.elapsedMinutes)
         assertNull("没有计时进行时不显示运行中计时", project(state = stateWith()).activeTimer)
+    }
+
+    @Test
+    fun the_elapsed_minutes_come_from_the_injected_now_and_not_from_a_wall_clock() {
+        // 页面不读时钟：已投入只能随组合根注入的那一份 now 增长。
+        val state = stateWith().copy(
+            targets = listOf(Target("t1", title = "写周报")),
+            activeTimer = ActiveTimer(
+                targetId = "t1",
+                startedAtEpochMillis = now.minusSeconds(90).toEpochMilli(),
+                lastPlanningDate = "2026-03-05",
+            ),
+        )
+
+        val atStart = project(state = state, instant = now).activeTimer
+        val later = project(state = state, instant = now.plusSeconds(5 * 60)).activeTimer
+
+        assertEquals(1, atStart?.elapsedMinutes)
+        assertEquals(6, later?.elapsedMinutes)
+    }
+
+    @Test
+    fun a_paused_timer_freezes_the_elapsed_minutes_and_names_the_next_step() {
+        // 暂停不等于已保存：这行文字必须同时说清「还没记入」与「下一步做什么」。
+        val pausedAt = now.minusSeconds(30 * 60)
+        val state = stateWith().copy(
+            targets = listOf(Target("t1", title = "写周报")),
+            activeTimer = ActiveTimer(
+                targetId = "t1",
+                startedAtEpochMillis = pausedAt.toEpochMilli(),
+                accumulatedMillis = 5 * 60_000L,
+                paused = true,
+                lastPlanningDate = "2026-03-05",
+                completedSegments = listOf(
+                    TimerSegment(now.minusSeconds(35 * 60).toEpochMilli(), pausedAt.toEpochMilli()),
+                ),
+            ),
+        )
+
+        val timer = project(state = state, instant = now.plusSeconds(60 * 60)).activeTimer
+
+        assertTrue(timer?.paused ?: false)
+        // 暂停后时钟继续走，已投入仍停在暂停那一刻的 5 分钟。
+        assertEquals(5, timer?.elapsedMinutes)
+        assertEquals("已投入 5 分钟", timer?.elapsedLabel)
+        assertEquals("已暂停", timer?.statusLabel)
+        val hint = timer?.pendingHintLabel
+        assertNotNull("暂停时必须告诉用户下一步", hint)
+        assertTrue("提示要说明这 5 分钟尚未保存：" + hint, hint!!.contains("尚未保存"))
+        assertTrue("提示要给出恢复这条路：" + hint, hint.contains("恢复"))
+        assertTrue("提示要给出结束保存这条路：" + hint, hint.contains("结束并保存"))
+    }
+
+    @Test
+    fun a_running_timer_carries_no_pending_hint_and_its_target_id() {
+        // 运行中不需要「还没保存」提示；目标 id 供「切换计时目标」菜单标出当前目标。
+        val state = stateWith().copy(
+            targets = listOf(Target("t1", title = "写周报")),
+            activeTimer = ActiveTimer(
+                targetId = "t1",
+                startedAtEpochMillis = now.minusSeconds(120).toEpochMilli(),
+                lastPlanningDate = "2026-03-05",
+            ),
+        )
+
+        val timer = project(state = state).activeTimer
+
+        assertEquals("t1", timer?.targetId)
+        assertEquals("计时中", timer?.statusLabel)
+        assertEquals("已投入 2 分钟", timer?.elapsedLabel)
+        assertNull("运行中的计时没有待保存的投入", timer?.pendingHintLabel)
     }
 
     @Test
