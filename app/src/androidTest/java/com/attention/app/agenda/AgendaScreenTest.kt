@@ -31,6 +31,7 @@ import com.attention.workspace.state.AgendaActions
 import com.attention.workspace.state.AgendaActiveTimer
 import com.attention.workspace.state.AgendaDateOption
 import com.attention.workspace.state.AgendaDateSection
+import com.attention.workspace.state.AgendaFreeTimerOption
 import com.attention.workspace.state.AgendaRangeOption
 import com.attention.workspace.state.AgendaRangeScope
 import com.attention.workspace.state.AgendaRecurrenceRuleLine
@@ -127,6 +128,7 @@ class AgendaScreenTest {
         // 标题与规划日必需；其余可选，提交后只发一个草稿 intent
         val intents = RecordingAgendaActions()
         mount(allDatesScreenState(), intents)
+        openAddScheduleSheet()
 
         composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true).performScrollTo()
             .performTextReplacement("整理需求")
@@ -146,6 +148,7 @@ class AgendaScreenTest {
         // 标题为空时不发 intent，页面就地给出与迁移前相同的提示
         val intents = RecordingAgendaActions()
         mount(allDatesScreenState(), intents)
+        openAddScheduleSheet()
 
         composeRule.onNodeWithTag("agenda-estimate-input", useUnmergedTree = true).performTextReplacement("45")
         composeRule.onNodeWithTag("agenda-add-submit", useUnmergedTree = true).performScrollTo().performClick()
@@ -159,16 +162,116 @@ class AgendaScreenTest {
         // 填了提醒才请求权限；权限申请本身由组合根 adapter 完成
         val intents = RecordingAgendaActions()
         mount(allDatesScreenState(), intents)
+        openAddScheduleSheet()
 
         composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true).performScrollTo()
             .performTextReplacement("带提醒的日程")
-        // 重复日程与新增日程各有一个提醒输入框，后者排在后面
+        expandAddScheduleMoreSettings()
         composeRule.onNodeWithTag("agenda-reminder-input", useUnmergedTree = true).performScrollTo()
             .performTextReplacement("09:00")
         composeRule.onNodeWithTag("agenda-add-submit", useUnmergedTree = true).performScrollTo().performClick()
 
         assertEquals(540, intents.addedSchedules.single().reminderMinuteOfDay)
         assertEquals(1, intents.permissionRequests)
+    }
+
+    @Test
+    fun the_quick_add_menu_offers_add_schedule_and_start_a_free_timer() {
+        // 「+」菜单把「安排一件事」与「为正在做的事开始计时」收在同一个入口下
+        mount(allDatesScreenState())
+
+        node("＋").assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-quick-add", useUnmergedTree = true).performScrollTo().performClick()
+
+        composeRule.onNodeWithTag("agenda-quick-add-schedule", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-quick-add-free-timer", useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun the_add_schedule_sheet_opens_on_the_planning_day_in_view() {
+        // 底部面板打开时规划日已经填好：用户不必先输一遍日期，提交出去的就是这一天
+        val intents = RecordingAgendaActions()
+        mount(
+            planningDayScreenState(selected = planningDay).copy(
+                addScheduleDefaultDate = "2026-03-05",
+                addScheduleDefaultDateLabel = "规划日 2026-03-05",
+            ),
+            intents,
+        )
+        openAddScheduleSheet()
+
+        composeRule.onNodeWithTag("agenda-add-sheet", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-add-planning-day", useUnmergedTree = true).assertIsDisplayed()
+
+        composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true).performScrollTo()
+            .performTextReplacement("今天第一件事")
+        composeRule.onNodeWithTag("agenda-add-submit", useUnmergedTree = true).performScrollTo().performClick()
+
+        assertEquals("2026-03-05", intents.addedSchedules.single().planningDate)
+    }
+
+    @Test
+    fun the_add_schedule_sheet_keeps_the_secondary_fields_behind_more_settings() {
+        // 主要字段是标题与时间段、预计投入；备注、提醒与关联计划是低频的
+        mount(allDatesScreenState())
+        openAddScheduleSheet()
+
+        composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-start-input", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-end-input", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-estimate-input", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onAllNodesWithTag("agenda-reminder-input", useUnmergedTree = true).fetchSemanticsNodes().let {
+            assertEquals("更多设置没展开时不渲染次要字段", emptyList<Any>(), it)
+        }
+
+        expandAddScheduleMoreSettings()
+
+        composeRule.onNodeWithTag("agenda-reminder-input", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-note-input", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-add-target", useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun starting_a_free_timer_chooses_a_target_in_place_without_creating_a_schedule() {
+        // 自由计时不需要先建日程：挑一个未归档计划就开始，且不发出任何新建日程 intent
+        val intents = RecordingAgendaActions()
+        mount(
+            planningDayScreenState(selected = planningDay).copy(
+                freeTimerOptions = listOf(
+                    AgendaFreeTimerOption(null, "未归属活动"),
+                    AgendaFreeTimerOption("t1", "工作"),
+                ),
+            ),
+            intents,
+        )
+
+        composeRule.onNodeWithTag("agenda-quick-add", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-quick-add-free-timer", useUnmergedTree = true).performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("agenda-free-timer-target-t1", useUnmergedTree = true).performScrollTo().performClick()
+
+        assertEquals(listOf("t1"), intents.startedFreeTimers)
+        assertEquals("自由计时不伪造日程来源", emptyList<AgendaScheduleDraft>(), intents.addedSchedules)
+    }
+
+    @Test
+    fun the_free_timer_sheet_offers_the_unowned_activity_and_the_unarchived_plans() {
+        mount(
+            planningDayScreenState(selected = planningDay).copy(
+                freeTimerOptions = listOf(
+                    AgendaFreeTimerOption(null, "未归属活动"),
+                    AgendaFreeTimerOption("t1", "工作（当前）", selected = true),
+                ),
+            ),
+        )
+
+        composeRule.onNodeWithTag("agenda-quick-add", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-quick-add-free-timer", useUnmergedTree = true).performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("agenda-free-timer-unowned", useUnmergedTree = true).assertIsDisplayed()
+        node("工作（当前）").assertIsDisplayed()
     }
 
     @Test
@@ -598,16 +701,30 @@ class AgendaScreenTest {
     }
 
     @Test
-    fun an_empty_planning_day_invites_the_first_schedule_and_reaches_the_add_form() {
-        // 当天没有日程时显示「安排今天第一件事」，并直接提供添加日程入口
+    fun an_empty_planning_day_invites_the_first_schedule_and_opens_the_add_sheet() {
+        // 当天没有日程时显示「安排今天第一件事」，点一下直接把添加面板打开
         mount(emptyPlanningDayScreenState())
 
         node("安排今天第一件事").assertIsDisplayed()
         composeRule.onNodeWithTag("agenda-first-schedule", useUnmergedTree = true).performScrollTo().performClick()
-        // 页面把添加表单滚进视野，等这一段滚动停下来再断言
+        // 底部面板是一层，等它展开停下来再断言
         composeRule.waitForIdle()
 
-        composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-add-sheet", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    /** 通过工作台的 `+` 菜单打开添加日程底部面板。 */
+    private fun openAddScheduleSheet() {
+        composeRule.onNodeWithTag("agenda-quick-add", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-quick-add-schedule", useUnmergedTree = true).performClick()
+        composeRule.waitForIdle()
+    }
+
+    /** 展开添加日程面板里的「更多设置」，露出备注、提醒与关联计划。 */
+    private fun expandAddScheduleMoreSettings() {
+        composeRule.onNodeWithTag("agenda-add-more-toggle", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.waitForIdle()
     }
 
     /**
@@ -866,6 +983,7 @@ class AgendaScreenTest {
         val confirmedCompletions = mutableListOf<String>()
         val toggledCompletions = mutableListOf<String>()
         val startedEntries = mutableListOf<ScheduleEntry>()
+        val startedFreeTimers = mutableListOf<String?>()
         val addedRecurrences = mutableListOf<AgendaRecurrenceDraft>()
         val stoppedRules = mutableListOf<String>()
         val dataIntents = mutableListOf<String>()
@@ -907,6 +1025,10 @@ class AgendaScreenTest {
 
         override fun startTimerFromEntry(entry: ScheduleEntry) {
             startedEntries += entry
+        }
+
+        override fun startFreeTimer(targetId: String?) {
+            startedFreeTimers += targetId
         }
 
         override fun addRecurrenceAndMaterialize(draft: AgendaRecurrenceDraft) {
