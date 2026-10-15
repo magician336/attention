@@ -20,19 +20,22 @@ data class StoredSettings(
     )
 }
 
-@Serializable
+@Serializable(with = GoalCadenceSerializer::class)
 enum class GoalCadence { DAILY, WEEKLY, MONTHLY, ONE_TIME }
 
-@Serializable
+@Serializable(with = TimeEntrySourceSerializer::class)
 enum class TimeEntrySource { MANUAL, TIMER, SCHEDULE_CONFIRMED, IMPORT }
 
-@Serializable
+@Serializable(with = ScheduleFrequencySerializer::class)
 enum class ScheduleFrequency { DAILY, WEEKLY, MONTHLY }
 
-@Serializable
+@Serializable(with = LaunchDestinationSerializer::class)
 /**
  * 启动入口。[AGENDA] 是「日程」的正式语义；[TODAY] 与 [ALL_DATES] 是旧版本持久化的入口值，
  * 它们仍然存在并按旧页面打开，删除它们属于后续的收缩工作。
+ *
+ * 四个按名持久化的枚举都走 [PersistedEnumSerializer]：名字认不出来时读成声明过的默认值，
+ * 而不是让整份备份被拒。
  */
 enum class LaunchDestination { TODAY, TARGETS, ALL_DATES, STATISTICS, LAST_OPENED, AGENDA }
 
