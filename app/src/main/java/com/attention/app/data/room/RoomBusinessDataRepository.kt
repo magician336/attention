@@ -10,6 +10,7 @@ import com.attention.domain.AttentionCommandResult
 import com.attention.domain.StoredSettings
 import com.attention.domain.descendantIds
 import com.attention.domain.recalculateExperience
+import com.attention.domain.toggleScheduleCompleted
 import java.time.Instant
 import java.time.ZoneId
 import kotlinx.coroutines.flow.Flow
@@ -19,16 +20,25 @@ import kotlinx.coroutines.flow.map
 /** Room-only business data boundary; settings are composed by AttentionStateReader. */
 open class RoomBusinessDataRepository(
     private val database: AttentionDatabase,
-) {
-    open suspend fun replace(state: AttentionState) = database.withTransaction {
+) : BusinessStateStore {
+
+    open override suspend fun replace(state: AttentionState) = database.withTransaction {
         replaceInTransaction(state)
     }
 
     /** Reads, applies one domain command, and persists it in one Room transaction. */
-    suspend fun update(transform: (AttentionState) -> AttentionState): AttentionState = database.withTransaction {
-        val next = transform(readInTransaction()).recalculateExperience()
+    suspend fun update(transform: (AttentionState) -> AttentionState): AttentionState =
+        updateTransition(StoredSettings(), transform).next
+
+    /** Returns the exact Room before/after pair used by [update]. */
+    override suspend fun updateTransition(
+        plannerSettings: StoredSettings,
+        transform: (AttentionState) -> AttentionState,
+    ): BusinessStateTransition<AttentionState> = database.withTransaction {
+        val previous = readInTransaction().copy(settings = plannerSettings)
+        val next = transform(previous).recalculateExperience()
         replaceInTransaction(next)
-        next
+        BusinessStateTransition(previous = previous, next = next, result = next)
     }
 
     /**
@@ -45,18 +55,35 @@ open class RoomBusinessDataRepository(
         now: Instant,
         zone: ZoneId,
         plannerSettings: StoredSettings,
-    ): AttentionCommandResult = database.withTransaction {
-        val result = command.execute(readInTransaction().copy(settings = plannerSettings), now, zone)
+    ): AttentionCommandResult = executeTransition(command, now, zone, plannerSettings).result
+
+    /** Returns the exact Room before/after pair used by [execute]. */
+    override suspend fun executeTransition(
+        command: AttentionCommand,
+        now: Instant,
+        zone: ZoneId,
+        plannerSettings: StoredSettings,
+    ): BusinessStateTransition<AttentionCommandResult> = database.withTransaction {
+        val previous = readInTransaction().copy(settings = plannerSettings)
+        val result = command.execute(previous, now, zone)
         val canonicalState = result.state.recalculateExperience()
         replaceInTransaction(canonicalState)
-        result.copy(state = canonicalState)
+        BusinessStateTransition(
+            previous = previous,
+            next = canonicalState,
+            result = result.copy(state = canonicalState),
+        )
     }
 
-    suspend fun toggleScheduleCompleted(entryId: String): AttentionState = database.withTransaction {
-        val current = database.scheduleEntryDao().findById(entryId)
-            ?: error("日程条目不存在")
-        database.scheduleEntryDao().upsert(current.copy(completed = !current.completed))
-        readInTransaction()
+    suspend fun toggleScheduleCompleted(entryId: String): AttentionState =
+        toggleScheduleCompletedTransition(entryId, StoredSettings()).next
+
+    /** Toggles completion through the same domain transition used by the coordinator. */
+    override suspend fun toggleScheduleCompletedTransition(
+        entryId: String,
+        plannerSettings: StoredSettings,
+    ): BusinessStateTransition<AttentionState> = updateTransition(plannerSettings) { state ->
+        state.toggleScheduleCompleted(entryId)
     }
 
     private suspend fun replaceInTransaction(state: AttentionState) {

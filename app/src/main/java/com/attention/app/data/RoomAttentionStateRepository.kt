@@ -8,7 +8,6 @@ import com.attention.app.data.backup.BackupWorkflow
 import com.attention.app.data.backup.ImportMode
 import com.attention.app.data.backup.ImportBackupStore
 import com.attention.app.data.backup.InMemoryImportBackupStore
-import com.attention.app.data.settings.SettingsSnapshot
 import com.attention.app.data.settings.SettingsStore
 import com.attention.app.reminder.ReminderCoordinator
 import com.attention.domain.AttentionState
@@ -16,11 +15,8 @@ import com.attention.domain.AttentionCommand
 import com.attention.domain.AttentionCommandResult
 import com.attention.domain.LaunchDestination
 import com.attention.domain.StoredSettings
-import com.attention.domain.recalculateExperience
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import java.time.Instant
 import java.time.ZoneId
 
@@ -37,8 +33,6 @@ class RoomAttentionStateRepository(
     private val backupStore: ImportBackupStore = InMemoryImportBackupStore(),
     private val reminderCoordinator: ReminderCoordinator = ReminderCoordinator { _, _ -> },
 ) : AttentionStateRepository, BackupStateSubmissionPort {
-    private val mutex = Mutex()
-
     /** Typed workflow used by ViewModel and other non-Android callers. */
     override val backupWorkflow: BackupWorkflow by lazy {
         BackupWorkflow(this, backupStore)
@@ -46,41 +40,38 @@ class RoomAttentionStateRepository(
 
     override val state: Flow<AttentionState> = AttentionStateReader(business, settings).state
 
+    private val commitCoordinator = StateCommitCoordinator(
+        business = business,
+        settings = settings,
+        backupStore = backupStore,
+        reminderCoordinator = reminderCoordinator,
+        readState = { state.first() },
+    )
+
     override suspend fun updateBusiness(transform: (AttentionState) -> AttentionState) {
-        mutex.withLock {
-            val previous = state.first()
-            val plannerSettings = settings.settings.first().toStoredSettings()
-            val next = business.update { current ->
-                transform(current.copy(settings = plannerSettings))
-            }
-            reminderCoordinator.sync(previous, next)
-        }
+        val plannerSettings = settings.settings.first().toStoredSettings()
+        commitCoordinator.updateBusiness(plannerSettings, transform)
     }
 
     override suspend fun executeCommand(
         command: AttentionCommand,
         now: Instant,
         zone: ZoneId,
-    ): AttentionCommandResult = mutex.withLock {
+    ): AttentionCommandResult {
         val previous = state.first()
-        val result = business.execute(command, now, zone, plannerSettings = previous.settings)
-        val next = result.state.copy(
+        val result = commitCoordinator.executeCommand(command, now, zone, plannerSettings = previous.settings)
+        return result.copy(state = result.state.copy(
             settings = previous.settings,
             launchDestination = previous.launchDestination,
             lastOpenedDestination = previous.lastOpenedDestination,
             onboardingCompleted = previous.onboardingCompleted,
             notificationsEnabled = previous.notificationsEnabled,
-        )
-        reminderCoordinator.sync(previous, next)
-        result.copy(state = next)
+        ))
     }
 
     override suspend fun toggleScheduleCompleted(entryId: String) {
-        mutex.withLock {
-            val previous = state.first()
-            val next = business.toggleScheduleCompleted(entryId)
-            reminderCoordinator.sync(previous, next)
-        }
+        val plannerSettings = settings.settings.first().toStoredSettings()
+        commitCoordinator.toggleScheduleCompleted(entryId, plannerSettings)
     }
 
     override suspend fun setPlannerSettings(settings: StoredSettings) {
@@ -116,67 +107,37 @@ class RoomAttentionStateRepository(
     }
 
     override suspend fun replace(state: AttentionState) {
-        mutex.withLock {
-            replaceWithRollback(this@RoomAttentionStateRepository.state.first(), state)
-        }
+        commitCoordinator.replace(state)
     }
 
     /**
      * Reads the complete composed state for [BackupStateSubmissionPort]. The
-     * submission implementation performs its own read again while holding
-     * [mutex], so this method is safe for workflow preview and fingerprinting.
+     * submission implementation performs its own read again while holding the
+     * coordinator lock, so this method is safe for workflow preview and
+     * fingerprinting.
      */
     override suspend fun read(): AttentionState = state.first()
 
     /**
      * Re-checks a plan fingerprint and, when current, rotates the import
      * snapshot before replacing Room, DataStore and reminders. The entire
-     * operation is serialized by one mutex; any failure compensates all three
-     * stores and restores the previous snapshot value.
+     * operation is serialized by the coordinator; any failure compensates all
+     * three stores and restores the previous snapshot value.
      */
     override suspend fun submit(
         expectedFingerprint: String,
         next: AttentionState,
-    ): BackupCommitResult = mutex.withLock {
-        val current = state.first()
-        val actualFingerprint = BackupWorkflow.stateFingerprint(current)
-        if (actualFingerprint != expectedFingerprint) {
-            return@withLock BackupCommitResult.StalePlan(
-                expectedFingerprint = expectedFingerprint,
-                actualFingerprint = actualFingerprint,
-            )
-        }
-
-        val previousBackup = backupStore.read()
-        val currentBackup = AttentionBackupCodec.encode(current)
-        try {
-            // Persist the pre-submit state before touching any runtime store.
-            // The old value is retained and restored if writing or replacement
-            // fails, so a failed import never destroys the last recovery point.
-            backupStore.write(currentBackup)
-            val committed = replaceWithRollback(current, next)
-            BackupCommitResult.Committed(committed)
-        } catch (error: Throwable) {
-            runCatching {
-                backupStore.write(previousBackup ?: currentBackup)
-            }.onFailure(error::addSuppressed)
-            throw error
-        }
-    }
+    ): BackupCommitResult = commitCoordinator.submit(expectedFingerprint, next)
 
     /**
      * Compatibility import preparation can fail before a typed plan exists.
      * Keep its historical recovery guarantee inside the same mutex and port
      * boundary used by successful submissions.
      */
-    override suspend fun preserveImportBackupIfAbsent() = mutex.withLock {
-        if (backupStore.read() == null) {
-            backupStore.write(AttentionBackupCodec.encode(state.first()))
-        }
-    }
+    override suspend fun preserveImportBackupIfAbsent() = commitCoordinator.preserveImportBackupIfAbsent()
 
     override suspend fun restoreReminders() {
-        mutex.withLock { reminderCoordinator.restore(state.first()) }
+        commitCoordinator.restoreReminders()
     }
 
     override suspend fun exportJson(): String = AttentionBackupCodec.encode(state.first())
@@ -198,33 +159,5 @@ class RoomAttentionStateRepository(
         backupWorkflow.restoreLatestImportBackup()
 
     override suspend fun lastImportBackup(): String? = backupStore.read()
-
-    private suspend fun replaceWithRollback(current: AttentionState, next: AttentionState): AttentionState {
-        val canonicalNext = next.recalculateExperience()
-        try {
-            business.replace(canonicalNext)
-            settings.setSnapshot(canonicalNext.toSettingsSnapshot())
-            reminderCoordinator.sync(current, canonicalNext)
-            return canonicalNext
-        } catch (error: Throwable) {
-            runCatching { reminderCoordinator.sync(canonicalNext, current) }
-                .onFailure(error::addSuppressed)
-            runCatching { settings.setSnapshot(current.toSettingsSnapshot()) }
-                .onFailure(error::addSuppressed)
-            runCatching { business.replace(current) }
-                .onFailure(error::addSuppressed)
-            throw error
-        }
-    }
-
-    private fun AttentionState.toSettingsSnapshot(): SettingsSnapshot = SettingsSnapshot(
-        planningDayBoundaryMinutes = settings.planningDayBoundaryMinutes,
-        weekStartDay = settings.weekStartDay,
-        dailyCapacityMinutes = settings.dailyCapacityMinutes,
-        launchDestination = launchDestination,
-        lastOpenedDestination = lastOpenedDestination,
-        onboardingCompleted = onboardingCompleted,
-        notificationsEnabled = notificationsEnabled,
-    )
 
 }
