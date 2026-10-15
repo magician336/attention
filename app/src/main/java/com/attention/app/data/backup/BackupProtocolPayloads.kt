@@ -1,37 +1,29 @@
 package com.attention.app.data.backup
 
-import com.attention.domain.ActiveTimer
-import com.attention.domain.FutureGoalRule
 import com.attention.domain.GoalCadence
-import com.attention.domain.GoalStage
 import com.attention.domain.LaunchDestination
-import com.attention.domain.Migration
-import com.attention.domain.Milestone
-import com.attention.domain.PeriodSnapshot
-import com.attention.domain.RecurrenceRule
-import com.attention.domain.ScheduleEntry
 import com.attention.domain.ScheduleFrequency
-import com.attention.domain.StoredSettings
-import com.attention.domain.Target
-import com.attention.domain.TargetMove
-import com.attention.domain.TimeEntry
 import com.attention.domain.TimeEntrySource
-import com.attention.domain.TimerSegment
 import kotlinx.serialization.serializer
 
 /** 协议字段是一个对象，还是同一个对象的列表。 */
 enum class BackupPayloadContainer { VALUE, LIST }
 
 /**
- * 清单项的类别：[DOMAIN_RECORD] 与 [DOMAIN_ENUM] 是 `:domain` 类型，
- * [PROTOCOL_SCALAR] 是协议自己定义的标量字段。
+ * 清单项的类别。
+ *
+ * [PROTOCOL_RECORD] 是协议自己的数据模型（`Backup*`，见 [BackupProtocolModels]），
+ * [DOMAIN_ENUM] 是协议字段仍然直接承载的领域枚举，[PROTOCOL_SCALAR] 是协议自己定义的标量字段。
+ *
+ * [PROTOCOL_ENUM] 目前没有任何载荷占着：五个枚举字段（两个启动入口、三个周期/来源口径）仍直接
+ * 承载领域枚举，这是过渡状态，由 #205 换成协议自己的枚举之后，第一条清单项才会落进这一类。
  */
-enum class BackupPayloadKind { DOMAIN_RECORD, DOMAIN_ENUM, PROTOCOL_SCALAR }
+enum class BackupPayloadKind { PROTOCOL_RECORD, PROTOCOL_ENUM, DOMAIN_ENUM, PROTOCOL_SCALAR }
 
 /**
  * 一条「备份协议承载了什么」的清单项。
  *
- * @param field 承载路径。顶层字段就是协议字段名（`targets`），嵌在另一个对象里的领域类型
+ * @param field 承载路径。顶层字段就是协议字段名（`targets`），嵌在另一个协议模型里的承载点
  * 写成点路径（`activeTimer.completedSegments`）。
  * @param serialName 该路径上承载的类型的序列化标识，取自类型自己的序列化描述符。
  * 写死成序列化描述符里的名字，是为了让一致性测试能与协议实际形状直接比对。
@@ -55,20 +47,24 @@ data class BackupPayload(
 /**
  * version 1 备份协议承载内容的显式清单。
  *
- * 协议字段直接使用 `:domain` 类型本身（见 [AttentionBackup] 的说明），所以「它到底把什么写进了
- * 文件」必须被写下来，而不是靠读构造函数去推断。本清单逐项列出协议承载的每个领域类型、每个
- * 嵌在领域类型里的承载点，以及协议自己的标量字段，每项写明它在备份里的理由。
+ * 协议由自己的模型承载（见 [AttentionBackup] 与 [BackupProtocolModels]），领域状态与协议模型之间
+ * 隔着 [BackupDomainMapping] 的映射，所以「它到底把什么写进了文件」必须被写下来，而不是靠读
+ * 构造函数去推断。本清单逐项列出协议承载的每个类型、每个嵌在里面的承载点，以及协议自己的标量
+ * 字段，每项写明它在备份里的理由。
  *
- * 清单与协议实际字段的一致性由 `BackupProtocolPayloadTest` 保证：给领域类型新增一个进入备份的
- * 字段、给备份新增一个字段、或新增一个被承载的类型，那条测试都会变红。
+ * 清单与协议实际字段的一致性由 `BackupProtocolPayloadTest` 保证：给协议新增一个字段、把某个
+ * 承载点的容器改掉、或新增一个被承载的类型，那条测试都会变红。协议字段与**领域**字段的一一对应
+ * 由 `BackupDomainMappingTest` 保证：给领域类型加一个进入备份的字段而忘了映射、或协议凭空多出
+ * 一个字段，那条测试会变红。两条护栏互补，谁也替代不了谁。
  *
- * 这份清单同时是 #202 迁移的起点：将来协议改用自己的 DTO 时，每一项都要能说出「这个领域类型在
- * 备份里对应哪一段」。
+ * 每一条清单项都在回答「备份里的哪一段对应哪个领域概念」，所以下面的 `reason` 写的是领域侧的
+ * 理由，而不是协议字段的理由——「这段内容对应哪个领域类型、哪个字段」由映射层与上面那条
+ * 一致性测试保证。
  */
 object BackupProtocolPayloads {
 
-    /** 领域类型在序列化描述符里的包前缀。承载点是否属于领域，由它判断。 */
-    private const val DOMAIN_PREFIX = "com.attention.domain."
+    /** 协议自有模型在序列化描述符里的包前缀。承载点是否属于协议，由它判断。 */
+    private const val PROTOCOL_PREFIX = "com.attention.app.data.backup."
 
     /** 协议承载的全部内容。顺序与 [AttentionBackup] 的字段声明顺序一致。 */
     val payloads: List<BackupPayload> = listOf(
@@ -82,36 +78,36 @@ object BackupProtocolPayloads {
         ),
         BackupPayload(
             field = "settings",
-            serialName = StoredSettings.serializer().descriptor.serialName,
+            serialName = BackupStoredSettings.serializer().descriptor.serialName,
             container = BackupPayloadContainer.VALUE,
-            kind = BackupPayloadKind.DOMAIN_RECORD,
+            kind = BackupPayloadKind.PROTOCOL_RECORD,
             wireFields = "planningDayBoundaryMinutes, weekStartDay, dailyCapacityMinutes",
             reason = "规划日界线、周起始日与每日容量是日期统计的口径。换一台设备却不带上它们，" +
                 "同一条时间记录会落到不同的规划日里，用户看到的历史因此被改写。",
         ),
         BackupPayload(
             field = "targets",
-            serialName = Target.serializer().descriptor.serialName,
+            serialName = BackupTarget.serializer().descriptor.serialName,
             container = BackupPayloadContainer.LIST,
-            kind = BackupPayloadKind.DOMAIN_RECORD,
+            kind = BackupPayloadKind.PROTOCOL_RECORD,
             wireFields = "id, parentId, title, note, icon, colorHex, archived, sortOrder, expanded",
             reason = "目标树的节点本身：层级靠 parentId 表达，归档靠 archived 表达。没有它，" +
                 "所有时间记录、日程条目与达成里程碑都失去归属，恢复出来是一片没有目标的账。",
         ),
         BackupPayload(
             field = "goalStages",
-            serialName = GoalStage.serializer().descriptor.serialName,
+            serialName = BackupGoalStage.serializer().descriptor.serialName,
             container = BackupPayloadContainer.LIST,
-            kind = BackupPayloadKind.DOMAIN_RECORD,
+            kind = BackupPayloadKind.PROTOCOL_RECORD,
             wireFields = "id, targetId, cadence, targetMinutes, startDate, dueDate, completed",
             reason = "目标阶段承载目标量与达成状态，是「计划投入」与实际投入对照的另一半。" +
                 "只恢复实际投入而不恢复它，缺口就无从计算。",
         ),
         BackupPayload(
             field = "timeEntries",
-            serialName = TimeEntry.serializer().descriptor.serialName,
+            serialName = BackupTimeEntry.serializer().descriptor.serialName,
             container = BackupPayloadContainer.LIST,
-            kind = BackupPayloadKind.DOMAIN_RECORD,
+            kind = BackupPayloadKind.PROTOCOL_RECORD,
             wireFields = "id, planningDate, durationMinutes, targetId, source, occurredAtEpochMillis, " +
                 "note, scheduleEntryId",
             reason = "时间记录是实际投入的事实本身，也是投入经验与达成里程碑的唯一来源。" +
@@ -119,9 +115,9 @@ object BackupProtocolPayloads {
         ),
         BackupPayload(
             field = "schedules",
-            serialName = ScheduleEntry.serializer().descriptor.serialName,
+            serialName = BackupScheduleEntry.serializer().descriptor.serialName,
             container = BackupPayloadContainer.LIST,
-            kind = BackupPayloadKind.DOMAIN_RECORD,
+            kind = BackupPayloadKind.PROTOCOL_RECORD,
             wireFields = "id, planningDate, title, startMinute, endMinute, estimatedMinutes, note, " +
                 "targetId, completed, reminderEpochMillis, recurrenceRuleId",
             reason = "日程条目是「打算在哪天做什么」，与时间记录是两回事。时间记录可以由日程确认而来，" +
@@ -129,9 +125,9 @@ object BackupProtocolPayloads {
         ),
         BackupPayload(
             field = "recurrenceRules",
-            serialName = RecurrenceRule.serializer().descriptor.serialName,
+            serialName = BackupRecurrenceRule.serializer().descriptor.serialName,
             container = BackupPayloadContainer.LIST,
-            kind = BackupPayloadKind.DOMAIN_RECORD,
+            kind = BackupPayloadKind.PROTOCOL_RECORD,
             wireFields = "id, title, startDate, frequency, weekdays, dayOfMonth, untilDate, active, " +
                 "estimatedMinutes, targetId, note, reminderMinuteOfDay",
             reason = "重复日程的规则本身。它决定未来还会生成哪些日程条目；丢掉它只会剩下历史发生过的条目，" +
@@ -139,27 +135,27 @@ object BackupProtocolPayloads {
         ),
         BackupPayload(
             field = "migrations",
-            serialName = Migration.serializer().descriptor.serialName,
+            serialName = BackupMigration.serializer().descriptor.serialName,
             container = BackupPayloadContainer.LIST,
-            kind = BackupPayloadKind.DOMAIN_RECORD,
+            kind = BackupPayloadKind.PROTOCOL_RECORD,
             wireFields = "id, targetId, sourceStageId, minutes, destinationStartDate, destinationEndDate, cancelled",
             reason = "目标迁移把当前周期的剩余目标安排到未来周期。原周期的目标缺口仍然保留，" +
                 "所以迁移记录必须跟着走，否则恢复后的缺口与用户的迁移决定对不上。",
         ),
         BackupPayload(
             field = "futureGoalRules",
-            serialName = FutureGoalRule.serializer().descriptor.serialName,
+            serialName = BackupFutureGoalRule.serializer().descriptor.serialName,
             container = BackupPayloadContainer.LIST,
-            kind = BackupPayloadKind.DOMAIN_RECORD,
+            kind = BackupPayloadKind.PROTOCOL_RECORD,
             wireFields = "id, targetId, stageId, cadence, targetMinutes, effectiveFrom, dueDate",
             reason = "未来目标规则只在指定日期之后生效，不回写已经开始的周期。" +
                 "不带它，未来周期的目标量会算错。",
         ),
         BackupPayload(
             field = "periodSnapshots",
-            serialName = PeriodSnapshot.serializer().descriptor.serialName,
+            serialName = BackupPeriodSnapshot.serializer().descriptor.serialName,
             container = BackupPayloadContainer.LIST,
-            kind = BackupPayloadKind.DOMAIN_RECORD,
+            kind = BackupPayloadKind.PROTOCOL_RECORD,
             wireFields = "id, targetId, cadence, periodStart, periodEnd, targetMinutes, actualMinutes, " +
                 "gapMinutes, excessMinutes, completed, stageId",
             reason = "周期快照是历史事实的计算依据，按 ADR-0002 保留历史目标引用，删除目标也不删除它。" +
@@ -167,17 +163,17 @@ object BackupProtocolPayloads {
         ),
         BackupPayload(
             field = "targetMoves",
-            serialName = TargetMove.serializer().descriptor.serialName,
+            serialName = BackupTargetMove.serializer().descriptor.serialName,
             container = BackupPayloadContainer.LIST,
-            kind = BackupPayloadKind.DOMAIN_RECORD,
+            kind = BackupPayloadKind.PROTOCOL_RECORD,
             wireFields = "id, targetId, parentId, effectiveFrom",
             reason = "目标移动从指定日期起改变目标树的父子关系。不带上它，恢复后的目标树会回到移动之前的位置。",
         ),
         BackupPayload(
             field = "milestones",
-            serialName = Milestone.serializer().descriptor.serialName,
+            serialName = BackupMilestone.serializer().descriptor.serialName,
             container = BackupPayloadContainer.LIST,
-            kind = BackupPayloadKind.DOMAIN_RECORD,
+            kind = BackupPayloadKind.PROTOCOL_RECORD,
             wireFields = "id, kind, instanceKey, reward, achievedAtEpochMillis",
             reason = "达成里程碑是一次性反馈，靠 instanceKey 去重。它属于用户的历史，不是可以重算的派生值。",
         ),
@@ -192,9 +188,9 @@ object BackupProtocolPayloads {
         ),
         BackupPayload(
             field = "activeTimer",
-            serialName = ActiveTimer.serializer().descriptor.serialName,
+            serialName = BackupActiveTimer.serializer().descriptor.serialName,
             container = BackupPayloadContainer.VALUE,
-            kind = BackupPayloadKind.DOMAIN_RECORD,
+            kind = BackupPayloadKind.PROTOCOL_RECORD,
             wireFields = "targetId, startedAtEpochMillis, accumulatedMillis, paused, lastPlanningDate, " +
                 "completedSegments, scheduleEntryId",
             reason = "正在进行的计时现场。它对应用户当下正在做的事，随用户数据一起保存；" +
@@ -232,8 +228,9 @@ object BackupProtocolPayloads {
             wireFields = "",
             reason = "通知偏好属于应用设置，跟着状态一起恢复，避免恢复后日程提醒静默改变。",
         ),
-        // 以下承载点不出现在协议顶层，而是嵌在被承载的领域类型里，
+        // 以下承载点不出现在协议顶层，而是嵌在被承载的协议模型里，
         // 但同样会随父类型被序列化，因此也是协议承载的内容。
+        // 周期口径、来源与频率仍直接承载领域枚举，是过渡状态，见 BackupPayloadKind 与 #205。
         BackupPayload(
             field = "goalStages.cadence",
             serialName = GoalCadence.serializer().descriptor.serialName,
@@ -278,9 +275,9 @@ object BackupProtocolPayloads {
         ),
         BackupPayload(
             field = "activeTimer.completedSegments",
-            serialName = TimerSegment.serializer().descriptor.serialName,
+            serialName = BackupTimerSegment.serializer().descriptor.serialName,
             container = BackupPayloadContainer.LIST,
-            kind = BackupPayloadKind.DOMAIN_RECORD,
+            kind = BackupPayloadKind.PROTOCOL_RECORD,
             wireFields = "startedAtEpochMillis, endedAtEpochMillis",
             reason = "计时器里已经完成的计时片段。累计时长由它们累加而来，恢复时若丢失，" +
                 "已经记下的实际投入会被当成零。",
@@ -290,9 +287,9 @@ object BackupProtocolPayloads {
     /** 某个类型在清单里声明的全部承载点。 */
     fun payloadsOf(serialName: String): List<BackupPayload> = payloads.filter { it.serialName == serialName }
 
-    /** 某个承载类型在清单里的全部路径，例如首屏与上次打开共用同一个枚举。 */
+    /** 某个承载类型在清单里的全部路径，例如启动入口与上次打开共用同一个枚举。 */
     fun fieldsOf(serialName: String): Set<String> = payloadsOf(serialName).mapTo(linkedSetOf()) { it.field }
 
-    /** 判断某个序列化标识是否属于 `:domain` 类型。 */
-    fun isDomainType(serialName: String): Boolean = serialName.startsWith(DOMAIN_PREFIX)
+    /** 判断某个序列化标识是否属于备份协议自有的模型。 */
+    fun isProtocolType(serialName: String): Boolean = serialName.startsWith(PROTOCOL_PREFIX)
 }
