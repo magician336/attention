@@ -57,6 +57,8 @@ class WorkspaceOnboardingFlowIntegrationTest {
     fun closeLaunchedActivity() {
         scenario?.close()
         scenario = null
+        // 关掉 Activity 之后，它组合根里的「上次打开」写回协程还可能落盘一次：等写入停稳。
+        WorkspaceHostSettingsBarrier.quiesce()
     }
 
     @Test

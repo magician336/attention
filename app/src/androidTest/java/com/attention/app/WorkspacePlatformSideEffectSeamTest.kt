@@ -53,11 +53,10 @@ class WorkspacePlatformSideEffectSeamTest {
     @Test
     fun every_platform_side_effect_the_navigation_touched_stays_a_replaceable_intent() {
         val agenda = RecordingAgendaActions()
+        // 日程页单独挂载：两个整屏页面叠在同一个组合里，后挂载的会盖住先挂载的，
+        // 点击坐标就会落到另一页上，因此每条用例只挂一个页面。
         composeRule.setContent {
-            AttentionTheme {
-                AgendaScreen(state = agendaScreenState(), actions = agenda)
-                SettingsScreen(state = settingsScreenState(), actions = RecordingSettingsActions())
-            }
+            AttentionTheme { AgendaScreen(state = agendaScreenState(), actions = agenda) }
         }
 
         // 提醒权限：页面只发出申请意图，权限对话框由组合根 adapter 负责

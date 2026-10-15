@@ -64,19 +64,31 @@ class WorkspaceNavigationTest {
 
     @Test
     fun last_opened_is_not_written_until_persisted_settings_are_loaded() {
-        assertEquals(false, shouldPersistLastOpened(false, false, true))
-        assertEquals(false, shouldPersistLastOpened(true, true, true))
-        assertEquals(true, shouldPersistLastOpened(true, false, true))
+        assertEquals(false, shouldPersistLastOpened(false, false, true, true))
+        assertEquals(false, shouldPersistLastOpened(true, true, true, true))
+        assertEquals(true, shouldPersistLastOpened(true, false, true, true))
     }
 
     @Test
     fun last_opened_is_not_written_while_the_domain_state_is_still_the_empty_default() {
         // 领域状态加载之前，[state] 是一份空默认值：据此解析出来的启动落点只是暂定值，
         // 写回去会覆盖用户上次真正停留的页面，因此必须等状态真的读上来。
-        assertEquals(false, shouldPersistLastOpened(true, false, false))
-        assertEquals(false, shouldPersistLastOpened(false, false, false))
+        assertEquals(false, shouldPersistLastOpened(true, false, false, true))
+        assertEquals(false, shouldPersistLastOpened(false, false, false, true))
         // 设置页不是顶级工作区：两条限制各自都能单独挡住写回
-        assertEquals(false, shouldPersistLastOpened(false, false, true))
-        assertEquals(false, shouldPersistLastOpened(true, true, true))
+        assertEquals(false, shouldPersistLastOpened(false, false, true, true))
+        assertEquals(false, shouldPersistLastOpened(true, true, true, true))
+    }
+
+    @Test
+    fun last_opened_is_not_written_while_the_launch_destination_is_still_provisional() {
+        // 状态已加载并不等于落点已纠正：启动落点的初值同样是由那份空默认值解析出来的暂定值，
+        // 状态纠正与写回发生在同一次重组里，写回那条 effect 捕获到的正是纠正之前的值。
+        // 因此「启动入口=上次打开、TARGETS 历史」的用户会在启动时被永久改成日程（#179 实跑失败）。
+        assertEquals(false, shouldPersistLastOpened(true, false, true, false))
+        assertEquals(false, shouldPersistLastOpened(false, false, true, false))
+        assertEquals(false, shouldPersistLastOpened(true, true, true, false))
+        // 落点确定之后才写回
+        assertEquals(true, shouldPersistLastOpened(true, false, true, true))
     }
 }

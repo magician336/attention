@@ -16,6 +16,10 @@ class WorkspaceLevelProgressIntegrationTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
 
+    // 被销毁的 Activity 仍可能在收尾时写回「上次打开」：等写入停稳再放行下一条用例。
+    @get:Rule(order = 1)
+    val settingsBarrier = WorkspaceHostSettingsBarrier.quiesceAfterActivity
+
     companion object {
         private const val TARGET_ID = "ui-level-progress-target"
         private const val TARGET_TITLE = "UI-等级进度"
