@@ -20,8 +20,9 @@ import com.attention.app.data.backup.FileImportBackupStore
 import com.attention.app.data.room.AttentionDatabase
 import com.attention.app.data.room.RoomBusinessDataRepository
 import com.attention.app.data.settings.createSettingsStore
-import com.attention.domain.AttentionState
 import com.attention.domain.AttentionCommand
+import com.attention.domain.AttentionState
+import com.attention.domain.formatMinuteOfDay
 import com.attention.domain.pauseTimer
 import com.attention.domain.resumeTimer
 import com.attention.domain.timerTargetLabel
@@ -224,7 +225,7 @@ class AttentionTimerService : Service() {
 
         private fun formatElapsed(elapsedMillis: Long): String {
             val totalMinutes = (elapsedMillis.coerceAtLeast(0) / 60_000L).toInt()
-            return "%02d:%02d".format(totalMinutes / 60, totalMinutes % 60)
+            return formatMinuteOfDay(totalMinutes)
         }
     }
 }

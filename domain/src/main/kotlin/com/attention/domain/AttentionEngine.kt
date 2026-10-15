@@ -291,6 +291,21 @@ fun AttentionState.timerTargetLabel(targetId: String?): String =
         ?.takeIf(String::isNotBlank)
         ?: "未归属活动"
 
+/**
+ * Milliseconds this timer has actually been running as of [now].
+ *
+ * Paused time freezes at the accumulated total; a running timer adds the segment
+ * opened when it was last resumed, and a clock that jumped backwards adds nothing.
+ * The caller supplies [now] so every projection and test reads the same value from
+ * the same rule instead of re-deriving it from the timer fields.
+ */
+fun ActiveTimer.elapsedMillis(now: Instant): Long =
+    if (paused) {
+        accumulatedMillis
+    } else {
+        accumulatedMillis + (now.toEpochMilli() - startedAtEpochMillis).coerceAtLeast(0)
+    }
+
 fun AttentionState.addTarget(title: String, parentId: String? = null): AttentionState {
     require(title.isNotBlank())
     require(parentId == null || targets.any { it.id == parentId })
@@ -1111,6 +1126,21 @@ fun AttentionState.continuousPlanningDaysThrough(onDate: LocalDate, targetId: St
     return count
 }
 
+private const val CUMULATIVE_MILESTONE_KIND = "cumulative"
+
+/**
+ * 累计投入里程碑的 instanceKey 形如 cumulative:小时数。kind 或 key 格式不符时返回 null，
+ * 调用方据此展示，而不是自己解析 key —— key 格式是 :domain 的规则。
+ */
+fun Milestone.cumulativeHours(): Long? =
+    if (kind == CUMULATIVE_MILESTONE_KIND) instanceKey.substringAfter("$CUMULATIVE_MILESTONE_KIND:").toLongOrNull() else null
+
+/** 累计投入里程碑：按达成时间排序，同一 instanceKey 只保留一条。 */
+fun AttentionState.cumulativeMilestones(): List<Milestone> = milestones
+    .filter { it.kind == CUMULATIVE_MILESTONE_KIND }
+    .sortedWith(compareBy({ it.achievedAtEpochMillis }, { it.id }))
+    .distinctBy { it.instanceKey }
+
 private const val ONE_TIME_GOAL_MILESTONE_KIND = "one_time_goal"
 
 fun oneTimeGoalMilestoneKey(stageId: String, startDate: String): String =
@@ -1188,9 +1218,9 @@ internal fun AttentionState.eligibleMilestonesAt(
         .filter { it.targetId != null && LocalDate.parse(it.planningDate) <= onDate }
         .sumOf { it.durationMinutes.toLong() } / 60
     (100L..totalHours step 100L).forEach { hours ->
-        val key = "cumulative:$hours"
+        val key = "$CUMULATIVE_MILESTONE_KIND:$hours"
         val reward = cumulativeMilestoneReward(hours)
-        if (reward != null) result.addMilestoneIfMissing(existing, "cumulative", key, reward, achievedAtEpochMillis)
+        if (reward != null) result.addMilestoneIfMissing(existing, CUMULATIVE_MILESTONE_KIND, key, reward, achievedAtEpochMillis)
     }
     return result
 }

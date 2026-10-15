@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!--
+      页面测试的空白 Compose 宿主。它只存在于 debug 变体，因此不会进入发布包。
+
+      页面测试用 createComposeRule() 挂载被测页面，不需要每启动一个用例就把整个应用
+      （Room、DataStore、计时服务）拉起来一遍——那会让设备在长页面的测试里反复被杀。
+      页面自己的配色来自 Compose 的 AttentionTheme，因此不需要额外的平台主题。
+
+      这个宿主没有 intent-filter，因此不声明 android:exported：createComposeRule() 由
+      instrumentation 在本应用进程内启动它，同一个 uid 启动自己的 activity 不需要导出。
+    -->
+    <application>
+        <activity android:name="androidx.activity.ComponentActivity" />
+    </application>
+</manifest>

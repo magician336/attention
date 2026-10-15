@@ -1,6 +1,7 @@
 package com.attention.app
 
 import com.attention.domain.LaunchDestination
+import com.attention.domain.resolveLaunchDestination
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

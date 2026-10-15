@@ -1141,6 +1141,51 @@ class AttentionEngineTest {
     }
 
     @Test
+    fun active_timer_elapsed_millis_counts_a_running_segment_from_the_injected_instant() {
+        val now = Instant.parse("2026-10-08T03:10:00Z")
+        val running = ActiveTimer(
+            targetId = null,
+            startedAtEpochMillis = now.minusSeconds(25 * 60).toEpochMilli(),
+            lastPlanningDate = "2026-10-07",
+        )
+
+        assertEquals(25 * 60_000L, running.elapsedMillis(now))
+        // 时钟早于本次开始时刻时不能给出负的实际投入
+        assertEquals(0L, running.elapsedMillis(now.minusSeconds(30 * 60)))
+    }
+
+    @Test
+    fun a_paused_active_timer_freezes_elapsed_millis_at_the_accumulated_total() {
+        val now = Instant.parse("2026-10-08T03:10:00Z")
+        val paused = ActiveTimer(
+            targetId = null,
+            startedAtEpochMillis = now.minusSeconds(600).toEpochMilli(),
+            accumulatedMillis = 7 * 60_000L,
+            paused = true,
+            lastPlanningDate = "2026-10-07",
+        )
+
+        assertEquals(7 * 60_000L, paused.elapsedMillis(now))
+        assertEquals(7 * 60_000L, paused.elapsedMillis(now.plusSeconds(3600)))
+    }
+
+    @Test
+    fun active_timer_elapsed_millis_sums_completed_segments_and_the_running_one() {
+        val now = Instant.parse("2026-10-08T03:10:00Z")
+        val resumed = ActiveTimer(
+            targetId = null,
+            startedAtEpochMillis = now.minusSeconds(3 * 60).toEpochMilli(),
+            accumulatedMillis = 30 * 60_000L,
+            lastPlanningDate = "2026-10-07",
+            completedSegments = listOf(
+                TimerSegment(now.minusSeconds(33 * 60).toEpochMilli(), now.minusSeconds(3 * 60).toEpochMilli()),
+            ),
+        )
+
+        assertEquals(33 * 60_000L, resumed.elapsedMillis(now))
+    }
+
+    @Test
     fun starting_a_second_timer_is_rejected_with_a_user_facing_message() {
         val state = AttentionState().addTarget("专注")
         val target = state.targets.single()
