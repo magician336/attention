@@ -86,22 +86,18 @@ import com.attention.app.statistics.StatisticsSelection
 import com.attention.app.statistics.rememberStatisticsSelection
 import com.attention.app.targets.TargetsScreen
 import com.attention.app.targets.rememberTargetsSelection
-import com.attention.app.today.TodayOnboardingCard
 import com.attention.workspace.state.AgendaActions
 import com.attention.workspace.state.AgendaRecurrenceDraft
 import com.attention.workspace.state.AgendaScheduleDraft
 import com.attention.workspace.state.OnboardingActions
-import com.attention.workspace.state.OnboardingScheduleDraft
 import com.attention.workspace.state.SettingsActions
 import com.attention.workspace.state.StatisticsActions
 import com.attention.workspace.state.TargetsActions
-import com.attention.workspace.state.TodayActions
 import com.attention.workspace.state.agendaScreenState
 import com.attention.workspace.state.onboardingScreenState
 import com.attention.workspace.state.settingsScreenState
 import com.attention.workspace.state.statisticsScreenState
 import com.attention.workspace.state.targetsScreenState
-import com.attention.workspace.state.todayScreenState
 import com.attention.workspace.state.toRecurrenceRule
 import com.attention.domain.AttentionState
 import com.attention.domain.CapacitySummary
@@ -125,134 +121,6 @@ import java.time.LocalDate
 import java.time.ZoneId
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-
-/**
- * 今天工作台的 actions adapter，在组合根一侧组装：页面发出 intent，这里落到 ViewModel、
- * 设置存储、可撤销提示与所有 Android 平台能力。ViewModel、Room、`Context` 与前台计时服务
- * 因此只出现在组合根侧，页面 module 一个都拿不到（ADR-0005 第 1 节、第 4 节「Android adapter 归属组合根」）。
- */
-private class TodayActionsAdapter(
-    private val viewModel: AttentionViewModel,
-    private val currentWeekStartDay: () -> Int,
-    private val context: Context,
-    private val zone: ZoneId,
-    private val onTimeRecordDeleted: (TimeEntry) -> Unit,
-    private val onFeedbackMessage: (String) -> Unit,
-    private val onStartTimerFromSchedule: (ScheduleEntry) -> Unit,
-) : TodayActions {
-    override fun recordTime(planningDate: String, minutes: Int, targetId: String?) {
-        viewModel.addTime(planningDate, minutes, targetId)
-    }
-
-    // 只调整时长、目标归属与备注：记录的规划日与来源由领域层保持不变。
-    override fun editTime(entryId: String, minutes: Int, targetId: String?, note: String) {
-        viewModel.editTime(entryId, minutes, targetId, note)
-    }
-
-    override fun deleteTime(entryId: String) {
-        viewModel.deleteTimeWithUndo(entryId, onTimeRecordDeleted)
-    }
-
-    override fun saveDailyPlanningSettings(boundaryMinutes: Int, dailyCapacityMinutes: Int?) {
-        viewModel.setSettings(StoredSettings(boundaryMinutes, currentWeekStartDay(), dailyCapacityMinutes))
-    }
-
-    override fun selectWeekStartDay(day: Int) {
-        viewModel.setWeekStart(day)
-    }
-
-    override fun startTimer(targetId: String?) {
-        viewModel.startTimer(targetId, onSuccess = ::startForegroundCounting)
-    }
-
-    // 与所有日期页共用同一份实现，两个入口的来源关联与平台行为因此完全一致。
-    override fun startTimerFromEntry(entry: ScheduleEntry) = onStartTimerFromSchedule(entry)
-
-    override fun pauseTimer() {
-        viewModel.pauseTimer()
-    }
-
-    override fun resumeTimer() {
-        viewModel.resumeTimer()
-    }
-
-    override fun recoverTimer() {
-        viewModel.recoverTimer(onSuccess = ::startForegroundCounting)
-    }
-
-    override fun stopTimer() {
-        viewModel.stopTimer(onSuccess = {
-            AttentionBootReceiver.cancelRecoveryPrompt(context)
-            context.stopService(AttentionTimerService.intent(context))
-        })
-    }
-
-    override fun switchTimer(targetId: String?) {
-        viewModel.switchTimer(targetId)
-    }
-
-    override fun requestNotificationPermission() = requestReminderPermission(context)
-
-    override fun finishOnboarding() {
-        viewModel.finishOnboarding()
-    }
-
-    override fun saveOnboardingPlanningSettings(
-        boundaryMinutes: Int,
-        weekStartDay: Int,
-        dailyCapacityMinutes: Int?,
-    ) {
-        viewModel.setSettings(StoredSettings(boundaryMinutes, weekStartDay, dailyCapacityMinutes))
-    }
-
-    override fun createOnboardingTarget(title: String, onSuccess: () -> Unit) {
-        viewModel.addTarget(title) { onSuccess() }
-    }
-
-    override fun createOnboardingSchedule(draft: OnboardingScheduleDraft) {
-        viewModel.addSchedule(
-            ScheduleEntry(
-                planningDate = draft.planningDate,
-                title = draft.title,
-                startMinute = draft.startMinute,
-                endMinute = draft.endMinute,
-                estimatedMinutes = draft.estimatedMinutes,
-                note = draft.note,
-                targetId = draft.targetId,
-            ),
-        )
-    }
-
-    override fun updateTodaySchedule(entry: ScheduleEntry, reminderMinuteOfDay: Int?) {
-        viewModel.updateSchedule(
-            entry.copy(
-                reminderEpochMillis = reminderMinuteOfDay?.let { minute ->
-                    reminderEpochMillis(LocalDate.parse(entry.planningDate), minute, zone)
-                },
-            ),
-        )
-    }
-
-    override fun confirmScheduleCompleted(entryId: String) {
-        viewModel.confirmScheduleCompleted(entryId)
-    }
-
-    override fun toggleScheduleCompleted(entryId: String) {
-        viewModel.toggleScheduleCompleted(entryId)
-    }
-
-    /**
-     * 计时开始或「从此刻继续」成功之后的平台动作：撤掉恢复提示、在通知不可用时给出提示，
-     * 再启动前台计时服务。前台计时必须仍由可见 UI 触发（ADR-0001），因此这一步只在这条路径上。
-     */
-    private fun startForegroundCounting() {
-        AttentionBootReceiver.cancelRecoveryPrompt(context)
-        if (!notificationsEnabled(context)) {
-            onFeedbackMessage("通知权限未开启，计时仍会保存；通知栏控制不可用。")
-        }
-        ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
-    }
-}
 
 /**
  * 设置页的 actions adapter，在组合根一侧组装：页面发出 intent，这里落到 ViewModel、
@@ -791,17 +659,8 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     val injectedNow = Instant.now()
     val injectedZone = ZoneId.systemDefault()
 
-    // 今天工作台的选择状态属于页面 module（TodaySelection），组合根只喂投影，不碰它的字段。
-    // 今天工作台不导航规划日，因此投影除注入的时间与时区外不需要页面选择参数。
-    // 通知是否可用是平台事实，组合根查好后注入：页面与投影都不触达通知管理器。
-    val todayState = todayScreenState(
-        state = state,
-        now = injectedNow,
-        zone = injectedZone,
-        notificationsEnabled = notificationsEnabled(context),
-    )
-    // 从日程条目起计时：今天页的「今日安排」与所有日期页共用这一份实现，
-    // 两个入口因此产出同样的时间记录与同样的平台行为（保留 scheduleEntryId 来源关联）。
+    // 从日程条目起计时：日程页的「今日安排」与所有日期范围共用这一份实现，
+    // 因此产出同样的时间记录与同样的平台行为（保留 scheduleEntryId 来源关联）。
     fun startTimerFromSchedule(entry: ScheduleEntry) {
         viewModel.startTimer(
             targetId = entry.targetId,
@@ -819,27 +678,6 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     }
 
     val currentWeekStartDay by androidx.compose.runtime.rememberUpdatedState(state.settings.weekStartDay)
-    val todayActions: TodayActions = remember(viewModel) {
-        TodayActionsAdapter(
-            viewModel = viewModel,
-            currentWeekStartDay = { currentWeekStartDay },
-            context = context,
-            zone = injectedZone,
-            // 删除的可撤销提示由组合根展示：撤销要用回被删掉的那条记录本身，
-            // 页面因此不需要认识时间记录这个领域类型。
-            onTimeRecordDeleted = { removed ->
-                feedbackScope.launch {
-                    feedback.showUndoableMessage(
-                        message = "已删除这条实际投入，它不再计入目标进度与统计。",
-                        onUndo = { viewModel.restoreTimeEntry(removed) },
-                    )
-                }
-            },
-            onStartTimerFromSchedule = ::startTimerFromSchedule,
-            // 计时开始时的通知不可用提示同样由组合根展示，页面只发 intent。
-            onFeedbackMessage = { message -> feedbackScope.launch { feedback.showMessage(message) } },
-        )
-    }
     // 日程页的选中范围由页面 module 提供类型与迁移语义，组合根只持有一个实例来喂投影。
     // 这一个实例挂在组合根上、活过页面切换，因此会话内的日期筛选被保留；
     // 它不写入任何持久化，重新启动时组合根新建实例，页面回到当前规划日。
@@ -1061,10 +899,6 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                     state = agendaState,
                     actions = agendaActions,
                     openScheduleId = openScheduleId,
-                    // 未完成引导的用户仍然看得到引导卡片，它属于它自己的页面 module。
-                    onboarding = if (todayState.onboardingCompleted) null else {
-                        { TodayOnboardingCard(state = todayState, actions = todayActions) }
-                    },
                 )
                 LaunchDestination.TARGETS -> TargetsScreen(
                     state = targetsState,
