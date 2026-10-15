@@ -321,6 +321,21 @@ data class AgendaScreenState(
     /** 所选规划日上的实际投入；所有日期视图为空。 */
     val timeRecords: List<AgendaTimeRecord> = emptyList(),
     val recordedMinutesLabel: String = "",
+    /**
+     * 组合根注入的事实：本地数据仍在第一次读取中。
+     *
+     * 它**不是**页面自己猜的，也不来自领域状态：[agendaScreenState] 在读到之前拿到的是一份空的
+     * 默认状态，页面无从区分「用户真的没有数据」与「还没读到」。因此组合根把持久化层是否读上来
+     * 这一事实注入进来（ADR-0005 第 1 节），页面只按它渲染轻量时间轴骨架。
+     */
+    val loading: Boolean = false,
+    /**
+     * 组合根注入的事实：本地数据读取失败时的说明；null 表示读取正常。
+     *
+     * 与 [loading] 一样是组合根的事实而不是页面判断。页面据此渲染带「重试」的错误状态，
+     * 而不是把一个空的工作台留给用户（#195 验收标准 2）。
+     */
+    val loadError: String? = null,
 )
 
 /**
@@ -334,6 +349,9 @@ data class AgendaScreenState(
  * @param openScheduleId 从提醒通知点名的日程条目 id；用于直接打开编辑对话框。
  * @param stoppedEntryIds 最近一次停止计时产出的记录 id。它是「刚刚停止的那一笔」的唯一来源：
  *  面板按 id 从 [state] 读回事实，因此它为空时面板消失，而不是留下一段陈旧历史。
+ * @param loading 组合根注入的「本地数据仍在第一次读取中」事实。它不来自领域状态：
+ * 读上来之前 [state] 是一份空的默认值，页面无法区分「没有数据」与「还没读到」。
+ * @param loadError 组合根注入的读取失败说明；null 表示读取正常。
  */
 fun agendaScreenState(
     state: AttentionState,
@@ -343,6 +361,8 @@ fun agendaScreenState(
     selectedScope: AgendaRangeScope? = null,
     openScheduleId: String? = null,
     stoppedEntryIds: List<String>? = null,
+    loading: Boolean = false,
+    loadError: String? = null,
 ): AgendaScreenState {
     val planningDay = state.planningDate(now, zone)
     val tomorrow = planningDay.plusDays(1)
@@ -471,6 +491,8 @@ fun agendaScreenState(
         } else {
             "本规划日已记录：" + "${selectedTimeEntries.sumOf { it.durationMinutes }} 分钟"
         },
+        loading = loading,
+        loadError = loadError,
     )
 }
 

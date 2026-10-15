@@ -40,6 +40,8 @@ class AgendaScreenStateTest {
         selectedScope: AgendaRangeScope? = null,
         openScheduleId: String? = null,
         stoppedEntryIds: List<String>? = null,
+        loading: Boolean = false,
+        loadError: String? = null,
     ) = agendaScreenState(
         state = state,
         now = instant,
@@ -48,7 +50,42 @@ class AgendaScreenStateTest {
         selectedScope = selectedScope,
         openScheduleId = openScheduleId,
         stoppedEntryIds = stoppedEntryIds,
+        loading = loading,
+        loadError = loadError,
     )
+
+    @Test
+    fun the_loading_and_read_failure_facts_are_injected_not_guessed_by_the_page() {
+        // 读到之前领域状态是一份空的默认值，页面自己分不出「没有数据」与「还没读到」；
+        // 因此这两个事实由组合根注入，投影原样带给页面。
+        val loadingScreenState = project(
+            state = stateWith(ScheduleEntry("a", "2026-03-05", "当日条目")),
+            selectedDate = today,
+            loading = true,
+        )
+
+        assertTrue("正在读取本地数据必须被投影成加载事实", loadingScreenState.loading)
+        assertNull("加载中不是读取失败", loadingScreenState.loadError)
+        // 条目仍然照常投影：加载骨架之后接管的正是这份数据，页面不需要重新请求。
+        assertEquals(listOf("当日条目"), loadingScreenState.unscheduledRows.map { it.title })
+
+        val failedScreenState = project(
+            state = stateWith(ScheduleEntry("a", "2026-03-05", "当日条目")),
+            selectedDate = today,
+            loadError = "读取失败",
+        )
+
+        assertFalse("读取失败时页面不该停在加载骨架上", failedScreenState.loading)
+        assertEquals("读取失败说明", "读取失败", failedScreenState.loadError)
+    }
+
+    @Test
+    fun a_loaded_workbench_carries_neither_loading_nor_a_read_failure() {
+        val screenState = project(state = stateWith(ScheduleEntry("a", "2026-03-05", "当日条目")))
+
+        assertFalse("读上来之后不再是加载中", screenState.loading)
+        assertNull("读上来之后没有读取失败", screenState.loadError)
+    }
 
     private fun stateWith(vararg entries: ScheduleEntry, settings: StoredSettings = StoredSettings()) =
         AttentionState(schedules = entries.toList(), settings = settings)

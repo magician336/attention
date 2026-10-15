@@ -123,6 +123,22 @@ fun updateSchedule(entry: ScheduleEntry, reminderMinuteOfDay: Int?)
 
     /** 页面请求申请提醒权限；权限检查与申请由组合根 adapter 完成。 */
     fun requestReminderPermission()
+
+    /**
+     * 本地数据读取失败之后，用户点「重试」。
+     *
+     * 重新读取由组合根 adapter 完成（它持有仓储与持久化句柄），页面因此不需要知道
+     * 数据是从哪里来的，也不会自己调仓储（ADR-0005 第 1 节）。
+     */
+    fun retryLoad()
+
+    /**
+     * 打开完整设置。
+     *
+     * 工作台顶部只读展示每日容量，因此容量摘要就是通往完整设置的入口；设置本身仍然住在
+     * 统计页底部的「设置与数据」，页面只发出这一条意图，实际跳转由组合根完成。
+     */
+    fun openSettings()
 }
 
 /** 把重复日程草稿落成领域规则；物化仍然由 `:domain` 按规则展开。 */
