@@ -11,12 +11,58 @@ import java.time.ZoneId
  * execution time, and zone explicitly, and receive an immutable result containing
  * the next state plus facts produced by the command.
  */
+/**
+ * 保存日程条目时顺带补记的一段已经发生的时间。
+ *
+ * [targetId] 是用户选择归属的计划；null 表示这笔补记先保持为未归属活动，之后可以再归入计划。
+ */
+data class ScheduleBackfill(
+    val durationMinutes: Int,
+    val targetId: String? = null,
+    val note: String = "",
+)
+
 sealed interface AttentionCommand {
     fun execute(
         state: AttentionState,
         now: Instant,
         zone: ZoneId = ZoneId.systemDefault(),
     ): AttentionCommandResult
+
+    /**
+     * 保存一条日程条目，并可选地顺带补记一笔事后补记来源的实际投入。
+     *
+     * 两件事在同一个 command 结果里完成：日程条目与那笔补记要么一起落库，要么都不落库，
+     * 不存在只有一半的中间状态。补记记录的来源是 [TimeEntrySource.MANUAL]，并带上日程关联；
+     * 它与 [TimeEntrySource.SCHEDULE_CONFIRMED]、[TimeEntrySource.TIMER] 三者不混。
+     *
+     * 这条日程条目已经有一笔按关联认领的实际投入时（日程完成确认、计时结算或更早的补记），
+     * 只保存日程条目本身，不再凭空多出第二笔投入，投入经验与达成里程碑也不重复发放。
+     */
+    data class SaveSchedule(
+        val entry: ScheduleEntry,
+        val backfill: ScheduleBackfill? = null,
+    ) : AttentionCommand {
+        override fun execute(state: AttentionState, now: Instant, zone: ZoneId): AttentionCommandResult {
+            val saved = if (state.schedules.any { it.id == entry.id }) state.updateSchedule(entry) else state.addSchedule(entry)
+            if (backfill == null || state.hasActualInvestmentFor(entry.id)) {
+                return saved.withMilestonesFor(emptyList(), now.toEpochMilli())
+            }
+            val recorded = saved.addTimeEntry(
+                planningDate = entry.planningDate,
+                durationMinutes = backfill.durationMinutes,
+                targetId = backfill.targetId,
+                source = TimeEntrySource.MANUAL,
+                note = backfill.note,
+                scheduleEntryId = entry.id,
+            )
+            return recorded.withMilestonesFor(
+                affectedPlanningDates = setOf(LocalDate.parse(entry.planningDate)),
+                achievedAtEpochMillis = now.toEpochMilli(),
+                generatedTimeEntries = listOf(recorded.timeEntries.last()),
+            )
+        }
+    }
 
     /** Adds one manually entered actual-investment record. */
     data class AddManualTimeEntry(
@@ -42,9 +88,17 @@ sealed interface AttentionCommand {
         }
     }
 
-    /** Confirms one planned entry as actual invested time. */
+    /**
+     * Confirms one planned entry as actual invested time.
+     *
+     * 幂等：该日程条目已有按关联认领的实际投入时只保证完成标记，不产生第二笔，
+     * 因此重试与重复点击都不会重复发放投入经验与达成里程碑。
+     */
     data class ConfirmSchedule(val entryId: String, val durationMinutes: Int? = null) : AttentionCommand {
         override fun execute(state: AttentionState, now: Instant, zone: ZoneId): AttentionCommandResult {
+            if (state.hasActualInvestmentFor(entryId)) {
+                return AttentionCommandResult(state.confirmScheduleCompleted(entryId, durationMinutes))
+            }
             val nextState = state.confirmScheduleCompleted(entryId, durationMinutes)
             val entry = nextState.timeEntries.last()
             return nextState.withMilestonesFor(
@@ -185,6 +239,7 @@ private fun AttentionState.validRecordTargetForCommand(targetId: String?): Boole
 
 typealias AddManualTimeEntryCommand = AttentionCommand.AddManualTimeEntry
 typealias ManualTimeEntryCommand = AttentionCommand.AddManualTimeEntry
+typealias SaveScheduleCommand = AttentionCommand.SaveSchedule
 typealias ConfirmScheduleCommand = AttentionCommand.ConfirmSchedule
 typealias ConfirmScheduleCompletedCommand = AttentionCommand.ConfirmSchedule
 typealias EditTimeEntryCommand = AttentionCommand.EditTimeEntry

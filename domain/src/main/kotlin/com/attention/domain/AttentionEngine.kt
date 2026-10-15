@@ -476,6 +476,10 @@ fun AttentionState.appendOneTimeGoalStage(
     )
 }
 
+/**
+ * 追加一笔实际投入。[scheduleEntryId] 非空时这笔记录由某条日程条目产生，
+ * 这条链接的判定只在 `:domain` 里做，页面与适配层不各自解释它。
+ */
 fun AttentionState.addTimeEntry(
     planningDate: String,
     durationMinutes: Int,
@@ -483,13 +487,28 @@ fun AttentionState.addTimeEntry(
     source: TimeEntrySource = TimeEntrySource.MANUAL,
     occurredAtEpochMillis: Long? = null,
     note: String = "",
+    scheduleEntryId: String? = null,
 ): AttentionState {
     LocalDate.parse(planningDate)
-    require(durationMinutes > 0)
+    require(durationMinutes > 0) { "时间记录时长必须为正数" }
     require(validRecordTarget(targetId)) { "时间记录只能归入未归档目标" }
-    return copy(timeEntries = timeEntries + TimeEntry(planningDate = planningDate, durationMinutes = durationMinutes, targetId = targetId, source = source, occurredAtEpochMillis = occurredAtEpochMillis, note = note))
+    require(scheduleEntryId == null || schedules.any { it.id == scheduleEntryId }) { "时间记录只能关联存在的日程条目" }
+    return copy(timeEntries = timeEntries + TimeEntry(planningDate = planningDate, durationMinutes = durationMinutes, targetId = targetId, source = source, occurredAtEpochMillis = occurredAtEpochMillis, note = note, scheduleEntryId = scheduleEntryId))
         .recalculateExperience()
 }
+
+/**
+ * 这条日程条目已经有对应的那笔实际投入（任何来源：事后补记、日程完成确认或计时结算）。
+ *
+ * 「按日程关联判断是否已有实际投入」是领域可见性与幂等规则：页面按它决定补填入口，
+ * 领域 command 按它拒绝重复创建。它不按来源过滤——同一条日程的同一段投入只应记一次。
+ */
+fun AttentionState.actualInvestmentForSchedule(scheduleEntryId: String): TimeEntry? =
+    timeEntries.firstOrNull { it.scheduleEntryId == scheduleEntryId }
+
+/** [actualInvestmentForSchedule] 的布尔形式。 */
+fun AttentionState.hasActualInvestmentFor(scheduleEntryId: String): Boolean =
+    actualInvestmentForSchedule(scheduleEntryId) != null
 
 fun AttentionState.editTimeEntry(entryId: String, durationMinutes: Int, targetId: String?, note: String = ""): AttentionState {
     require(durationMinutes > 0 && validRecordTarget(targetId)) { "时间记录只能归入未归档目标" }
@@ -547,12 +566,16 @@ fun AttentionState.toggleScheduleCompleted(entryId: String): AttentionState {
 }
 
 /**
- * Completes a schedule entry and records the actual invested time it claimed. A record created
- * this way is schedule-confirmed: it carries no precise start or end timestamp, because the user
- * confirmed it against the plan rather than measuring it with the timer.
+ * 完成一条日程条目，并记下它声称的那笔实际投入。以这种方式产生的记录来源是
+ * `SCHEDULE_CONFIRMED`：它没有精确起止时刻，因为用户是按计划确认的，不是计时测出来的。
+ *
+ * 已经存在按这条日程关联的实际投入时不再补第二笔——重复确认只保证完成标记为真，
+ * 投入经验与达成里程碑因此不会被重复奖励一次。
  */
 fun AttentionState.confirmScheduleCompleted(entryId: String, durationMinutes: Int? = null): AttentionState {
     val entry = schedules.firstOrNull { it.id == entryId } ?: throw IllegalArgumentException("日程条目不存在")
+    val completedSchedules = schedules.map { schedule -> if (schedule.id == entryId) schedule.copy(completed = true) else schedule }
+    if (hasActualInvestmentFor(entryId)) return copy(schedules = completedSchedules).recalculateExperience()
     val rangeMinutes = if (entry.startMinute != null && entry.endMinute != null) {
         entry.endMinute - entry.startMinute
     } else {
@@ -565,7 +588,7 @@ fun AttentionState.confirmScheduleCompleted(entryId: String, durationMinutes: In
     require(minutes > 0) { "时间记录时长必须为正数" }
     require(validRecordTarget(entry.targetId)) { "时间记录只能归入未归档目标" }
     return copy(
-        schedules = schedules.map { schedule -> if (schedule.id == entryId) schedule.copy(completed = true) else schedule },
+        schedules = completedSchedules,
         timeEntries = timeEntries + TimeEntry(
             planningDate = entry.planningDate,
             durationMinutes = minutes,
