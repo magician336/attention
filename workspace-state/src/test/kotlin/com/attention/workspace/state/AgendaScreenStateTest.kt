@@ -846,6 +846,7 @@ class AgendaScreenStateTest {
         assertEquals("规划日 2026-03-05", allDates.addScheduleDefaultDateLabel)
         assertEquals("2026-03-06", tomorrow.addScheduleDefaultDate)
         assertEquals("规划日 2026-03-06", tomorrow.addScheduleDefaultDateLabel)
+    }
 
     // ---------------------------------------------------------------- 停止计时的结果面板
 
