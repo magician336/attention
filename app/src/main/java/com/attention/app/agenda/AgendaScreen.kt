@@ -16,7 +16,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.EventNote
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PauseCircle
+import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -39,6 +42,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.attention.app.ui.components.AttentionButton
 import com.attention.app.ui.components.AttentionConfirmDialog
@@ -56,6 +61,7 @@ import com.attention.workspace.state.AgendaActiveTimer
 import com.attention.workspace.state.AgendaRangeScope
 import com.attention.workspace.state.AgendaScreenState
 import com.attention.workspace.state.AgendaScheduleRow
+import com.attention.workspace.state.AgendaStopResult
 import com.attention.workspace.state.AgendaTargetOption
 import com.attention.workspace.state.AgendaTimeRecord
 import com.attention.workspace.state.AgendaWorkbenchSection
@@ -179,6 +185,10 @@ internal fun AgendaScreen(
                     actions = actions,
                 )
             }
+        }
+        // 停止计时的结果面板：只在刚刚停止之后出现，四个要素与两个决定都来自投影。
+        state.stopResult?.let { result ->
+            AgendaStopResultSection(result = result, actions = actions)
         }
     }
     state.timeRecords.firstOrNull { it.entryId == pendingDeleteRecordId }?.let { pendingDelete ->
@@ -488,6 +498,75 @@ private fun AgendaRunningTimerSection(
     }
 }
 
+/**
+ * 停止计时的结果面板。
+ *
+ * 四个要素（实际投入、计划时长、完成结果、记录归属）与「是否达标」都已经由投影给出，
+ * 页面不比较任何分钟数，也不自己判断该不该完成。它只做两件事：把事实讲清楚，
+ * 以及在「有计划且未达标」时把两个决定摆出来。
+ *
+ * 跨规划日的那次停止会产出多笔，面板逐笔如实呈现，不自行合成一笔。
+ * 完成状态同时用文字与图标表达，不依赖颜色单独传达。
+ */
+@Composable
+private fun AgendaStopResultSection(
+    result: AgendaStopResult,
+    actions: AgendaActions,
+) {
+    val tokens = attentionTokens()
+    Card(
+        Modifier.fillMaxWidth().testTag("agenda-stop-result"),
+        shape = RoundedCornerShape(tokens.radius.medium),
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("本次计时结果", style = tokens.typography.title)
+            Text(result.actualLabel, modifier = Modifier.testTag("agenda-stop-actual"))
+            result.records.forEach { record ->
+                Text(record.label, modifier = Modifier.testTag("agenda-stop-record-${record.entryId}"))
+            }
+            Text(result.plannedLabel, modifier = Modifier.testTag("agenda-stop-planned"))
+            Text("记录归属：${result.attributionLabel}", modifier = Modifier.testTag("agenda-stop-attribution"))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // 完成状态不只靠颜色：图标与文字一起讲清楚是不是已经完成。
+                Icon(
+                    if (result.completed) Icons.Filled.CheckCircle else Icons.Filled.RadioButtonUnchecked,
+                    contentDescription = if (result.completed) "已完成" else "未完成",
+                    tint = if (result.completed) tokens.colorScheme.primary else tokens.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    result.completionLabel,
+                    modifier = Modifier.padding(start = tokens.spacing.small).testTag("agenda-stop-completion"),
+                )
+            }
+            if (result.needsCompletionDecision) {
+                Text(
+                    "实际投入没有达到计划时长：完成与否由你决定。",
+                    modifier = Modifier.testTag("agenda-stop-decision-hint"),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AttentionOutlinedButton(
+                        onClick = actions::dismissStopResult,
+                        modifier = Modifier.testTag("agenda-stop-keep-incomplete"),
+                    ) { Text("结束并保留未完成") }
+                    AttentionButton(
+                        onClick = {
+                            result.scheduleEntryId?.let(actions::markStoppedScheduleCompleted)
+                            actions.dismissStopResult()
+                        },
+                        modifier = Modifier.testTag("agenda-stop-mark-completed"),
+                    ) { Text("标记为完成") }
+                }
+            } else {
+                AttentionTextButton(
+                    onClick = actions::dismissStopResult,
+                    modifier = Modifier.testTag("agenda-stop-dismiss"),
+                ) { Text("知道了") }
+            }
+        }
+    }
+}
+
 /** 首屏第四块：添加日程入口。表单本身仍是页面本地状态，提交时只发一个草稿 intent。 */
 @Composable
 private fun AgendaAddScheduleSection(
@@ -784,6 +863,55 @@ private fun AgendaScheduleRowCard(
                     },
                     modifier = Modifier.testTag("schedule-completion-${entry.id}"),
                 ) { Text(if (entry.completed) "取消完成" else "完成并记录") }
+                // 勾选框是完成这件事的可见主入口：完成状态同时由方框与文字表达，
+                // 不依赖颜色。更多菜单把编辑与计时控制收在同一个可见按钮后面，
+                // 因此长按至多是额外的熟练操作快捷方式，而不是唯一入口。
+                if (row.offersCompletionCheck) {
+                    Checkbox(
+                        checked = row.completed,
+                        onCheckedChange = {
+                            if (row.completed) actions.toggleScheduleCompleted(entry.id)
+                            else actions.confirmScheduleCompleted(entry.id)
+                        },
+                        modifier = Modifier
+                            .testTag("schedule-completion-check-${entry.id}")
+                            .semantics { contentDescription = "完成「${row.title}」" },
+                    )
+                }
+                if (row.offersMoreMenu) {
+                    var rowMoreExpanded by remember(entry.id) { mutableStateOf(false) }
+                    Box {
+                        AttentionTextButton(
+                            onClick = { rowMoreExpanded = true },
+                            modifier = Modifier.testTag("schedule-more-${entry.id}"),
+                        ) { Text("更多") }
+                        DropdownMenu(
+                            expanded = rowMoreExpanded,
+                            onDismissRequest = { rowMoreExpanded = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("编辑") },
+                                onClick = { rowMoreExpanded = false; onEdit() },
+                                modifier = Modifier.testTag("schedule-more-edit-${entry.id}"),
+                            )
+                            DropdownMenuItem(
+                                text = { Text("开始计时") },
+                                enabled = row.canStartTimer,
+                                onClick = { rowMoreExpanded = false; actions.startTimerFromEntry(entry) },
+                                modifier = Modifier.testTag("schedule-more-start-timer-${entry.id}"),
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (row.completed) "取消完成" else "完成并记录") },
+                                onClick = {
+                                    rowMoreExpanded = false
+                                    if (row.completed) actions.toggleScheduleCompleted(entry.id)
+                                    else actions.confirmScheduleCompleted(entry.id)
+                                },
+                                modifier = Modifier.testTag("schedule-more-completion-${entry.id}"),
+                            )
+                        }
+                    }
+                }
             }
         }
     }

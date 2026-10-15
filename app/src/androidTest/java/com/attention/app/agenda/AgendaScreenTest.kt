@@ -38,6 +38,8 @@ import com.attention.workspace.state.AgendaRecurrenceDraft
 import com.attention.workspace.state.AgendaScheduleDraft
 import com.attention.workspace.state.AgendaScheduleRow
 import com.attention.workspace.state.AgendaScreenState
+import com.attention.workspace.state.AgendaStopResult
+import com.attention.workspace.state.AgendaStoppedRecord
 import com.attention.workspace.state.AgendaTargetOption
 import com.attention.workspace.state.AgendaTimeRecord
 import com.attention.workspace.state.AgendaWorkbenchSummary
@@ -458,6 +460,131 @@ class AgendaScreenTest {
         assertEquals(listOf("r1"), intents.deletedRecords)
     }
 
+    // ------------------------------------------------------- 停止计时的结果面板（#194）
+
+    @Test
+    fun the_result_panel_shows_actual_planned_completion_and_attribution() {
+        // 停止之后用户能核对的四件事：实际投入、计划时长、完成结果与记录归属
+        mount(planningDayScreenState(planningDay, stopResult = shortStopResult()))
+
+        node("本次计时结果").assertIsDisplayed()
+        node("实际投入 20 分钟").assertIsDisplayed()
+        node("计划时长 60 分钟").assertIsDisplayed()
+        node("未完成").assertIsDisplayed()
+        node("记录归属：工作").assertIsDisplayed()
+    }
+
+    @Test
+    fun a_stop_short_of_the_plan_offers_two_separate_decisions() {
+        // 不足计划时，「保留未完成」与「标记为完成」是两个可以分别决定的动作
+        val intents = RecordingAgendaActions()
+        mount(planningDayScreenState(planningDay, stopResult = shortStopResult()), intents)
+
+        composeRule.onNodeWithTag("agenda-stop-result", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-stop-keep-incomplete", useUnmergedTree = true).performScrollTo().performClick()
+        assertEquals(listOf("dismiss"), intents.dataIntents)
+        assertTrue("保留未完成不写入完成意图", intents.confirmedCompletions.isEmpty())
+
+        composeRule.onNodeWithTag("agenda-stop-mark-completed", useUnmergedTree = true).performScrollTo().performClick()
+        assertEquals(listOf("e1"), intents.markedStopCompletions)
+    }
+
+    @Test
+    fun a_stop_reaching_the_plan_is_already_completed_and_asks_for_nothing() {
+        // 实际投入达到计划时日程已完成，用户不必再勾一次：面板不再摆出两个决定
+        mount(planningDayScreenState(planningDay, stopResult = shortStopResult().copy(completed = true, completionLabel = "已完成")))
+
+        node("已完成").assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-stop-keep-incomplete", useUnmergedTree = true).assertDoesNotExist()
+        composeRule.onNodeWithTag("agenda-stop-mark-completed", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun an_entry_without_a_planned_duration_is_not_auto_completed() {
+        // 没有计划时长的日程不由系统猜测完成：完成状态仍由用户手动决定
+        mount(
+            planningDayScreenState(
+                planningDay,
+                stopResult = shortStopResult().copy(
+                    plannedMinutes = null,
+                    plannedLabel = "未设置计划时长",
+                    needsCompletionDecision = false,
+                ),
+            ),
+        )
+
+        node("未设置计划时长").assertIsDisplayed()
+        node("未完成").assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-stop-keep-incomplete", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun a_stop_split_across_planning_days_shows_every_record_it_produced() {
+        // 跨规划日的那次停止如实呈现多笔，不自行合成一笔
+        mount(
+            planningDayScreenState(
+                planningDay,
+                stopResult = shortStopResult().copy(
+                    records = listOf(
+                        AgendaStoppedRecord("t1", "2026-03-05", 60, "2026-03-05 · 60 分钟"),
+                        AgendaStoppedRecord("t2", "2026-03-06", 30, "2026-03-06 · 30 分钟"),
+                    ),
+                    actualMinutes = 90,
+                    actualLabel = "实际投入 90 分钟",
+                ),
+            ),
+        )
+
+        node("2026-03-05 · 60 分钟").assertIsDisplayed()
+        node("2026-03-06 · 30 分钟").assertIsDisplayed()
+        node("实际投入 90 分钟").assertIsDisplayed()
+    }
+
+    @Test
+    fun there_is_no_result_panel_before_a_timer_is_stopped() {
+        mount(planningDayScreenState(planningDay))
+
+        composeRule.onNodeWithTag("agenda-stop-result", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun a_timeline_row_shows_both_a_completion_check_and_a_more_menu() {
+        // 完成勾选框与更多菜单并存：长按只能作为额外的熟练操作快捷方式
+        mount(planningDayScreenState(planningDay, timelineRows = listOf(row(reportEntry, "2026-03-05 · 60 分钟 · 工作 · 无提醒", true, targetLabel = "工作"))))
+
+        composeRule.onNodeWithTag("schedule-completion-e1", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("schedule-completion-check-e1", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("schedule-more-e1", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun the_row_completion_check_and_the_more_menu_each_emit_their_own_intent() {
+        // 两个可见入口各自可达：勾选框改变完成状态，更多菜单收次级动作
+        val intents = RecordingAgendaActions()
+        mount(planningDayScreenState(planningDay, timelineRows = listOf(row(reportEntry, "2026-03-05 · 60 分钟 · 工作 · 无提醒", true, targetLabel = "工作"))), intents)
+
+        composeRule.onNodeWithTag("schedule-completion-check-e1", useUnmergedTree = true).performScrollTo().performClick()
+        assertEquals(listOf("e1"), intents.confirmedCompletions)
+
+        composeRule.onNodeWithTag("schedule-more-e1", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("schedule-more-edit-e1", useUnmergedTree = true).performClick()
+        assertEquals(listOf("e1"), intents.dataIntents)
+    }
+
+    /** 一次停止后待核对的结果：投入不足计划，完成与否仍由用户决定。 */
+    private fun shortStopResult() = AgendaStopResult(
+        scheduleEntryId = "e1",
+        records = listOf(AgendaStoppedRecord("t1", "2026-03-05", 20, "2026-03-05 · 20 分钟")),
+        actualMinutes = 20,
+        actualLabel = "实际投入 20 分钟",
+        plannedMinutes = 60,
+        plannedLabel = "计划时长 60 分钟",
+        completed = false,
+        completionLabel = "未完成",
+        needsCompletionDecision = true,
+        attributionLabel = "工作",
+    )
+
     /** 日程页是可滚动长页，断言与点击前先滚到目标节点。 */
     private fun node(text: String, substring: Boolean = false) =
         composeRule.onNodeWithText(text, substring = substring).performScrollTo()
@@ -769,6 +896,7 @@ class AgendaScreenTest {
             row(meetingEntry, "2026-03-06 · 30 分钟 · 无提醒 · 已完成", true),
         ),
         unscheduledRows: List<AgendaScheduleRow> = emptyList(),
+        stopResult: AgendaStopResult? = null,
     ): AgendaScreenState = AgendaScreenState(
         planningDate = planningDay,
         selectedDate = selected,
@@ -792,6 +920,7 @@ class AgendaScreenTest {
         highlightAddSchedule = selected == planningDay.plusDays(1),
         addScheduleHeadingLabel = if (selected == planningDay.plusDays(1)) "为明天（2026-03-06）添加日程" else "新增日程",
         activeTimer = activeTimer,
+        stopResult = stopResult,
         timeRecords = timeRecords,
         recordedMinutesLabel = if (timeRecords.isEmpty()) "" else "本规划日已记录：30 分钟",
     )
@@ -865,6 +994,7 @@ class AgendaScreenTest {
         val updatedEntries = mutableListOf<Pair<ScheduleEntry, Int?>>()
         val confirmedCompletions = mutableListOf<String>()
         val toggledCompletions = mutableListOf<String>()
+        val markedStopCompletions = mutableListOf<String>()
         val startedEntries = mutableListOf<ScheduleEntry>()
         val addedRecurrences = mutableListOf<AgendaRecurrenceDraft>()
         val stoppedRules = mutableListOf<String>()
@@ -903,6 +1033,14 @@ class AgendaScreenTest {
 
         override fun toggleScheduleCompleted(entryId: String) {
             toggledCompletions += entryId
+        }
+
+        override fun markStoppedScheduleCompleted(entryId: String) {
+            markedStopCompletions += entryId
+        }
+
+        override fun dismissStopResult() {
+            dataIntents += "dismiss"
         }
 
         override fun startTimerFromEntry(entry: ScheduleEntry) {

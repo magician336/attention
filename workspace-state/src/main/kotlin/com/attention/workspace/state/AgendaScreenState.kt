@@ -59,6 +59,56 @@ data class AgendaScheduleRow(
     val timing: Boolean = false,
     /** 完成状态的事实。判定来自领域的 `isScheduleInvestmentMet` 与条目自身的完成标记。 */
     val completed: Boolean = false,
+    /**
+     * 行上同时提供可见的完成勾选框与更多菜单。
+     *
+     * 两者都是任何用户一次点击就能到达的入口，因此长按只能作为额外的熟练操作快捷方式，
+     * 不能成为完成、编辑或计时控制的唯一路径。页面按这两个开关决定画哪些控件。
+     */
+    val offersCompletionCheck: Boolean = true,
+    val offersMoreMenu: Boolean = true,
+)
+
+/**
+ * 停止计时后落下的**一笔**记录。跨规划日界线的那次停止会被领域切成多笔，
+ * 面板因此持有的是一个列表，而不是自行合成的一笔。
+ */
+data class AgendaStoppedRecord(
+    val entryId: String,
+    val planningDate: String,
+    val minutes: Int,
+    /** 「规划日 · N 分钟」：规划日归属是用户核对投入时最需要看到的一层。 */
+    val label: String,
+)
+
+/**
+ * 最近一次停止计时的结果面板内容。四个要素全部来自领域读数：
+ *
+ * - 实际投入：这次停止产出的那几笔记录之和（跨规划日按笔呈现，不归并）
+ * - 计划时长：`ScheduleEntry.plannedMinutes()`；没有承诺时为 null
+ * - 完成结果：条目自身的完成标记与领域的 `isScheduleInvestmentMet`
+ * - 记录归属：这笔投入所属的计划名字，没有计划时是「未归属活动」
+ *
+ * [needsCompletionDecision] 只在「有计划且尚未达标」时为真：那正是用户必须自己决定的
+ * 时刻。页面据此摆出「结束并保留未完成」与「标记为完成」，并复用既有的完成路径。
+ */
+data class AgendaStopResult(
+    /** 这次停止关联的日程条目；自由计时没有来源日程时为 null。 */
+    val scheduleEntryId: String?,
+    /** 这次停止落下的每一笔记录，按领域给出的顺序如实呈现。 */
+    val records: List<AgendaStoppedRecord>,
+    /** 这次停止的实际投入合计，单位分钟。 */
+    val actualMinutes: Int,
+    val actualLabel: String,
+    /** 计划时长；日程没有承诺时长时为 null。 */
+    val plannedMinutes: Int?,
+    val plannedLabel: String,
+    val completed: Boolean,
+    val completionLabel: String,
+    /** 有计划且实际投入尚未达标：完成与否由用户决定，面板摆出两个动作。 */
+    val needsCompletionDecision: Boolean,
+    /** 记录归属：所属计划的名字，没有计划时是「未归属活动」。 */
+    val attributionLabel: String,
 )
 
 /**
@@ -210,6 +260,14 @@ data class AgendaScreenState(
     val addScheduleHeadingLabel: String = "新增日程",
     /** 运行中的计时；null 表示没有计时在进行。 */
     val activeTimer: AgendaActiveTimer? = null,
+    /**
+     * 最近一次停止计时的结果面板；null 表示此刻没有待核对的那一笔。
+     *
+     * 它由 [stoppedEntryIds] 决定，而不是页面自己缓存的一段历史：组合根在停止命令成功后
+     * 交出这次产出的记录 id，投影按 id 从领域状态读回事实。因此「消费掉」（清空 id 列表）
+     * 就等于面板消失，陈旧结果不会被反复展示。
+     */
+    val stopResult: AgendaStopResult? = null,
     /** 所选规划日上的实际投入；所有日期视图为空。 */
     val timeRecords: List<AgendaTimeRecord> = emptyList(),
     val recordedMinutesLabel: String = "",
@@ -224,6 +282,8 @@ data class AgendaScreenState(
  * 用户显式选过的范围要跨规划日界线继续可见，否则跨过界线的一帧里三个 chip 会同时失去高亮，
  * 页面停在用户明明选过的范围上却没有告诉他选的是哪一个。
  * @param openScheduleId 从提醒通知点名的日程条目 id；用于直接打开编辑对话框。
+ * @param stoppedEntryIds 最近一次停止计时产出的记录 id。它是「刚刚停止的那一笔」的唯一来源：
+ *  面板按 id 从 [state] 读回事实，因此它为空时面板消失，而不是留下一段陈旧历史。
  */
 fun agendaScreenState(
     state: AttentionState,
@@ -232,6 +292,7 @@ fun agendaScreenState(
     selectedDate: LocalDate?,
     selectedScope: AgendaRangeScope? = null,
     openScheduleId: String? = null,
+    stoppedEntryIds: List<String>? = null,
 ): AgendaScreenState {
     val planningDay = state.planningDate(now, zone)
     val tomorrow = planningDay.plusDays(1)
@@ -344,6 +405,9 @@ fun agendaScreenState(
                 )
             }
         },
+        stopResult = stoppedEntryIds
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { ids -> stopResult(state, ids) },
         recordedMinutesLabel = if (selectedDate == null) {
             ""
         } else {
@@ -399,6 +463,51 @@ private fun agendaRow(
         capacityNotice = if (state.exceedsDailyCapacity(entry)) "已超出容量" else null,
         timing = entry.id == runningEntryId,
         completed = entry.completed || investmentMet,
+    )
+}
+
+/**
+ * 从领域状态读出「刚刚停止的那一笔」。
+ *
+ * 面板的每一项都是领域结论而不是页面推算：
+ * 实际投入是这几笔记录之和（跨规划日按笔呈现，**不**自行归并日期），
+ * 计划时长来自 `plannedMinutes()`，完成结果来自条目标记与 `isScheduleInvestmentMet`，
+ * 记录归属来自这笔投入自己的 `targetId`。
+ *
+ * id 已经不在状态里（记录被删除）时返回 null：面板不凭一个失效的 id 重建已消失的事实。
+ */
+private fun stopResult(state: AttentionState, stoppedEntryIds: List<String>): AgendaStopResult? {
+    val byId = state.timeEntries.associateBy { it.id }
+    // 按调用方给出的顺序读取，而不是按状态里的存储顺序，用户看到的顺序与命令产出的顺序一致。
+    val records = stoppedEntryIds.mapNotNull(byId::get)
+    if (records.isEmpty()) return null
+    // 计时可能被切成多笔，归属不同时（切换过目标）如实按第一笔呈现，不合并出第三个答案。
+    val attribution = state.targets.firstOrNull { it.id == records.first().targetId }?.title ?: "未归属活动"
+    val scheduleEntryId = records.first().scheduleEntryId
+    val schedule = scheduleEntryId?.let { id -> state.schedules.firstOrNull { it.id == id } }
+    val planned = schedule?.plannedMinutes()
+    val completed = schedule?.completed == true ||
+        (scheduleEntryId != null && state.isScheduleInvestmentMet(scheduleEntryId))
+    val actualMinutes = records.sumOf { it.durationMinutes }
+    return AgendaStopResult(
+        scheduleEntryId = scheduleEntryId,
+        records = records.map { record ->
+            AgendaStoppedRecord(
+                entryId = record.id,
+                planningDate = record.planningDate,
+                minutes = record.durationMinutes,
+                label = "${record.planningDate} · ${record.durationMinutes} 分钟",
+            )
+        },
+        actualMinutes = actualMinutes,
+        actualLabel = "实际投入 $actualMinutes 分钟",
+        plannedMinutes = planned,
+        plannedLabel = planned?.let { "计划时长 $it 分钟" } ?: "未设置计划时长",
+        completed = completed,
+        completionLabel = if (completed) "已完成" else "未完成",
+        // 只有「有承诺且尚未达标」才是用户必须决定的时刻；没有计划或已经完成都不是。
+        needsCompletionDecision = planned != null && !completed,
+        attributionLabel = attribution,
     )
 }
 

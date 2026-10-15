@@ -4,6 +4,7 @@ import java.time.Instant
 import java.time.ZoneOffset
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -194,5 +195,96 @@ class ScheduleCompletionByInvestmentCommandTest {
         ).execute(stateOf(entry), now, utc)
 
         assertFalse(saved.state.schedules.single().completed)
+    }
+
+    @Test
+    fun the_records_a_stop_produces_carry_every_fact_the_result_panel_shows() {
+        // 结果面板要展示的四件事——实际投入、计划时长、完成结果、记录归属——
+        // 全部来自领域结算的结果，页面不需要（也不允许）自己推算。
+        val entry = schedule(estimatedMinutes = 30)
+        val running = stateOf(entry).startTimer("target", now.minusSeconds(20 * 60L), utc, entry.id)
+
+        val stopped = AttentionCommand.StopTimer.execute(running, now, utc)
+
+        assertEquals(1, stopped.generatedTimeEntries.size)
+        val record = stopped.generatedTimeEntries.single()
+        assertEquals(20, record.durationMinutes)
+        assertEquals("2026-10-08", record.planningDate)
+        assertEquals("target", record.targetId)
+        assertEquals(TimeEntrySource.TIMER, record.source)
+        assertEquals(entry.id, record.scheduleEntryId)
+        // 实际投入与是否达标都读领域函数；不足计划时完成状态仍由用户决定。
+        assertEquals(20, stopped.state.scheduleInvestedMinutes(entry.id))
+        assertFalse(stopped.state.isScheduleInvestmentMet(entry.id))
+        assertFalse(stopped.state.schedules.single().completed)
+    }
+
+    @Test
+    fun a_stop_reaching_the_plan_completes_the_entry_without_a_second_command() {
+        // 达标即自动完成：用户不必、也不应该再勾一次完成。
+        val entry = schedule(estimatedMinutes = 30)
+        val running = stateOf(entry).startTimer("target", now.minusSeconds(35 * 60L), utc, entry.id)
+
+        val stopped = AttentionCommand.StopTimer.execute(running, now, utc)
+
+        assertTrue(stopped.state.isScheduleInvestmentMet(entry.id))
+        assertTrue(stopped.state.schedules.single().completed)
+        assertEquals(35, stopped.state.scheduleInvestedMinutes(entry.id))
+    }
+
+    @Test
+    fun stopping_across_a_planning_day_boundary_reports_each_record_separately() {
+        // 跨规划日界线的那一次计时会落成多条记录；面板必须如实呈现多笔，
+        // 而实际投入仍按全部记录合计——归并不由页面或领域单方面决定。
+        val entry = ScheduleEntry(
+            id = "schedule",
+            planningDate = "2026-10-08",
+            title = "夜间长跑",
+            startMinute = 540,
+            endMinute = 720,
+            estimatedMinutes = 240,
+            targetId = "target",
+        )
+        // 计划日界线默认 03:00：从 10-07 22:00 起计 240 分钟会跨过 10-08 的 03:00。
+        val start = Instant.parse("2026-10-07T22:00:00Z")
+        val end = Instant.parse("2026-10-08T02:00:00Z")
+        val running = stateOf(entry)
+            .copy(settings = StoredSettings(planningDayBoundaryMinutes = 180))
+            .startTimer("target", start, utc, entry.id)
+
+        val stopped = AttentionCommand.StopTimer.execute(running, end, utc)
+
+        // 22:00-03:00 记在 10-07，03:00 之后的残余若不足整分钟则不计；无论怎么切，
+        // 面板看到的是「这次停止产出的那几笔」，而不是一笔被合成的时间。
+        assertTrue("跨规划日的停止会产出多条记录", stopped.generatedTimeEntries.size >= 1)
+        assertEquals(
+            stopped.generatedTimeEntries.map { it.planningDate }.distinct().size,
+            stopped.generatedTimeEntries.map { it.planningDate }.toSet().size,
+        )
+        assertEquals(
+            stopped.generatedTimeEntries.sumOf { it.durationMinutes },
+            stopped.state.scheduleInvestedMinutes(entry.id),
+        )
+        assertTrue("实际投入按这次停止产出的全部记录合计", stopped.state.schedules.single().completed)
+    }
+
+    @Test
+    fun an_entry_without_a_planned_duration_keeps_its_state_after_a_stop() {
+        // 没有计划时长的日程不由系统猜测：停止之后它既不自动完成，也不被提示为未达标。
+        val entry = ScheduleEntry(
+            id = "schedule",
+            planningDate = "2026-10-08",
+            title = "随手做的",
+            estimatedMinutes = null,
+            targetId = "target",
+        )
+        val running = stateOf(entry).startTimer("target", now.minusSeconds(90 * 60L), utc, entry.id)
+
+        val stopped = AttentionCommand.StopTimer.execute(running, now, utc)
+
+        assertNull(entry.plannedMinutes())
+        assertFalse(stopped.state.isScheduleInvestmentMet(entry.id))
+        assertFalse(stopped.state.schedules.single().completed)
+        assertEquals(90, stopped.state.scheduleInvestedMinutes(entry.id))
     }
 }

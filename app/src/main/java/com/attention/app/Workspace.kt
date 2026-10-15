@@ -262,6 +262,18 @@ private class AgendaActionsAdapter(
         viewModel.toggleScheduleCompleted(entryId)
     }
 
+    // 结果面板上的「标记为完成」与行上的完成是同一件事：走同一条既有完成路径，
+    // 完成标记与投入经验、里程碑仍由领域计算，不新造命令。
+    override fun markStoppedScheduleCompleted(entryId: String) {
+        viewModel.markStoppedScheduleCompleted(entryId)
+        viewModel.clearStoppedEntryIds()
+    }
+
+    // 「结束并保留未完成」只是关闭这一次结果面板：投入已经记下，完成状态保持原样。
+    override fun dismissStopResult() {
+        viewModel.clearStoppedEntryIds()
+    }
+
     // 条目一起带出，因此产出的时间记录保留同一个来源关联。
     override fun startTimerFromEntry(entry: ScheduleEntry) = onStartTimerFromEntry(entry)
 
@@ -736,6 +748,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     val externalPlanningDate = externalSchedulePlanningDate(state, openScheduleDate, openScheduleId)
     val agendaSelection = rememberAgendaSelection(externalPlanningDate)
     val agendaPlanningDay = state.planningDate(injectedNow, injectedZone)
+    val stoppedEntryIds by viewModel.stoppedEntryIds.collectAsStateWithLifecycle()
     val agendaState = agendaScreenState(
         state = state,
         now = injectedNow,
@@ -744,6 +757,9 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         // 范围高亮来自选择状态自己记住的显式范围，跨规划日界线也不会丢。
         selectedScope = agendaSelection.selectedRangeScope(agendaPlanningDay),
         openScheduleId = openScheduleId,
+        // 「刚刚停止的那一笔」由组合根交出：停止命令成功后 ViewModel 记下这次产出的记录 id，
+        // 用户消费结果时清空。页面因此不缓存任何历史，也不会反复展示陈旧结果。
+        stoppedEntryIds = stoppedEntryIds,
     )
 
     // 统计页的周期选择由统计页 module 提供类型与迁移语义，组合根只持有一个实例来喂投影。
