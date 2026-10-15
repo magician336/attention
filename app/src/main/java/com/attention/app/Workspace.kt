@@ -8,6 +8,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import java.io.OutputStreamWriter
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -744,6 +745,17 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     }
     androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.restoreReminders() }
 
+    // 返回键只处理当前可关闭的层（ADR-0005 第 4 节：平台行为归组合根）。
+    // 落点由纯函数决定：主页面之间没有返回栈，因此这里不看标签历史——
+    // 在日程、目标树、统计之间来回切换之后按返回键不会逐页回放标签。
+    // 设置页是唯一挂在主内容里、而不是对话框窗口里的可关闭层，必须由返回键关掉；
+    // 日程详情对话框与日期选择器在自己的窗口里先消费掉返回键，优先级天然更高。
+    when (resolveBackTarget(settingsOpen)) {
+        WorkspaceBackTarget.CLOSE_SETTINGS_PAGE -> BackHandler(enabled = true) { settingsOpen = false }
+        // 没有可关闭的层就不注册处理器：返回键原样交给系统，退出行为不变（#175）。
+        WorkspaceBackTarget.SYSTEM -> Unit
+    }
+
     // 系统时钟只在组合根读一次，所有页面投影共用这一份 now 与 zone（ADR-0005 第 3 节）。
     val injectedNow = Instant.now()
     val injectedZone = ZoneId.systemDefault()
@@ -1189,3 +1201,22 @@ private const val REMINDER_PERMISSION_REQUEST_CODE = 4101
 
 internal fun shouldPersistLastOpened(settingsLoaded: Boolean, settingsOpen: Boolean): Boolean =
     settingsLoaded && !settingsOpen
+
+/**
+ * 一次返回键按下时它该落在哪里。返回键处理是平台行为，因此决策点留在组合根侧，
+ * 并且写成纯函数：每种情形都能在 JVM 测试里钉住，不必依赖设备与窗口顺序。
+ */
+internal enum class WorkspaceBackTarget {
+    /** 关掉当前打开的设置页。 */
+    CLOSE_SETTINGS_PAGE,
+
+    /** 没有可关闭的层：把返回键交回系统，应用退出行为与本票之前一致。 */
+    SYSTEM,
+}
+
+/**
+ * 只看「有没有可关闭的层」，不看标签历史——主页面之间的切换不形成逐页返回栈，
+ * 因此标签切换多少次都不会让返回键去回放上一个标签页。
+ */
+internal fun resolveBackTarget(settingsOpen: Boolean): WorkspaceBackTarget =
+    if (settingsOpen) WorkspaceBackTarget.CLOSE_SETTINGS_PAGE else WorkspaceBackTarget.SYSTEM
