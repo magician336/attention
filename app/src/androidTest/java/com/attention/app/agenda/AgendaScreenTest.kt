@@ -6,7 +6,10 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -310,20 +313,41 @@ class AgendaScreenTest {
     }
 
     @Test
-    fun the_running_timer_is_pinned_above_the_timeline() {
-        // 正在计时的条目固定在时间轴顶部：它排在日期筛选与时间轴之前，用户不必先滚动去找。
-        mount(planningDayScreenState(planningDay, activeTimer = runningTimer()))
+    fun the_running_schedule_is_pinned_to_the_top_of_the_timeline() {
+        // #180 的首屏顺序是「容量摘要 → 时间轴 → 计时控制 → 添加 → 事后补记」，
+        // 而「正在计时的条目固定在时间轴顶部」指的是**时间轴内部**的第一位，不是整页第一位。
+        // 这两件事必须分别断言：整页顺序按 spec，置顶按时间轴内部。
+        val timingEntry = ScheduleEntry("e5", "2026-03-06", "正在做的", estimatedMinutes = 60)
+        mount(
+            planningDayScreenState(
+                planningDay,
+                activeTimer = runningTimer(),
+                timelineRows = listOf(
+                    row(timingEntry, "2026-03-06 · 60 分钟 · 无提醒", false, timing = true),
+                    row(meetingEntry, "2026-03-06 · 30 分钟 · 无提醒 · 已完成", true),
+                ),
+            ),
+        )
 
         val tags = orderedTestTags()
-        val timerIndex = tags.indexOf("agenda-running-timer")
-        val timelineIndex = tags.indexOf("agenda-schedule-row-e2")
-        val filterIndex = tags.indexOf("agenda-date-menu")
+        val cueIndex = tags.indexOf("schedule-timing-cue")
+        val timingRowIndex = tags.indexOf("agenda-schedule-row-e5")
+        val otherRowIndex = tags.indexOf("agenda-schedule-row-e2")
+        val timelineSectionIndex = tags.indexOf("agenda-section-timeline")
+        val timerSectionIndex = tags.indexOf("agenda-section-timer")
 
-        assertTrue("运行中的计时必须渲染：" + tags, timerIndex >= 0)
-        assertTrue("时间轴条目必须渲染：" + tags, timelineIndex >= 0)
-        assertTrue("时间轴筛选必须在：" + tags, filterIndex >= 0)
-        assertTrue("计时应固定在时间轴顶部，实际顺序：" + tags, timerIndex < timelineIndex)
-        assertTrue("计时应固定在时间轴顶部，实际顺序：" + tags, timerIndex < filterIndex)
+        assertTrue("计时线索必须渲染：" + tags, cueIndex >= 0)
+        assertTrue("正在计时的日程行必须渲染：" + tags, timingRowIndex >= 0)
+        assertTrue("其它日程行必须渲染：" + tags, otherRowIndex >= 0)
+        assertTrue("计时线索应落在正在计时的那一行：" + tags, cueIndex == timingRowIndex + 1)
+        assertTrue("正在计时的条目应固定在时间轴第一位，实际顺序：" + tags, timingRowIndex < otherRowIndex)
+        // 计时控制卡是时间轴区块之后的一块，它不属于时间轴内部。
+        assertTrue("计时控制区块必须渲染：" + tags, timerSectionIndex >= 0)
+        assertTrue("时间轴区块必须渲染：" + tags, timelineSectionIndex >= 0)
+        assertTrue(
+            "整页顺序按 #180：时间轴在计时控制之前，实际顺序：" + tags,
+            timelineSectionIndex < timerSectionIndex,
+        )
     }
 
     @Test
@@ -594,6 +618,21 @@ class AgendaScreenTest {
      */
     private fun sectionTop(tag: String): Float =
         composeRule.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.top
+
+    /**
+     * 一次布局快照里出现的全部 test tag，按语义树的先序排列。
+     *
+     * 与 [sectionTop] 一样刻意不滚动：顺序必须在同一份布局上比较。
+     */
+    private fun orderedTestTags(): List<String> {
+        val tags = mutableListOf<String>()
+        fun walk(node: SemanticsNode) {
+            node.config.getOrNull(SemanticsProperties.TestTag)?.let(tags::add)
+            node.children.forEach(::walk)
+        }
+        walk(composeRule.onRoot(useUnmergedTree = true).fetchSemanticsNode())
+        return tags
+    }
 
     private val planningDay: LocalDate = LocalDate.of(2026, 3, 5)
 
