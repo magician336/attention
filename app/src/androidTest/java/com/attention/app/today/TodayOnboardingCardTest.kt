@@ -237,6 +237,7 @@ class TodayOnboardingCardTest {
         override fun saveDailyPlanningSettings(boundaryMinutes: Int, dailyCapacityMinutes: Int?) = Unit
         override fun selectWeekStartDay(day: Int) = Unit
         override fun startTimer(targetId: String?) = Unit
+        override fun startTimerFromEntry(entry: ScheduleEntry) = Unit
         override fun pauseTimer() = Unit
         override fun resumeTimer() = Unit
         override fun recoverTimer() = Unit

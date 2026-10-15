@@ -41,6 +41,14 @@ interface TodayActions {
      */
     fun startTimer(targetId: String?)
 
+    /**
+     * 从「今日安排」里的一条日程起计时。
+     *
+     * 与 [startTimer] 分开是有意的：这里必须把整条 [entry] 一起带出，产出的时间记录
+     * 才保留同一个日程来源关联（`TimeEntrySource.SCHEDULE`）。只传 `targetId` 会丢掉来源。
+     */
+    fun startTimerFromEntry(entry: ScheduleEntry)
+
     /** 暂停计时。计时器生命周期本身不随暂停变化，前台服务仍在运行。 */
     fun pauseTimer()
 

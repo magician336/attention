@@ -117,6 +117,7 @@ private class TodayActionsAdapter(
     private val zone: ZoneId,
     private val onTimeRecordDeleted: (TimeEntry) -> Unit,
     private val onFeedbackMessage: (String) -> Unit,
+    private val onStartTimerFromSchedule: (ScheduleEntry) -> Unit,
 ) : TodayActions {
     override fun recordTime(planningDate: String, minutes: Int, targetId: String?) {
         viewModel.addTime(planningDate, minutes, targetId)
@@ -142,6 +143,9 @@ private class TodayActionsAdapter(
     override fun startTimer(targetId: String?) {
         viewModel.startTimer(targetId, onSuccess = ::startForegroundCounting)
     }
+
+    // 与所有日期页共用同一份实现，两个入口的来源关联与平台行为因此完全一致。
+    override fun startTimerFromEntry(entry: ScheduleEntry) = onStartTimerFromSchedule(entry)
 
     override fun pauseTimer() {
         viewModel.pauseTimer()
@@ -702,6 +706,24 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         zone = injectedZone,
         notificationsEnabled = notificationsEnabled(context),
     )
+    // 从日程条目起计时：今天页的「今日安排」与所有日期页共用这一份实现，
+    // 两个入口因此产出同样的时间记录与同样的平台行为（保留 scheduleEntryId 来源关联）。
+    fun startTimerFromSchedule(entry: ScheduleEntry) {
+        viewModel.startTimer(
+            targetId = entry.targetId,
+            onSuccess = {
+                AttentionBootReceiver.cancelRecoveryPrompt(context)
+                if (!notificationsEnabled(context)) {
+                    feedbackScope.launch {
+                        feedback.showMessage("通知权限未开启，计时仍会保存；通知栏控制不可用。")
+                    }
+                }
+                ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
+            },
+            scheduleEntryId = entry.id,
+        )
+    }
+
     val currentWeekStartDay by androidx.compose.runtime.rememberUpdatedState(state.settings.weekStartDay)
     val todayActions: TodayActions = remember(viewModel) {
         TodayActionsAdapter(
@@ -719,6 +741,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                     )
                 }
             },
+            onStartTimerFromSchedule = ::startTimerFromSchedule,
             // 计时开始时的通知不可用提示同样由组合根展示，页面只发 intent。
             onFeedbackMessage = { message -> feedbackScope.launch { feedback.showMessage(message) } },
         )
@@ -802,22 +825,6 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         TargetsActionsAdapter(
             viewModel = viewModel,
             currentState = { currentAttentionState },
-        )
-    }
-
-    fun startTimerFromSchedule(entry: ScheduleEntry) {
-        viewModel.startTimer(
-            targetId = entry.targetId,
-            onSuccess = {
-                AttentionBootReceiver.cancelRecoveryPrompt(context)
-                if (!notificationsEnabled(context)) {
-                    feedbackScope.launch {
-                        feedback.showMessage("通知权限未开启，计时仍会保存；通知栏控制不可用。")
-                    }
-                }
-                ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
-            },
-            scheduleEntryId = entry.id,
         )
     }
 

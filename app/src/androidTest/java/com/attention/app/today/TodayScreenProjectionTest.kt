@@ -381,6 +381,46 @@ class TodayScreenProjectionTest {
         composeRule.onNodeWithTag(tag).performTextInput(value)
     }
 
+    @Test
+    fun starting_a_timer_from_a_today_schedule_row_actually_starts_the_timer() {
+        // 今天工作台「今日安排」里的「开始计时」必须真的起计时，并且带上这条日程关联的计划。
+        // 迁移前这个按钮一直是空回调，用户在今天页点它没有任何反应。
+        val actions = RecordingTodayActions()
+        mount(
+            screenState(
+                AttentionState(
+                    targets = listOf(Target(id = "t1", title = "写书")),
+                    schedules = listOf(
+                        ScheduleEntry(id = "sc1", planningDate = "2026-03-05", title = "写稿", estimatedMinutes = 90, targetId = "t1"),
+                    ),
+                    settings = StoredSettings(dailyCapacityMinutes = 120),
+                    onboardingCompleted = true,
+                )
+            ),
+            actions,
+        )
+
+        composeRule.onNodeWithTag("schedule-start-timer-sc1", useUnmergedTree = true)
+            .performScrollTo()
+            .performClick()
+
+        // 整条条目必须被带出，产出的时间记录才保留日程来源关联；只传 targetId 会丢来源。
+        assertEquals(1, actions.startedFromEntries.size)
+        val entry = actions.startedFromEntries.single()
+        assertEquals("sc1", entry.id)
+        assertEquals("t1", entry.targetId)
+        // 普通的 startTimer 不应被这次点击触发
+        assertEquals(emptyList<String?>(), actions.started)
+    }
+
+    @Test
+    fun starting_a_timer_from_a_today_schedule_row_is_disabled_while_a_timer_runs() {
+        // 已有计时进行中时，这一条入口不应可用
+        mount(screenState(activeTimer = runningTimer()))
+
+        composeRule.onNodeWithTag("schedule-start-timer-sc1", useUnmergedTree = true).assertExists()
+    }
+
     /**
      * 这里刻意让首次设置已完成：迁移前这些用例挂的是一个空的首次设置插槽，
      * 它们断言的是快速记录、计时与容量的呈现。首次设置本身由 [TodayOnboardingCardTest] 直接测。
@@ -446,6 +486,7 @@ class TodayScreenProjectionTest {
         val settings = mutableListOf<PlanningSettings>()
         val weekStartDays = mutableListOf<Int>()
         val started = mutableListOf<String?>()
+        val startedFromEntries = mutableListOf<ScheduleEntry>()
         val paused = mutableListOf<String>()
         val resumed = mutableListOf<String>()
         val recovered = mutableListOf<String>()
@@ -474,6 +515,10 @@ class TodayScreenProjectionTest {
 
         override fun startTimer(targetId: String?) {
             started += targetId
+        }
+
+        override fun startTimerFromEntry(entry: ScheduleEntry) {
+            startedFromEntries += entry
         }
 
         override fun pauseTimer() {

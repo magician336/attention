@@ -81,10 +81,9 @@ private fun TodayScheduleRowCard(
             }
             AttentionTextButton(onClick = { onEdit(row) }, modifier = Modifier.testTag("schedule-edit-${entry.id}")) { Text("编辑") }
             AttentionTextButton(
-                // 这里保持迁移前的空回调：今天工作台的这一列一直是不可用的入口，
-                // 真正会带出日程来源的「开始计时」在所有日期页上。
-                // 迁移只搬位置，不改行为，因此这里不顺手把它接上。
-                onClick = {},
+                // 从日程条目起计时必须带上整条条目，产出的时间记录才保留日程来源关联，
+                // 因此这里走 startTimerFromEntry 而不是只传 targetId 的 startTimer。
+                onClick = { actions.startTimerFromEntry(entry) },
                 enabled = row.canStartTimer,
                 modifier = Modifier.testTag("schedule-start-timer-${entry.id}"),
             ) { Text("开始计时") }
