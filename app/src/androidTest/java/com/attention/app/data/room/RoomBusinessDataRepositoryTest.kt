@@ -17,6 +17,7 @@ import com.attention.domain.Milestone
 import com.attention.domain.PeriodSnapshot
 import com.attention.domain.RecurrenceRule
 import com.attention.domain.ScheduleEntry
+import com.attention.domain.ScheduleBackfill
 import com.attention.domain.ScheduleFrequency
 import com.attention.domain.StoredSettings
 import com.attention.domain.Target
@@ -40,6 +41,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -606,6 +608,194 @@ class RoomBusinessDataRepositoryTest {
             val loaded = RoomBusinessDataRepository(secondDatabase).read()
             assertEquals(expected, loaded)
             assertEquals(65L, loaded.experience)
+        } finally {
+            secondDatabase.close()
+            context.deleteDatabase(name)
+        }
+    }
+
+    @Test
+    fun saving_a_schedule_with_backfill_persists_the_schedule_and_its_linked_record_together() = runBlocking {
+        val target = Target("backfill-target", title = "补记目标")
+        val stage = GoalStage("backfill-stage", target.id, GoalCadence.ONE_TIME, 30, "2026-10-08")
+        val entry = ScheduleEntry("backfill-schedule", "2026-10-08", "读一章", estimatedMinutes = 30, targetId = target.id)
+        val repository = RoomBusinessDataRepository(database)
+        repository.replace(AttentionState(targets = listOf(target), goalStages = listOf(stage)))
+
+        val result = repository.execute(
+            AttentionCommand.SaveSchedule(
+                entry,
+                ScheduleBackfill(durationMinutes = 45, targetId = target.id, note = "顺手补记", requestId = "request-1"),
+            ),
+            Instant.parse("2026-10-08T12:00:00Z"),
+            ZoneId.of("UTC"),
+            StoredSettings(),
+        )
+
+        val loaded = repository.read()
+        assertEquals(result.state, loaded)
+        assertEquals(listOf(entry), loaded.schedules)
+        val record = loaded.timeEntries.single()
+        assertEquals(TimeEntrySource.MANUAL, record.source)
+        assertEquals(entry.id, record.scheduleEntryId)
+        assertEquals("request-1", record.backfillRequestId)
+        assertEquals(45, record.durationMinutes)
+        assertEquals(target.id, record.targetId)
+        assertEquals(1, loaded.milestones.size)
+        assertEquals(10_045L, loaded.experience)
+    }
+
+    @Test
+    fun failed_schedule_write_rolls_back_the_backfilled_record_in_the_same_transaction() = runBlocking {
+        val target = Target("backfill-rollback-target", title = "补记回滚")
+        val entry = ScheduleEntry("backfill-rollback-schedule", "2026-10-08", "读一章", estimatedMinutes = 30, targetId = target.id)
+        val repository = RoomBusinessDataRepository(database)
+        repository.replace(AttentionState(targets = listOf(target)))
+        // 时间记录先于日程条目写入，因此让日程条目这一步失败就能验证：
+        // 已经写进去的那笔补记必须一起回滚，不允许留下只有一半的中间状态。
+        database.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER fail_schedule_entry_insert BEFORE INSERT ON schedule_entries " +
+                "BEGIN SELECT RAISE(ABORT, 'injected schedule write failure'); END",
+        )
+
+        val failure = runCatching {
+            repository.execute(
+                AttentionCommand.SaveSchedule(entry, ScheduleBackfill(durationMinutes = 45, targetId = target.id)),
+                Instant.parse("2026-10-08T12:00:00Z"),
+                ZoneId.of("UTC"),
+                StoredSettings(),
+            )
+        }.exceptionOrNull()
+
+        assertNotNull("写入失败必须向外传播，不能被吞掉", failure)
+        val loaded = repository.read()
+        assertTrue(loaded.schedules.isEmpty())
+        assertTrue(loaded.timeEntries.isEmpty())
+        assertTrue(loaded.milestones.isEmpty())
+        assertEquals(0L, loaded.experience)
+    }
+
+    @Test
+    fun re_saving_the_same_schedule_after_restart_creates_no_second_investment() = runBlocking {
+        val target = Target("backfill-restart-target", title = "补记重启")
+        val stage = GoalStage("backfill-restart-stage", target.id, GoalCadence.ONE_TIME, 30, "2026-10-08")
+        val entry = ScheduleEntry("backfill-restart-schedule", "2026-10-08", "读一章", estimatedMinutes = 30, targetId = target.id)
+        val backfill = ScheduleBackfill(durationMinutes = 45, targetId = target.id, requestId = "request-restart")
+        val command = AttentionCommand.SaveSchedule(entry, backfill)
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val name = "room-backfill-restart-test.db"
+        context.deleteDatabase(name)
+        val firstDatabase = Room.databaseBuilder(context, AttentionDatabase::class.java, name).build()
+        try {
+            RoomBusinessDataRepository(firstDatabase).replace(
+                AttentionState(targets = listOf(target), goalStages = listOf(stage)),
+            )
+            RoomBusinessDataRepository(firstDatabase).execute(
+                command,
+                Instant.parse("2026-10-08T12:00:00Z"),
+                ZoneId.of("UTC"),
+                StoredSettings(),
+            )
+        } finally {
+            firstDatabase.close()
+        }
+
+        val secondDatabase = Room.databaseBuilder(context, AttentionDatabase::class.java, name).build()
+        try {
+            val repository = RoomBusinessDataRepository(secondDatabase)
+            val restarted = repository.read()
+            val record = restarted.timeEntries.single()
+            assertEquals(TimeEntrySource.MANUAL, record.source)
+            assertEquals(entry.id, record.scheduleEntryId)
+            assertEquals("2026-10-08", record.planningDate)
+            assertEquals(45, record.durationMinutes)
+            // 提交意图标识跨重启仍然在，重放判据因此在重启后依然有效。
+            assertEquals("request-restart", record.backfillRequestId)
+            assertEquals(10_045L, restarted.experience)
+            assertEquals(1, restarted.milestones.size)
+
+            // 重启之后重放同一次保存：提交意图命中，不产生第二笔投入，也不重复发奖。
+            val replayed = repository.execute(
+                command,
+                Instant.parse("2026-10-08T12:30:00Z"),
+                ZoneId.of("UTC"),
+                StoredSettings(),
+            )
+            assertTrue(replayed.generatedTimeEntries.isEmpty())
+            assertTrue(replayed.newMilestones.isEmpty())
+
+            // 重启之后再次确认完成：确认有它自己的幂等判据，同样不产生第二笔。
+            val confirmed = repository.execute(
+                AttentionCommand.ConfirmSchedule(entry.id),
+                Instant.parse("2026-10-08T13:00:00Z"),
+                ZoneId.of("UTC"),
+                StoredSettings(),
+            )
+            assertEquals(1, confirmed.generatedTimeEntries.size)
+            assertEquals(TimeEntrySource.SCHEDULE_CONFIRMED, confirmed.generatedTimeEntries.single().source)
+            val confirmedAgain = repository.execute(
+                AttentionCommand.ConfirmSchedule(entry.id),
+                Instant.parse("2026-10-08T13:30:00Z"),
+                ZoneId.of("UTC"),
+                StoredSettings(),
+            )
+            assertTrue(confirmedAgain.generatedTimeEntries.isEmpty())
+
+            val settled = repository.read()
+            assertTrue(settled.schedules.single().completed)
+            assertEquals(listOf(45, 30), settled.timeEntries.map { it.durationMinutes })
+            assertEquals(
+                listOf(TimeEntrySource.MANUAL, TimeEntrySource.SCHEDULE_CONFIRMED),
+                settled.timeEntries.map { it.source },
+            )
+            assertEquals("request-restart", settled.timeEntries.first().backfillRequestId)
+            assertNull(settled.timeEntries.last().backfillRequestId)
+            assertEquals(10_075L, settled.experience)
+            assertEquals(1, settled.milestones.size)
+        } finally {
+            secondDatabase.close()
+            context.deleteDatabase(name)
+        }
+    }
+
+    @Test
+    fun a_schedule_backfilled_and_then_confirmed_survives_restart_with_both_sources_intact() = runBlocking {
+        val target = Target("backfill-confirm-target", title = "补记后确认")
+        val entry = ScheduleEntry("backfill-confirm-schedule", "2026-10-08", "读一章", estimatedMinutes = 30, targetId = target.id)
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val name = "room-backfill-confirm-restart-test.db"
+        context.deleteDatabase(name)
+        val firstDatabase = Room.databaseBuilder(context, AttentionDatabase::class.java, name).build()
+        try {
+            val repository = RoomBusinessDataRepository(firstDatabase)
+            repository.replace(AttentionState(targets = listOf(target)))
+            repository.execute(
+                AttentionCommand.SaveSchedule(
+                    entry,
+                    ScheduleBackfill(durationMinutes = 45, targetId = target.id, requestId = "request-1"),
+                ),
+                Instant.parse("2026-10-08T12:00:00Z"),
+                ZoneId.of("UTC"),
+                StoredSettings(),
+            )
+            repository.execute(
+                AttentionCommand.ConfirmSchedule(entry.id),
+                Instant.parse("2026-10-08T13:00:00Z"),
+                ZoneId.of("UTC"),
+                StoredSettings(),
+            )
+        } finally {
+            firstDatabase.close()
+        }
+
+        val secondDatabase = Room.databaseBuilder(context, AttentionDatabase::class.java, name).build()
+        try {
+            val loaded = RoomBusinessDataRepository(secondDatabase).read()
+            assertEquals(listOf(TimeEntrySource.MANUAL, TimeEntrySource.SCHEDULE_CONFIRMED), loaded.timeEntries.map { it.source })
+            assertEquals(listOf(entry.id, entry.id), loaded.timeEntries.map { it.scheduleEntryId })
+            assertEquals("request-1", loaded.timeEntries.first().backfillRequestId)
+            assertEquals(10_075L, loaded.experience)
+            assertTrue(loaded.schedules.single().completed)
         } finally {
             secondDatabase.close()
             context.deleteDatabase(name)

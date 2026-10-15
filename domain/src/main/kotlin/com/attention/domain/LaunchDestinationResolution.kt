@@ -28,12 +28,11 @@ fun LaunchDestination.asAgendaEntry(): LaunchDestination = when (this) {
 /**
  * 读取持久化的入口名称（DataStore 与备份 JSON 共用同一套枚举名称协议）。
  *
- * 旧版本的值经兼容映射等价于日程入口；无法解析的值没有有效历史，回退到日程。
+ * 解析委托给 [LaunchDestinationSerializer]：备份 JSON 里按名序列化的就是同一份协议，
+ * 两条路径必须对认不出来的名字给出同一个答案。旧版本的值经 [asAgendaEntry] 等价于日程入口。
  */
 fun launchDestinationFromPersistedName(name: String?): LaunchDestination =
-    name?.let { runCatching { LaunchDestination.valueOf(it) }.getOrNull() }
-        ?.asAgendaEntry()
-        ?: LaunchDestination.AGENDA
+    LaunchDestinationSerializer.fromPersistedName(name).asAgendaEntry()
 
 /**
  * 「上次打开」只解析出日程、目标树、统计三者之一；解析到自身、旧入口值或无效历史时
