@@ -20,22 +20,23 @@ data class StoredSettings(
     )
 }
 
-@Serializable(with = GoalCadenceSerializer::class)
+/*
+ * 下面四个枚举是**按名持久化**的枚举，但领域类型本身不再标 `@Serializable`：
+ * 按名解析与「名字认不出来时读成什么」是持久化层的知识，规则写在 [PersistedEnumSerializer]
+ * （Room 的枚举列与 DataStore 的启动入口偏好用它），备份 JSON 用的是备份协议自己那一份
+ * （`app` 的 `BackupProtocolEnums`）。两侧对同一个名字必须给出同一个值，由单元测试对照。
+ * 标 `@Serializable(with = ...)` 会让「为什么领域枚举身上挂着一个只对存储有意义的序列化器」
+ * 变成一个看不出理由的既成事实。
+ */
 enum class GoalCadence { DAILY, WEEKLY, MONTHLY, ONE_TIME }
 
-@Serializable(with = TimeEntrySourceSerializer::class)
 enum class TimeEntrySource { MANUAL, TIMER, SCHEDULE_CONFIRMED, IMPORT }
 
-@Serializable(with = ScheduleFrequencySerializer::class)
 enum class ScheduleFrequency { DAILY, WEEKLY, MONTHLY }
 
-@Serializable(with = LaunchDestinationSerializer::class)
 /**
  * 启动入口。[AGENDA] 是「日程」的正式语义；[TODAY] 与 [ALL_DATES] 是旧版本持久化的入口值，
  * 它们仍然存在并按旧页面打开，删除它们属于后续的收缩工作。
- *
- * 四个按名持久化的枚举都走 [PersistedEnumSerializer]：名字认不出来时读成声明过的默认值，
- * 而不是让整份备份被拒。
  */
 enum class LaunchDestination { TODAY, TARGETS, ALL_DATES, STATISTICS, LAST_OPENED, AGENDA }
 

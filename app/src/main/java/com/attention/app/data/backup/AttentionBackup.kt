@@ -3,7 +3,6 @@ package com.attention.app.data.backup
 import com.attention.domain.AttentionState
 import com.attention.domain.FutureGoalRule
 import com.attention.domain.GoalStage
-import com.attention.domain.LaunchDestination
 import com.attention.domain.Migration
 import com.attention.domain.Milestone
 import com.attention.domain.PeriodSnapshot
@@ -29,9 +28,9 @@ import kotlinx.serialization.json.jsonObject
  * 映射层。映射层现在存在了：它在 [BackupDomainMapping]，是领域状态与协议模型之间唯一、集中的
  * 转换处。
  *
- * 过渡状态：`launchDestination` 与 `lastOpenedDestination` 仍然直接承载领域枚举
- * [LaunchDestination]，因为按名持久化与未知值容错的处理归 #205。字段外形因此与 v1 一致，
- * 用户可见行为不变。
+ * `launchDestination` 与 `lastOpenedDestination` 由协议自己的枚举 [BackupLaunchDestination] 承载
+ * （见 [BackupProtocolEnums]）：它们在线上是字符串，按名解析与未知值容错因此属于协议的知识，
+ * 而不是在领域类型上留一层只为备份服务的标注。字段外形与 v1 一致，用户可见行为不变。
  *
  * 协议的顶层字段之间只通过字符串外键（`targetId`、`scheduleEntryId` 等）互相引用，
  * 没有任何顶层类型直接嵌套另一个，所以每个集合都是一个扁平行列。协议内部唯一的
@@ -59,8 +58,8 @@ data class AttentionBackup(
     val onboardingCompleted: Boolean = false,
     // 缺这两个字段的历史备份按「日程」解释，与 DataStore 侧的有效偏好回退保持一致：
     // 旧值 TODAY / ALL_DATES 仍按兼容映射读成日程，但不再作为默认值被写回新备份。
-    val launchDestination: LaunchDestination = LaunchDestination.AGENDA,
-    val lastOpenedDestination: LaunchDestination = LaunchDestination.AGENDA,
+    val launchDestination: BackupLaunchDestination = BackupLaunchDestination.AGENDA,
+    val lastOpenedDestination: BackupLaunchDestination = BackupLaunchDestination.AGENDA,
     val notificationsEnabled: Boolean = true,
 ) {
     /** 协议模型 → 领域状态。转换本体在 [BackupDomainMapping]，这里只是既有调用点的入口。 */
