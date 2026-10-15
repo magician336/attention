@@ -1,7 +1,9 @@
 package com.attention.app.agenda
 
 import androidx.activity.compose.setContent
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -10,18 +12,24 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.attention.app.ui.components.AttentionFeedbackTags
 import com.attention.app.ui.theme.AttentionTheme
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.ScheduleFrequency
+import com.attention.domain.TimeEntrySource
 import com.attention.workspace.state.AgendaActions
+import com.attention.workspace.state.AgendaActiveTimer
 import com.attention.workspace.state.AgendaDateOption
 import com.attention.workspace.state.AgendaDateSection
+import com.attention.workspace.state.AgendaRangeOption
+import com.attention.workspace.state.AgendaRangeScope
 import com.attention.workspace.state.AgendaRecurrenceRuleLine
 import com.attention.workspace.state.AgendaRecurrenceDraft
 import com.attention.workspace.state.AgendaScheduleDraft
 import com.attention.workspace.state.AgendaScheduleRow
 import com.attention.workspace.state.AgendaScreenState
 import com.attention.workspace.state.AgendaTargetOption
+import com.attention.workspace.state.AgendaTimeRecord
 import java.time.LocalDate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -249,6 +257,48 @@ class AgendaScreenTest {
         assertEquals(emptyList<AgendaRecurrenceDraft>(), intents.addedRecurrences)
     }
 
+    @Test
+    fun the_range_bar_switches_between_today_tomorrow_and_all_dates() {
+        // 顶部范围切换在页面内完成：今天与明天各选一个规划日，所有日期是特殊视图
+        val intents = RecordingAgendaActions()
+        mount(planningDayScreenState(planningDay), intents)
+
+        composeRule.onNodeWithTag("agenda-range-tomorrow", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).performScrollTo().performClick()
+
+        assertEquals(listOf(LocalDate.of(2026, 3, 6)), intents.selectedDates)
+        assertEquals(listOf("allDates"), intents.dataIntents)
+    }
+
+    @Test
+    fun a_running_timer_stays_visible_and_can_be_stopped() {
+        // 计时卡下线之后，运行中的计时仍然必须在日程页看得见并能停止
+        val intents = RecordingAgendaActions()
+        mount(planningDayScreenState(planningDay, activeTimer = runningTimer()), intents)
+
+        composeRule.onNodeWithText("正在计时：写周报 · 3 分钟").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-running-timer-stop", useUnmergedTree = true).performScrollTo().performClick()
+
+        assertEquals(1, intents.stoppedTimers)
+    }
+
+    @Test
+    fun a_time_record_can_be_edited_and_deleted_after_confirmation() {
+        // 手动时间账本的编辑与删除跟着日程页走：编辑发 intent，删除先确认再发 intent
+        val intents = RecordingAgendaActions()
+        mount(planningDayScreenState(planningDay, timeRecords = listOf(record())), intents)
+
+        composeRule.onNodeWithTag("edit-time-r1", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("edit-time-minutes-r1", useUnmergedTree = true).performScrollTo()
+            .performTextReplacement("90")
+        composeRule.onNodeWithTag("save-time-r1", useUnmergedTree = true).performClick()
+        assertEquals(listOf("r1" to 90), intents.editedRecords.map { it.entryId to it.minutes })
+
+        composeRule.onNodeWithTag("delete-time-r1", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag(AttentionFeedbackTags.CONFIRM_DIALOG_CONFIRM, useUnmergedTree = true).performClick()
+        assertEquals(listOf("r1"), intents.deletedRecords)
+    }
+
     /** 所有日期页是可滚动长页，断言与点击前先滚到目标节点。 */
     private fun node(text: String, substring: Boolean = false) =
         composeRule.onNodeWithText(text, substring = substring).performScrollTo()
@@ -333,7 +383,11 @@ class AgendaScreenTest {
     )
 
     /** 选中某个规划日的视图：标题、筛选文案与容量卡片都跟着这一天。 */
-    private fun planningDayScreenState(selected: LocalDate): AgendaScreenState = AgendaScreenState(
+    private fun planningDayScreenState(
+        selected: LocalDate,
+        activeTimer: AgendaActiveTimer? = null,
+        timeRecords: List<AgendaTimeRecord> = emptyList(),
+    ): AgendaScreenState = AgendaScreenState(
         planningDate = planningDay,
         selectedDate = selected,
         headingLabel = "规划日 $selected",
@@ -346,6 +400,29 @@ class AgendaScreenTest {
         recurrenceRules = recurrenceRules,
         targets = targets,
         pendingEditRow = null,
+        ranges = listOf(
+            AgendaRangeOption(AgendaRangeScope.TODAY, "今天", planningDay, selected == planningDay),
+            AgendaRangeOption(AgendaRangeScope.TOMORROW, "明天", planningDay.plusDays(1), selected == planningDay.plusDays(1)),
+            AgendaRangeOption(AgendaRangeScope.ALL_DATES, "所有日期", null, false),
+        ),
+        highlightAddSchedule = selected == planningDay.plusDays(1),
+        addScheduleHeadingLabel = if (selected == planningDay.plusDays(1)) "为明天（2026-03-06）添加日程" else "新增日程",
+        activeTimer = activeTimer,
+        timeRecords = timeRecords,
+        recordedMinutesLabel = if (timeRecords.isEmpty()) "" else "本规划日已记录：30 分钟",
+    )
+
+    /** 运行中的计时：紧凑计时条只需要目标名与已经投入的分钟数。 */
+    private fun runningTimer() = AgendaActiveTimer(targetLabel = "写周报", paused = false, elapsedMinutes = 3)
+
+    /** 一条手动记的实际投入。 */
+    private fun record() = AgendaTimeRecord(
+        entryId = "r1",
+        durationMinutes = 30,
+        targetLabel = "工作",
+        targetId = "t1",
+        source = TimeEntrySource.MANUAL,
+        note = "",
     )
 
     /** 一条日程都没有时的视图：空态提示由页面自己渲染。 */
@@ -383,6 +460,9 @@ class AgendaScreenTest {
         val addedRecurrences = mutableListOf<AgendaRecurrenceDraft>()
         val stoppedRules = mutableListOf<String>()
         val dataIntents = mutableListOf<String>()
+        val editedRecords = mutableListOf<EditedRecord>()
+        val deletedRecords = mutableListOf<String>()
+        var stoppedTimers = 0
         var permissionRequests = 0
 
         override fun selectPlanningDate(date: LocalDate?) {
@@ -428,5 +508,25 @@ class AgendaScreenTest {
         override fun requestReminderPermission() {
             permissionRequests++
         }
+
+        override fun stopRunningTimer() {
+            stoppedTimers++
+        }
+
+        override fun editTime(entryId: String, minutes: Int, targetId: String?, note: String) {
+            editedRecords += EditedRecord(entryId, minutes, targetId, note)
+        }
+
+        override fun deleteTime(entryId: String) {
+            deletedRecords += entryId
+        }
     }
+
+    /** 页面发出的一次编辑 intent：只带被改动的字段，规划日与来源不参与。 */
+    private data class EditedRecord(
+        val entryId: String,
+        val minutes: Int,
+        val targetId: String?,
+        val note: String,
+    )
 }

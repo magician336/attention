@@ -1,6 +1,7 @@
 package com.attention.app
 
 import com.attention.domain.LaunchDestination
+import com.attention.domain.asAgendaEntry
 import com.attention.domain.resolveLaunchDestination
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -31,26 +32,27 @@ class WorkspaceNavigationTest {
     }
 
     @Test
-    fun the_schedule_entry_opens_the_current_planning_day_and_keeps_the_bottom_bar_unchanged() {
-        // 「日程」入口落在底部导航现有的「今天」项上，因此导航与页面外观不变
+    fun the_agenda_entry_lands_on_the_merged_agenda_page() {
+        // 底部导航收敛为三项之后，「日程」就是它的真实入口：旧入口值仍然等价于日程
         assertEquals(
             LaunchDestination.AGENDA,
             initialLaunchDestination(false, LaunchDestination.AGENDA, LaunchDestination.TARGETS),
         )
         assertEquals(
-            LaunchDestination.TODAY,
-            selectedNavigationDestination(LaunchDestination.AGENDA),
+            LaunchDestination.AGENDA,
+            LaunchDestination.TODAY.asAgendaEntry(),
         )
         assertEquals(
-            LaunchDestination.ALL_DATES,
-            selectedNavigationDestination(LaunchDestination.ALL_DATES),
+            LaunchDestination.AGENDA,
+            LaunchDestination.ALL_DATES.asAgendaEntry(),
         )
     }
 
     @Test
     fun external_schedule_request_takes_precedence_over_saved_launch_page() {
+        // 外部日程请求直接打开合并后的日程页（深链优先级由 #174 继续细化）
         assertEquals(
-            LaunchDestination.ALL_DATES,
+            LaunchDestination.AGENDA,
             initialLaunchDestination(true, LaunchDestination.STATISTICS, LaunchDestination.TARGETS),
         )
         assertEquals(

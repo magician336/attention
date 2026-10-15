@@ -84,7 +84,7 @@ class WorkspaceGoalSummaryCorrectionIntegrationTest {
         composeRule.waitForIdle()
         assertSummary(15)
 
-        composeRule.onNode(hasText("今天") and hasClickAction()).performClick()
+        composeRule.onNodeWithTag("nav-agenda", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("edit-time-$OWNED_ENTRY_ID").performScrollTo().performClick()
         composeRule.onNodeWithTag("edit-time-minutes-$OWNED_ENTRY_ID", useUnmergedTree = true).performScrollTo().performTextReplacement("20")
@@ -93,7 +93,7 @@ class WorkspaceGoalSummaryCorrectionIntegrationTest {
         openTargetDetails()
         assertSummary(25)
 
-        composeRule.onNode(hasText("今天") and hasClickAction()).performClick()
+        composeRule.onNodeWithTag("nav-agenda", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("delete-time-$OWNED_ENTRY_ID").performScrollTo().performClick()
         composeRule.waitForIdle()

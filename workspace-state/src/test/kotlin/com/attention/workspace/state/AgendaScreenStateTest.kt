@@ -336,6 +336,85 @@ class AgendaScreenStateTest {
     }
 
     @Test
+    fun the_date_ranges_offer_today_tomorrow_and_all_dates_with_one_selection() {
+        // 顶部范围切换是同一页上的三个范围，不是三个顶级入口：任何时刻只有一个范围被选中
+        val todayView = project(state = stateWith(), selectedDate = today)
+        val tomorrowView = project(state = stateWith(), selectedDate = today.plusDays(1))
+        val allDatesView = project(state = stateWith())
+
+        assertEquals(
+            listOf("今天", "明天", "所有日期"),
+            todayView.ranges.map { it.label },
+        )
+        assertEquals(listOf(true, false, false), todayView.ranges.map { it.selected })
+        assertEquals(today, todayView.ranges[0].date)
+        assertEquals(today.plusDays(1), todayView.ranges[1].date)
+        assertNull("所有日期不是日期值", todayView.ranges[2].date)
+        assertEquals(listOf(false, true, false), tomorrowView.ranges.map { it.selected })
+        assertEquals(listOf(false, false, true), allDatesView.ranges.map { it.selected })
+    }
+
+    @Test
+    fun choosing_tomorrow_only_changes_the_selected_day_and_highlights_adding_a_schedule() {
+        // 明天只是切换所选规划日：不复制今天的日程，并且突出添加入口
+        val state = stateWith(ScheduleEntry("a", "2026-03-05", "今日条目", estimatedMinutes = 45))
+        val screenState = project(state = state, selectedDate = today.plusDays(1))
+
+        assertTrue(screenState.highlightAddSchedule)
+        assertEquals("为明天（2026-03-06）添加日程", screenState.addScheduleHeadingLabel)
+        assertTrue("今天的条目不会被复制到明天", screenState.selectedRows.isEmpty())
+        assertEquals("规划日 2026-03-06 暂无日程条目。", screenState.emptyLabel)
+
+        val todayView = project(state = state, selectedDate = today)
+        assertFalse(todayView.highlightAddSchedule)
+        assertEquals("新增日程", todayView.addScheduleHeadingLabel)
+        assertFalse(project(state = state).highlightAddSchedule)
+    }
+
+    @Test
+    fun a_running_timer_is_visible_on_the_agenda_page_so_it_can_be_stopped() {
+        // 计时卡下线之后，运行中的计时仍然必须在日程页看得见并能停止
+        val state = stateWith().copy(
+            targets = listOf(Target("t1", title = "写周报")),
+            activeTimer = ActiveTimer(
+                targetId = "t1",
+                startedAtEpochMillis = now.minusSeconds(90).toEpochMilli(),
+                lastPlanningDate = "2026-03-05",
+            ),
+        )
+
+        val screenState = project(state = state)
+
+        val timer = screenState.activeTimer
+        assertEquals("写周报", timer?.targetLabel)
+        assertFalse(timer?.paused ?: true)
+        assertEquals(1, timer?.elapsedMinutes)
+        assertNull("没有计时进行时不显示运行中计时", project(state = stateWith()).activeTimer)
+    }
+
+    @Test
+    fun the_selected_planning_day_lists_its_time_records_for_editing() {
+        // 手动时间账本的编辑与删除跟着合并后的日程页走，因此记录按所选规划日给出
+        val state = AttentionState(
+            timeEntries = listOf(
+                com.attention.domain.TimeEntry("e1", "2026-03-05", 30, "t1", com.attention.domain.TimeEntrySource.MANUAL, note = "整理"),
+                com.attention.domain.TimeEntry("e2", "2026-03-06", 20),
+            ),
+            targets = listOf(Target("t1", title = "写周报")),
+        )
+
+        val screenState = project(state = state, selectedDate = today)
+
+        assertEquals(listOf("e1"), screenState.timeRecords.map { it.entryId })
+        assertEquals(30, screenState.timeRecords.single().durationMinutes)
+        assertEquals("写周报", screenState.timeRecords.single().targetLabel)
+        assertEquals(com.attention.domain.TimeEntrySource.MANUAL, screenState.timeRecords.single().source)
+        assertEquals("整理", screenState.timeRecords.single().note)
+        assertEquals("本规划日已记录：30 分钟", screenState.recordedMinutesLabel)
+        assertTrue("所有日期视图不给出单日的记录列表", project(state = state).timeRecords.isEmpty())
+    }
+
+    @Test
     fun a_selected_date_does_not_drift_with_the_injected_clock() {
         // 给了固定选中日就不随时钟漂移，页面因此可确定地测试
         val selected = LocalDate.of(2026, 3, 20)

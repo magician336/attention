@@ -1,11 +1,14 @@
 package com.attention.app
 
-import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.attention.app.data.room.AttentionDatabase
@@ -27,12 +30,15 @@ class WorkspaceTimerSwitchIntegrationTest {
     val composeRule = createAndroidComposeRule<MainActivity>()
 
     @Test
-    fun active_timer_can_switch_to_unowned_activity_from_workbench() {
-        composeRule.onNode(hasText("今天") and hasClickAction()).performClick()
-        composeRule.onNodeWithText("当前目标：计时目标").assertExists()
-        composeRule.onNodeWithTag("timer-settlement-preview").assertExists()
-        composeRule.onNodeWithTag("switch-timer-unowned").assertExists()
-        composeRule.onNodeWithText("切换到未归属活动").assertExists()
+    fun a_running_timer_stays_visible_and_stoppable_on_the_merged_agenda_page() {
+        // 今天工作台的计时卡下线之后，运行中的计时仍然必须在日程页看得见并停得掉
+        composeRule.onNodeWithTag("nav-agenda", useUnmergedTree = true).performClick()
+        composeRule.onNodeWithText("正在计时：计时目标", substring = true).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-running-timer-stop", useUnmergedTree = true).performScrollTo().performClick()
+
+        composeRule.waitUntil(10_000) {
+            composeRule.onAllNodesWithTag("agenda-running-timer").fetchSemanticsNodes().isEmpty()
+        }
     }
 
     companion object {

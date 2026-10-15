@@ -5,10 +5,13 @@ import com.attention.domain.CapacitySummary
 import com.attention.domain.RecurrenceRule
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.ScheduleFrequency
+import com.attention.domain.TimeEntrySource
 import com.attention.domain.agendaEntries
 import com.attention.domain.capacitySummary
+import com.attention.domain.elapsedMillis
 import com.attention.domain.formatMinuteOfDay
 import com.attention.domain.planningDate
+import com.attention.domain.timerTargetLabel
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -58,6 +61,46 @@ data class AgendaRecurrenceRuleLine(
 )
 
 /**
+ * 日程页顶部的日期范围。它们是同一页上的三个范围，不是三个顶级工作区入口。
+ */
+enum class AgendaRangeScope { TODAY, TOMORROW, ALL_DATES }
+
+/**
+ * 一个日期范围选项。[date] 为 null 只在「所有日期」上出现：所有日期是特殊视图，
+ * 不是一个可以写进日程条目的日期值。
+ */
+data class AgendaRangeOption(
+    val scope: AgendaRangeScope,
+    val label: String,
+    val date: LocalDate?,
+    val selected: Boolean,
+)
+
+/**
+ * 运行中的计时。计时卡下线之后，运行中的计时仍然必须在日程页看得见并能停止，
+ * 否则用户会失去停掉一次计时的唯一入口。
+ */
+data class AgendaActiveTimer(
+    val targetLabel: String,
+    val paused: Boolean,
+    /** 到注入时刻为止的整分钟实际投入；不足 1 分钟为 0。 */
+    val elapsedMinutes: Int,
+)
+
+/**
+ * 所选规划日上的一条实际投入。手动时间账本的编辑与删除跟着合并后的日程页走，
+ * 因此记录按所选规划日给出，页面不自己筛选。
+ */
+data class AgendaTimeRecord(
+    val entryId: String,
+    val durationMinutes: Int,
+    val targetLabel: String,
+    val targetId: String?,
+    val source: TimeEntrySource,
+    val note: String,
+)
+
+/**
  * 可以关联到日程条目的一个计划（只含未归档计划）。
  */
 data class AgendaTargetOption(
@@ -88,6 +131,17 @@ data class AgendaScreenState(
     val targets: List<AgendaTargetOption>,
     /** 通知点名的日程条目要直接打开编辑对话框，它不受当前筛选影响。 */
     val pendingEditRow: AgendaScheduleRow?,
+    /** 顶部日期范围（今天、明天、所有日期）与当前选中的那一个。 */
+    val ranges: List<AgendaRangeOption> = emptyList(),
+    /** 选中明天时突出添加日程：只切换所选规划日，不复制今天的日程。 */
+    val highlightAddSchedule: Boolean = false,
+    /** 添加日程卡片的标题，选中明天时说明在为哪一天安排。 */
+    val addScheduleHeadingLabel: String = "新增日程",
+    /** 运行中的计时；null 表示没有计时在进行。 */
+    val activeTimer: AgendaActiveTimer? = null,
+    /** 所选规划日上的实际投入；所有日期视图为空。 */
+    val timeRecords: List<AgendaTimeRecord> = emptyList(),
+    val recordedMinutesLabel: String = "",
 )
 
 /**
@@ -106,6 +160,7 @@ fun agendaScreenState(
 ): AgendaScreenState {
     val planningDay = state.planningDate(now, zone)
     val entries = state.agendaEntries(selectedDate)
+    val tomorrow = planningDay.plusDays(1)
     val availableDates = (state.schedules.mapNotNull { runCatching { LocalDate.parse(it.planningDate) }.getOrNull() } + planningDay)
         .distinct()
         .sorted()
@@ -146,6 +201,38 @@ fun agendaScreenState(
         pendingEditRow = openScheduleId
             ?.let { id -> state.schedules.firstOrNull { it.id == id } }
             ?.let(::row),
+        ranges = listOf(
+            AgendaRangeOption(AgendaRangeScope.TODAY, "今天", planningDay, selectedDate == planningDay),
+            AgendaRangeOption(AgendaRangeScope.TOMORROW, "明天", tomorrow, selectedDate == tomorrow),
+            AgendaRangeOption(AgendaRangeScope.ALL_DATES, "所有日期", null, selectedDate == null),
+        ),
+        highlightAddSchedule = selectedDate == tomorrow,
+        addScheduleHeadingLabel = if (selectedDate == tomorrow) "为明天（$tomorrow）添加日程" else "新增日程",
+        activeTimer = state.activeTimer?.let { timer ->
+            AgendaActiveTimer(
+                targetLabel = state.timerTargetLabel(timer.targetId),
+                paused = timer.paused,
+                elapsedMinutes = (timer.elapsedMillis(now) / 60_000L).toInt(),
+            )
+        },
+        timeRecords = selectedDate?.let { date ->
+            val planningDateValue = date.toString()
+            state.timeEntries.filter { it.planningDate == planningDateValue }.map { entry ->
+                AgendaTimeRecord(
+                    entryId = entry.id,
+                    durationMinutes = entry.durationMinutes,
+                    targetLabel = state.targets.firstOrNull { it.id == entry.targetId }?.title ?: "未归属活动",
+                    targetId = entry.targetId,
+                    source = entry.source,
+                    note = entry.note,
+                )
+            }
+        } ?: emptyList(),
+        recordedMinutesLabel = selectedDate?.let { date ->
+            val planningDateValue = date.toString()
+            "本规划日已记录：" +
+                "${state.timeEntries.filter { it.planningDate == planningDateValue }.sumOf { it.durationMinutes }} 分钟"
+        } ?: "",
     )
 }
 
