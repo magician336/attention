@@ -251,14 +251,15 @@ class WorkspaceOnboardingFlowIntegrationTest {
             try {
                 runBlocking {
                     RoomBusinessDataRepository(database).replace(state)
-                    context.createSettingsStore().setSnapshot(
-                        SettingsSnapshot(
-                            launchDestination = LaunchDestination.AGENDA,
-                            lastOpenedDestination = LaunchDestination.AGENDA,
-                            onboardingCompleted = onboardingCompleted,
-                        ),
-                    )
                 }
+                // 共享 DataStore 会被别的测试类的 Activity 写回：播种后读回确认才算数。
+                WorkspaceHostSettingsBarrier.quiesceAndSeed(
+                    SettingsSnapshot(
+                        launchDestination = LaunchDestination.AGENDA,
+                        lastOpenedDestination = LaunchDestination.AGENDA,
+                        onboardingCompleted = onboardingCompleted,
+                    ),
+                )
             } finally {
                 database.close()
             }

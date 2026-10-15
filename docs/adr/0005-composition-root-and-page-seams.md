@@ -29,6 +29,9 @@ date: 2026-10-14
 
 五个页面各自拥有一个小的 interface：不可变的、页面专属的 `*ScreenState`（例如 `SettingsScreenState`、`StatisticsScreenState`），以及页面专属的 `*Actions`。
 
+> 页面的集合本身随信息架构重组变过（今天工作台与所有日期合并为「日程」，新增独立全屏引导），
+> 但本节的约束对任何页面都成立。当前五个页面的 seam 字段清单见「seam 字段清单复核（票 179）」。
+
 - 页面不得接收完整的 `AttentionViewModel`。
 - 页面不得直接调用仓储方法，包括 `AttentionStateRepository`、`RoomAttentionStateRepository` 与 `SettingsStore`。
 - `AttentionViewModel` 与 Room、DataStore 只出现在组合根侧的 actions adapter 实现中。
@@ -59,6 +62,11 @@ SAF 文件读写、权限检查与申请、前台计时服务启动、恢复提�
 - 所有日期：规划日导航与日程条目筛选不变；日程创建、编辑、完成确认与重复日程展开仍产生相同的时间记录。
 - 每一步都必须保持导航与上次打开页面的行为，以及共享的成功、错误、权限与本地数据反馈的文案与可达性（不靠颜色单独传达状态）。
 
+迁移在票 171–178 完成后已经走完上面每一步，今天工作台与所有日期合并为单一「日程」页，
+设置退出主导航挂在统计页底下，旧的说明式引导卡片换成独立全屏引导。当前五个页面是
+日程、目标树、统计、设置与引导；「最小知识面」一节的字段清单已在
+「seam 字段清单复核（票 179）」按当前代码更新。
+
 ## seam 深度检查点
 
 设置与统计是这次重构的检查点。判据是 seam 的深度：一个页面的调用者只学到它的 `*ScreenState` 与 `*Actions`，而渲染、表单协调与页面专属的展示规则被该页面 module 吸收。
@@ -71,11 +79,54 @@ SAF 文件读写、权限检查与申请、前台计时服务启动、恢复提�
 
 ### 最小知识面
 
-设置页 SettingsScreenState 字段：options、selectedDestination、resolvedDestination、planningDay。SettingsActions 动作：selectLaunchDestination。
+设置页 SettingsScreenState 字段：options、selectedDestination、resolvedDestination、planningDay、planningDayBoundaryMinutes、weekDayOptions、dailyCapacityMinutes、notificationsEnabled。SettingsActions 动作：selectLaunchDestination、savePlanningDaySettings、selectWeekStartDay、requestNotificationPermission、previewJsonBackup、importJson、exportTimeEntriesCsv、previewCsv、exportSchedulesCsv、exportCsvBundle、restoreLastImportBackup、openOnboarding、close。
 
-统计页 StatisticsScreenState 字段：planningDate、selectedDate、cadence、periodRangeLabel、cadenceOptions、totalsLabel、unownedMinutesLabel、migrationSummaryLabel、migrations、targetInvestmentLines、hasTargets、levelLines、snapshotsEmpty、snapshotLines、cumulativeMilestonesEmpty、cumulativeMilestoneLines、recentMilestoneLines、stageSections。StatisticsActions 动作：上一周期、下一周期、切换粒度、结算周期快照、取消迁移、结算里程碑、首屏入口、恢复导入前备份、预览与导入 JSON、导出时间记录 CSV、预览 CSV、导出日程 CSV、导出两个 CSV。
+统计页 StatisticsScreenState 字段：planningDate、selectedDate、cadence、periodRangeLabel、cadenceOptions、totalsLabel、unownedMinutesLabel、migrationSummaryLabel、migrations、targetInvestmentLines、hasTargets、levelLines、snapshotsEmpty、snapshotLines、cumulativeMilestonesEmpty、cumulativeMilestoneLines、recentMilestoneLines、stageSections。StatisticsActions 动作：selectPreviousPeriod、selectNextPeriod、selectCadence、settlePeriodSnapshots、cancelMigration、awardMilestones、openSettings。
 
 字段类型只有 LocalDate、GoalCadence、LaunchDestination、字符串与页面自己的小数据类型，不含其它页面的数据；页面 module 内没有 AttentionViewModel、Room、DataStore、SAF、权限调用与系统时钟。
+
+## seam 字段清单复核（票 179）
+
+票 145 的复核发生在信息架构重组之前，因此上面的「最小知识面」清单只列了设置页与统计页，
+并且逐字保留了当时五个页面的措辞。今天工作台与旧引导已下线（票 171–178），主工作区收敛为
+日程、目标树、统计三项，清单因此必须与当前的 `*ScreenState` / `*Actions` 实际字段一致。
+本节按当前代码逐个页面复核一遍，判据仍是上文「seam 深度检查点」与「后续页面不得重复」。
+
+### 当前五个页面的最小知识面
+
+日程页（合并后的今天工作台与所有日期）AgendaScreenState 字段：planningDate、selectedDate、headingLabel、filterLabel、availableDates、selectedCapacityLabel、selectedRows、dateSections、emptyLabel、recurrenceRules、targets、pendingEditRow、ranges、highlightAddSchedule、addScheduleHeadingLabel、activeTimer、timeRecords、recordedMinutesLabel。AgendaActions 动作：selectPlanningDate、selectAllDates、shiftPlanningDay、addSchedule、updateSchedule、confirmScheduleCompleted、toggleScheduleCompleted、startTimerFromEntry、stopRunningTimer、editTime、deleteTime、addRecurrenceAndMaterialize、stopRecurrence、requestReminderPermission。
+
+目标树页 TargetsScreenState 字段：planningDate、treeRoots、treeEmpty、archivedSelectedCountLabel、archivedRows、parentDetail、renameRow、moveSheet、deletionConfirmation。TargetsActions 动作：addTarget、renameTarget、addGoal、assignUnowned、saveFutureGoal、cancelFutureGoal、appendOneTimeGoal、saveMigration、cancelMigration、toggleTarget、reorderTarget、archiveTarget、restoreTargets、deleteTargetRelations、moveTargetFrom、updateFutureTargetMove、cancelFutureTargetMove。
+
+统计页 StatisticsScreenState 字段：planningDate、selectedDate、cadence、periodRangeLabel、cadenceOptions、totalsLabel、unownedMinutesLabel、migrationSummaryLabel、migrations、targetInvestmentLines、hasTargets、levelLines、snapshotsEmpty、snapshotLines、cumulativeMilestonesEmpty、cumulativeMilestoneLines、recentMilestoneLines、stageSections。StatisticsActions 动作：selectPreviousPeriod、selectNextPeriod、selectCadence、settlePeriodSnapshots、cancelMigration、awardMilestones、openSettings。
+
+设置页 SettingsScreenState 字段：options、selectedDestination、resolvedDestination、planningDay、planningDayBoundaryMinutes、weekDayOptions、dailyCapacityMinutes、notificationsEnabled。SettingsActions 动作：selectLaunchDestination、savePlanningDaySettings、selectWeekStartDay、requestNotificationPermission、previewJsonBackup、importJson、exportTimeEntriesCsv、previewCsv、exportSchedulesCsv、exportCsvBundle、restoreLastImportBackup、openOnboarding、close。
+
+引导页 OnboardingScreenState 字段：pages（派生 pageCount）。OnboardingActions 动作：completeOnboarding。引导是全屏独立层，完成后回到当前规划日的日程；它不持有任何业务数据入口，因此 seam 只有一个完成动作。
+
+### 复核结论
+
+seam 没有退化为透传层：五个页面的状态都不携带 AttentionState，动作接口都不暴露
+AttentionViewModel、Room、DataStore、SAF 与权限 API。设置页的 `notificationsEnabled` 是组合根
+查好的平台事实注入值，页面只按它渲染并发出 `requestNotificationPermission` 意图；
+统计页的 `openSettings` 与设置页的 `close` 这一对，是「设置不再是顶级工作区、
+挂在统计页底下」这条信息架构决定在 seam 上的唯一体现——顶级页面之间没有设置入口，
+因此没有哪个页面的 seam 需要知道设置页的存在。
+
+旧入口 `LaunchDestination.TODAY` 与 `ALL_DATES` 的枚举值按持久化兼容保留（读历史 DataStore
+与历史备份 JSON 必须仍然读得出来），但主工作区不再把它们当作落点：组合根按领域的
+`asAgendaEntry()` 兼容映射把它们落成日程，`SettingsSnapshot` 与 `AttentionBackup` 的默认值
+也已统一成 `AGENDA`，因此新写出的设置与备份不再把旧名称写回去。
+
+### 平台副作用的验证面（验收标准 5）
+
+计时器、提醒权限、通知权限与 SAF 备份/恢复全部由组合根 adapter 执行，页面只发意图。
+因此这些能力的行为由**页面 + 记录型 fake actions** 验证，而不是靠真实设备副作用：
+`AgendaScreenTest`、`SettingsScreenTest` 与票 179 的 `WorkspacePlatformSideEffectSeamTest`
+在没有任何 Activity、权限对话框、文件选择器与前台服务的条件下断言可见标签与发出的意图。
+宿主级的可见表现另由真实 `MainActivity` 的验收用例覆盖，两层合起来才等于
+「平台副作用没变，但它们只在 seam 后面发生」。
+
 
 ### 复核中发现并修订的偏差
 

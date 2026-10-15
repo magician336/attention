@@ -39,8 +39,10 @@ data class AttentionBackup(
     val experience: Long = 0,
     val activeTimer: ActiveTimer? = null,
     val onboardingCompleted: Boolean = false,
-    val launchDestination: LaunchDestination = LaunchDestination.TODAY,
-    val lastOpenedDestination: LaunchDestination = LaunchDestination.TODAY,
+    // 缺这两个字段的历史备份按「日程」解释，与 DataStore 侧的有效偏好回退保持一致：
+    // 旧值 TODAY / ALL_DATES 仍按兼容映射读成日程，但不再作为默认值被写回新备份。
+    val launchDestination: LaunchDestination = LaunchDestination.AGENDA,
+    val lastOpenedDestination: LaunchDestination = LaunchDestination.AGENDA,
     val notificationsEnabled: Boolean = true,
 ) {
     fun toDomain(): AttentionState = AttentionState(

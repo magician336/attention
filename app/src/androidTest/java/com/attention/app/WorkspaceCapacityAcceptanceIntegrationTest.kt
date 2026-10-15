@@ -24,7 +24,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.attention.app.data.room.AttentionDatabase
 import com.attention.app.data.room.RoomBusinessDataRepository
 import com.attention.app.data.settings.SettingsSnapshot
-import com.attention.app.data.settings.createSettingsStore
 import com.attention.domain.AttentionState
 import com.attention.domain.RecurrenceRule
 import com.attention.domain.ScheduleEntry
@@ -217,13 +216,14 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
                             ),
                         ),
                     )
-                    context.createSettingsStore().setSnapshot(
-                        SettingsSnapshot(
-                            dailyCapacityMinutes = 60,
-                            onboardingCompleted = true,
-                        ),
-                    )
                 }
+                // 共享 DataStore 会被别的测试类的 Activity 写回：播种后读回确认才算数。
+                WorkspaceHostSettingsBarrier.quiesceAndSeed(
+                    SettingsSnapshot(
+                        dailyCapacityMinutes = 60,
+                        onboardingCompleted = true,
+                    ),
+                )
             } finally {
                 database.close()
             }

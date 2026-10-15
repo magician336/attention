@@ -187,8 +187,10 @@ data class AttentionState(
     val experience: Long = 0,
     val activeTimer: ActiveTimer? = null,
     val onboardingCompleted: Boolean = false,
-    val launchDestination: LaunchDestination = LaunchDestination.TODAY,
-    val lastOpenedDestination: LaunchDestination = LaunchDestination.TODAY,
+    // 空状态的入口默认是日程：旧值 TODAY 语义等价于日程，但继续以它为默认
+    // 会让新写出的备份持续带旧入口名。旧枚举值本身仍然保留（见 [LaunchDestination]）。
+    val launchDestination: LaunchDestination = LaunchDestination.AGENDA,
+    val lastOpenedDestination: LaunchDestination = LaunchDestination.AGENDA,
     val notificationsEnabled: Boolean = true,
 )
 

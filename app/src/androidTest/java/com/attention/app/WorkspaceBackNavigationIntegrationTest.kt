@@ -199,10 +199,11 @@ class WorkspaceBackNavigationIntegrationTest {
                             ),
                         ),
                     )
-                    context.createSettingsStore().setSnapshot(
-                        SettingsSnapshot(onboardingCompleted = true),
-                    )
                 }
+                // 共享 DataStore 会被别的测试类的 Activity 写回：播种后读回确认才算数。
+                WorkspaceHostSettingsBarrier.quiesceAndSeed(
+                    SettingsSnapshot(onboardingCompleted = true),
+                )
             } finally {
                 database.close()
             }
