@@ -18,7 +18,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 所有日期页投影的纯 Kotlin 测试：页面只读这份状态，不读完整领域状态，也不读系统时钟。
+ * 日程页投影的纯 Kotlin 测试：页面只读这份状态，不读完整领域状态，也不读系统时钟。
  * 规划日导航、日程条目筛选、所有日期特殊视图、每日容量与重复日程展开都由投影给出，
  * 时间只能来自组合根注入的 now 与 zone。
  */
@@ -35,12 +35,14 @@ class AgendaScreenStateTest {
         instant: Instant = now,
         zone: ZoneId = this.zone,
         selectedDate: LocalDate? = null,
+        selectedScope: AgendaRangeScope? = null,
         openScheduleId: String? = null,
     ) = agendaScreenState(
         state = state,
         now = instant,
         zone = zone,
         selectedDate = selectedDate,
+        selectedScope = selectedScope,
         openScheduleId = openScheduleId,
     )
 
@@ -338,9 +340,20 @@ class AgendaScreenStateTest {
     @Test
     fun the_date_ranges_offer_today_tomorrow_and_all_dates_with_one_selection() {
         // 顶部范围切换是同一页上的三个范围，不是三个顶级入口：任何时刻只有一个范围被选中
-        val todayView = project(state = stateWith(), selectedDate = today)
-        val tomorrowView = project(state = stateWith(), selectedDate = today.plusDays(1))
-        val allDatesView = project(state = stateWith())
+        val todayView = project(
+            state = stateWith(),
+            selectedDate = today,
+            selectedScope = AgendaRangeScope.TODAY,
+        )
+        val tomorrowView = project(
+            state = stateWith(),
+            selectedDate = today.plusDays(1),
+            selectedScope = AgendaRangeScope.TOMORROW,
+        )
+        val allDatesView = project(
+            state = stateWith(),
+            selectedScope = AgendaRangeScope.ALL_DATES,
+        )
 
         assertEquals(
             listOf("今天", "明天", "所有日期"),
@@ -355,17 +368,39 @@ class AgendaScreenStateTest {
     }
 
     @Test
+    fun an_explicitly_chosen_range_stays_selected_after_the_planning_day_boundary() {
+        // 用户显式点了「今天」之后应用跨过规划日界线：范围选择由页面选择状态给出，
+        // 不由当前时刻重算的规划日反推，因此「今天」仍然可见地被选中。
+        val laterInstant = LocalDate.of(2026, 3, 6).atTime(10, 0).atZone(zone).toInstant()
+        val afterBoundary = project(
+            state = stateWith(),
+            instant = laterInstant,
+            selectedDate = LocalDate.of(2026, 3, 6),
+            selectedScope = AgendaRangeScope.TODAY,
+        )
+
+        assertEquals(LocalDate.of(2026, 3, 6), afterBoundary.planningDate)
+        assertEquals(listOf(true, false, false), afterBoundary.ranges.map { it.selected })
+        // 页面停在用户显式选中的那一天上，标题与范围高亮说的是同一天
+        assertEquals(LocalDate.of(2026, 3, 6), afterBoundary.selectedDate)
+    }
+
+    @Test
     fun choosing_tomorrow_only_changes_the_selected_day_and_highlights_adding_a_schedule() {
         // 明天只是切换所选规划日：不复制今天的日程，并且突出添加入口
         val state = stateWith(ScheduleEntry("a", "2026-03-05", "今日条目", estimatedMinutes = 45))
-        val screenState = project(state = state, selectedDate = today.plusDays(1))
+        val screenState = project(
+            state = state,
+            selectedDate = today.plusDays(1),
+            selectedScope = AgendaRangeScope.TOMORROW,
+        )
 
         assertTrue(screenState.highlightAddSchedule)
         assertEquals("为明天（2026-03-06）添加日程", screenState.addScheduleHeadingLabel)
         assertTrue("今天的条目不会被复制到明天", screenState.selectedRows.isEmpty())
         assertEquals("规划日 2026-03-06 暂无日程条目。", screenState.emptyLabel)
 
-        val todayView = project(state = state, selectedDate = today)
+        val todayView = project(state = state, selectedDate = today, selectedScope = AgendaRangeScope.TODAY)
         assertFalse(todayView.highlightAddSchedule)
         assertEquals("新增日程", todayView.addScheduleHeadingLabel)
         assertFalse(project(state = state).highlightAddSchedule)

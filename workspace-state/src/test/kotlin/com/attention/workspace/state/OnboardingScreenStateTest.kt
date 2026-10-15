@@ -1,6 +1,7 @@
 package com.attention.workspace.state
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -33,6 +34,22 @@ class OnboardingScreenStateTest {
                 )
             }
         }
+    }
+
+    @Test
+    fun the_schedule_page_does_not_teach_that_completing_a_schedule_is_actual_investment() {
+        // CONTEXT.md：日程条目的预计时长与完成标记不构成实际投入；实际投入只来自计时或手动补记。
+        // 引导是首次使用时的第一手说明，讲错这个概念会让用户以为勾完日程就算投入了时间。
+        val schedule = onboardingScreenState().pages.single { it.title == "日程" }
+
+        assertTrue(
+            "日程页必须说明实际投入的来源",
+            schedule.body.contains("实际投入") && schedule.body.contains("计时"),
+        )
+        assertFalse(
+            "日程页不能声称完成的日程与实际投入一起进入统计：${schedule.body}",
+            schedule.body.contains("完成的日程与实际投入一起进入统计"),
+        )
     }
 
     @Test

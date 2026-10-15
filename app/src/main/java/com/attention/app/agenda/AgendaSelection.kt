@@ -5,6 +5,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.attention.workspace.state.AgendaRangeScope
 import java.time.LocalDate
 
 /**
@@ -27,15 +28,29 @@ import java.time.LocalDate
  * 重新启动应用时组合根新建一个实例，用户显式选过的范围因此不会跨重启残留，
  * 日程页重新以当前规划日为默认。这样「跟着当前规划日」也不会被首次组合时
  * 尚未加载完成的设置冻住——持久化设置到达后，默认跟着正确的规划日走。
+ *
+ * ## 范围高亮跨规划日界线
+ *
+ * [chosen] 存的是用户在点击那一刻的规划日，而当前规划日每次重组都会重读。两者一旦分家
+ * （应用跨过规划日界线），只拿它们比较就会得出「三个范围都没选中」——用户明明点了「今天」，
+ * 页面却停在一个没有高亮的日子上。因此这里额外记住用户当时点的是哪个范围
+ * （[chosenScope]）：范围是用户的选择，规划日只是时钟，两者漂移时以选择为准。
  */
 internal class AgendaSelection(
     requestedDate: LocalDate? = null,
 ) {
     /**
-     * 用户显式选中的范围。null 表示「所有日期」这个特殊视图；
+     * 用户显式选中的规划日。null 表示「所有日期」这个特殊视图；
      * [explicitlyChosen] 为 false 时这个字段整体不参与解释——那时页面跟随当前规划日。
      */
     private var chosen: LocalDate? by mutableStateOf(requestedDate)
+        private set
+
+    /**
+     * 用户当时点中的日期范围。null 表示那是一个范围之外的**具体日期**（下拉框选的任意一天），
+     * 它没有对应的顶部 chip，因此保持按当前规划日重新判定，与既有行为一致。
+     */
+    private var chosenScope: AgendaRangeScope? by mutableStateOf(null)
         private set
 
     /** 用户是否已经在这个会话里选过范围；false 时 [selectedDate] 跟随当前规划日。 */
@@ -51,15 +66,30 @@ internal class AgendaSelection(
     fun selectedDate(planningDay: LocalDate): LocalDate? =
         if (explicitlyChosen) chosen else planningDay
 
-    /** 选中一个规划日；null 表示所有日期特殊视图。 */
-    fun selectDate(date: LocalDate?) {
+    /**
+     * 顶部三个范围里当前被选中的那一个，null 表示没有一个被选中。
+     *
+     * 还没显式选过时跟随当前规划日，也就是落在「今天」上；显式选过「今天」或「明天」时，
+     * 这个范围一直保持被选中，跨过规划日界线也不回退。
+     */
+    fun selectedRangeScope(planningDay: LocalDate): AgendaRangeScope? = when {
+        !explicitlyChosen -> AgendaRangeScope.TODAY
+        chosenScope != null -> chosenScope
+        else -> rangeScopeOf(chosen, planningDay)
+    }
+
+    /** 选中一个规划日；null 表示所有日期特殊视图。[planningDay] 是点击那一刻的当前规划日。 */
+    fun selectDate(date: LocalDate?, planningDay: LocalDate) {
         chosen = date
+        chosenScope = rangeScopeOf(date, planningDay)
         explicitlyChosen = true
     }
 
-    /** 选中「所有日期」这个特殊视图。 */
+    /** 选中「所有日期」这个特殊视图。它与时钟无关，因此不需要当前规划日。 */
     fun selectAllDates() {
-        selectDate(null)
+        chosen = null
+        chosenScope = AgendaRangeScope.ALL_DATES
+        explicitlyChosen = true
     }
 
     /**
@@ -70,13 +100,21 @@ internal class AgendaSelection(
      */
     fun followPlanningDay() {
         chosen = null
+        chosenScope = null
         explicitlyChosen = false
     }
 
     /** 以投影已解析出的当前选中日为基准前后位移规划日。 */
-    fun shiftDays(amount: Long, currentDate: LocalDate) {
-        selectDate(currentDate.plusDays(amount))
+    fun shiftDays(amount: Long, currentDate: LocalDate, planningDay: LocalDate) {
+        selectDate(currentDate.plusDays(amount), planningDay)
     }
+}
+
+/** 点击那一刻的日期落在哪个范围；今天与明天之外的具体日期没有对应的范围 chip。 */
+private fun rangeScopeOf(date: LocalDate?, planningDay: LocalDate): AgendaRangeScope? = when (date) {
+    null -> AgendaRangeScope.ALL_DATES
+    planningDay -> AgendaRangeScope.TODAY
+    else -> if (date == planningDay.plusDays(1)) AgendaRangeScope.TOMORROW else null
 }
 
 /**

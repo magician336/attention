@@ -11,7 +11,7 @@ import com.attention.workspace.state.AgendaScheduleDraft
 import java.time.LocalDate
 
 /**
- * 所有日期页的新建日程表单状态。它属于页面 module 而不是组合根（ADR-0005 第 1 节）：
+ * 日程页的新建日程表单状态。它属于页面 module 而不是组合根（ADR-0005 第 1 节）：
  * 组合根既不声明这些字段，也不清空它们。
  */
 internal class AgendaScheduleForm {
@@ -90,7 +90,7 @@ internal class AgendaScheduleForm {
 }
 
 /**
- * 所有日期页的重复日程表单状态，同样属于页面 module。
+ * 日程页的重复日程表单状态，同样属于页面 module。
  */
 internal class AgendaRecurrenceForm {
     var title by mutableStateOf("")

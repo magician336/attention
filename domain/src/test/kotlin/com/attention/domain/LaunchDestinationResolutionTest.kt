@@ -2,6 +2,7 @@ package com.attention.domain
 
 import java.time.LocalDate
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LaunchDestinationResolutionTest {
@@ -152,6 +153,24 @@ class LaunchDestinationResolutionTest {
         // 没有任何可定位的目标时没有定位日，由调用方回退到当前规划日
         assertEquals(null, externalSchedulePlanningDate(state, null, null))
         assertEquals(null, externalSchedulePlanningDate(state, "不是日期", "不存在"))
+    }
+
+    @Test
+    fun every_value_resolves_to_a_top_level_workspace_and_falls_back_to_the_schedule() {
+        // 顶级工作区只有日程、目标树、统计三个。任何不是这三者的值（旧入口、LAST_OPENED）
+        // 都必须解析到日程，否则组合根就会落到一个渲染不出任何页面的分支上。
+        LaunchDestination.entries.forEach { destination ->
+            assertTrue(
+                "解析结果必须是顶级工作区：$destination",
+                destination.toTopLevelWorkspace() in topLevelWorkspaces,
+            )
+        }
+        assertEquals(LaunchDestination.AGENDA, LaunchDestination.LAST_OPENED.toTopLevelWorkspace())
+        assertEquals(LaunchDestination.AGENDA, LaunchDestination.TODAY.toTopLevelWorkspace())
+        assertEquals(LaunchDestination.AGENDA, LaunchDestination.ALL_DATES.toTopLevelWorkspace())
+        assertEquals(LaunchDestination.AGENDA, LaunchDestination.AGENDA.toTopLevelWorkspace())
+        assertEquals(LaunchDestination.TARGETS, LaunchDestination.TARGETS.toTopLevelWorkspace())
+        assertEquals(LaunchDestination.STATISTICS, LaunchDestination.STATISTICS.toTopLevelWorkspace())
     }
 
     @Test

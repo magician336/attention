@@ -4,7 +4,6 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.attention.domain.LaunchDestination
-import com.attention.domain.asAgendaEntry
 import com.attention.domain.resolveLaunchDestination
 import java.nio.file.Files
 import kotlinx.coroutines.CoroutineScope
@@ -154,9 +153,9 @@ class SettingsStoreTest {
             }
             val store = DataStoreSettingsStore(dataStore)
 
-            val launch = store.settings.first().launchDestination
-            assertEquals(LaunchDestination.valueOf(persisted), launch)
-            assertEquals(LaunchDestination.AGENDA, launch.asAgendaEntry())
+            // 旧名称仍然读得出来（不抛异常），并且按领域兼容映射读成日程入口：
+            // 启动入口与「上次打开」现在走同一个领域 helper，因此新写出的设置不再把旧名称写回去
+            assertEquals(LaunchDestination.AGENDA, store.settings.first().launchDestination)
             file.delete()
         }
         Unit

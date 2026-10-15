@@ -50,7 +50,7 @@ data class SettingsScreenState(
     val selectedDestination: LaunchDestination,
     val resolvedDestination: LaunchDestination,
     val planningDay: LocalDate,
-    /** 规划日界线，单位为 0–1439 的分钟；语义与校验仍然由 `:domain` 的 StoredSettings 负责。 */
+    /** 规划日界线，单位为 0–1439 的分钟；语义与合法性由 `:domain` 的 PlannerSettings 判定。 */
     val planningDayBoundaryMinutes: Int,
     val weekDayOptions: List<SettingsWeekDayOption>,
     /** 每日容量（分钟）。未设置时为 null，页面据此把输入框留空。 */

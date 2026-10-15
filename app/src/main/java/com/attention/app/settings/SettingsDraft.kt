@@ -5,6 +5,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.attention.domain.PlannerSettings
 import com.attention.workspace.state.SettingsScreenState
 
 /** 一次规划设置的保存结果。界线不合法时沿用当前值，容量不合法时不给出结果。 */
@@ -61,27 +62,23 @@ internal class SettingsDraft {
     /**
      * 校验两个输入框并给出一次保存意图的参数。
      *
-     * 界线不合法时沿用当前界线（与迁移前的兜底一致），容量留空表示清除，
-     * 容量不是正整数时给出报错并且不保存。
+     * 合法与否由 `:domain` 的 [PlannerSettings] 判定，页面只复用那两个判定并把被拒绝的
+     * 原因显示出来，不自己复述边界：界线不合法时沿用当前界线（与迁移前的兜底一致），
+     * 容量留空表示清除，容量不是正整数时给出报错并且不保存。
      */
     fun resolveSave(state: SettingsScreenState): PlanningSettingsSave {
-        val capacity = when {
+        val capacityMinutes = when {
             capacity.isBlank() -> null
-            (capacity.toIntOrNull() ?: 0) <= 0 -> {
+            // 留空清除；其余按 `:domain` 的判定决定能不能保存。
+            else -> capacity.toIntOrNull().takeIf(PlannerSettings::isValidDailyCapacity) ?: run {
                 error = "每日容量必须是正整数，或留空清除"
                 return PlanningSettingsSave.Invalid
             }
-            else -> capacity.toInt()
         }
         val boundaryMinutes = boundary.toIntOrNull()
-            ?.takeIf { it in 0 until MINUTES_PER_DAY }
+            ?.takeIf(PlannerSettings::isValidPlanningDayBoundary)
             ?: state.planningDayBoundaryMinutes
-        return PlanningSettingsSave.Valid(boundaryMinutes, capacity)
-    }
-
-    private companion object {
-        /** 一天有多少分钟：与 `:domain` 的 PlannerSettings 同一个边界，页面不另立规则。 */
-        const val MINUTES_PER_DAY = 24 * 60
+        return PlanningSettingsSave.Valid(boundaryMinutes, capacityMinutes)
     }
 }
 

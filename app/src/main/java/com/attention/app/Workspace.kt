@@ -116,6 +116,7 @@ import com.attention.domain.planningDate
 import com.attention.domain.reminderEpochMillis
 import com.attention.domain.resolveInitialLaunchDestination
 import com.attention.domain.resolveLaunchDestination
+import com.attention.domain.toTopLevelWorkspace
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -130,7 +131,6 @@ import kotlinx.coroutines.launch
 private class SettingsActionsAdapter(
     private val viewModel: AttentionViewModel,
     private val currentWeekStartDay: () -> Int,
-    private val context: Context,
     private val onRequestReminderPermission: () -> Unit,
     private val onPreviewJsonBackup: () -> Unit,
     private val onImportJson: () -> Unit,
@@ -197,7 +197,7 @@ private class OnboardingActionsAdapter(
 }
 
 /**
- * 所有日期页的 actions adapter，在组合根一侧组装：页面发出 intent，这里落到 ViewModel、
+ * 日程页的 actions adapter，在组合根一侧组装：页面发出 intent，这里落到 ViewModel、
  * 提醒的绝对时刻换算与通知权限申请。ViewModel、`Activity`/`Context` 与平台能力
  * 因此只出现在组合根侧（ADR-0005 第 4 节「Android adapter 归属组合根」）。
  */
@@ -205,6 +205,7 @@ private class AgendaActionsAdapter(
     private val viewModel: AttentionViewModel,
     private val selection: AgendaSelection,
     private val currentDate: () -> LocalDate,
+    private val currentPlanningDay: () -> LocalDate,
     private val zone: ZoneId,
     private val onStartTimerFromEntry: (ScheduleEntry) -> Unit,
     private val onRequestReminderPermission: () -> Unit,
@@ -212,15 +213,16 @@ private class AgendaActionsAdapter(
     private val onTimeRecordDeleted: (TimeEntry) -> Unit,
 ) : AgendaActions {
     override fun selectPlanningDate(date: LocalDate?) {
-        selection.selectDate(date)
+        // 点击那一刻的规划日要一起交进去：范围高亮按它判定，之后跨过规划日界线也不会丢。
+        selection.selectDate(date, currentPlanningDay())
     }
 
     override fun selectAllDates() {
-        selection.selectDate(null)
+        selection.selectAllDates()
     }
 
     override fun shiftPlanningDay(days: Long) {
-        selection.shiftDays(days, currentDate())
+        selection.shiftDays(days, currentDate(), currentPlanningDay())
     }
 
     override fun addSchedule(draft: AgendaScheduleDraft) {
@@ -709,6 +711,8 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         now = injectedNow,
         zone = injectedZone,
         selectedDate = agendaSelection.selectedDate(agendaPlanningDay),
+        // 范围高亮来自选择状态自己记住的显式范围，跨规划日界线也不会丢。
+        selectedScope = agendaSelection.selectedRangeScope(agendaPlanningDay),
         openScheduleId = openScheduleId,
     )
 
@@ -738,7 +742,6 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         SettingsActionsAdapter(
             viewModel = viewModel,
             currentWeekStartDay = { currentWeekStartDay },
-            context = context,
             onRequestReminderPermission = { requestReminderPermission(context) },
             onPreviewJsonBackup = {
                 jsonExportMessage = null
@@ -802,15 +805,17 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         )
     }
 
-    // 所有日期页的 adapter 在组合根组装：计时服务启动与提醒权限申请都属于这里，页面只发 intent。
+    // 日程页的 adapter 在组合根组装：计时服务启动与提醒权限申请都属于这里，页面只发 intent。
     val currentAgendaDate by androidx.compose.runtime.rememberUpdatedState(
         agendaState.selectedDate ?: agendaState.planningDate,
     )
+    val currentAgendaPlanningDay by androidx.compose.runtime.rememberUpdatedState(agendaState.planningDate)
     val agendaActions: AgendaActions = remember(viewModel) {
         AgendaActionsAdapter(
             viewModel = viewModel,
             selection = agendaSelection,
             currentDate = { currentAgendaDate },
+            currentPlanningDay = { currentAgendaPlanningDay },
             zone = injectedZone,
             onStartTimerFromEntry = ::startTimerFromSchedule,
             onRequestReminderPermission = { requestReminderPermission(context) },
@@ -909,14 +914,9 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                     ),
                     actions = settingsActions,
                 )
-            } else when (destination.asAgendaEntry()) {
+            } else when (destination.toTopLevelWorkspace()) {
                 // 「日程」是合并后的页面：它承载当前规划日、今天、明天、所有日期与任意规划日。
                 // 旧入口值 TODAY / ALL_DATES 通过领域兼容映射落到同一页（枚举值本身保留）。
-                LaunchDestination.AGENDA -> AgendaScreen(
-                    state = agendaState,
-                    actions = agendaActions,
-                    openScheduleId = openScheduleId,
-                )
                 LaunchDestination.TARGETS -> TargetsScreen(
                     state = targetsState,
                     actions = targetsActions,
@@ -926,7 +926,15 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                     state = statisticsState,
                     actions = statisticsActions,
                 )
-                LaunchDestination.TODAY, LaunchDestination.ALL_DATES, LaunchDestination.LAST_OPENED -> Unit
+                // 「日程」与兜底落在同一页：「日程」是合并后的页面，它承载当前规划日、今天、
+                // 明天、所有日期与任意规划日；旧入口值 TODAY / ALL_DATES 由领域的兼容映射折进来
+                // （枚举值本身保留），LAST_OPENED 这类不是顶级工作区的值由 [toTopLevelWorkspace]
+                // 回退到日程。空白工作区对用户没有任何解释，是比落错页更差的失败方式。
+                else -> AgendaScreen(
+                    state = agendaState,
+                    actions = agendaActions,
+                    openScheduleId = openScheduleId,
+                )
             }
             jsonPreview?.let { Text("JSON 预览：\n$it", modifier = Modifier.padding(16.dp)) }
             jsonExportMessage?.let { Text(it, modifier = Modifier.padding(horizontal = 16.dp)) }

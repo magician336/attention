@@ -9,8 +9,8 @@ import java.time.LocalDate
  * 页面投影与组合根不各自实现一份解析。
  */
 
-/** 「上次打开」能够恢复的顶级工作区：日程、目标树、统计。 */
-private val restorableWorkspaces = setOf(
+/** 「上次打开」能够恢复、也是组合根唯一能渲染的顶级工作区：日程、目标树、统计。 */
+val topLevelWorkspaces = setOf(
     LaunchDestination.AGENDA,
     LaunchDestination.TARGETS,
     LaunchDestination.STATISTICS,
@@ -44,9 +44,19 @@ fun resolveLaunchDestination(
     lastOpened: LaunchDestination,
 ): LaunchDestination = when (requested) {
     LaunchDestination.LAST_OPENED ->
-        if (lastOpened in restorableWorkspaces) lastOpened else LaunchDestination.AGENDA
+        if (lastOpened in topLevelWorkspaces) lastOpened else LaunchDestination.AGENDA
     else -> requested
 }
+
+/**
+ * 组合根要渲染的顶级工作区落点，结果一定落在 [topLevelWorkspaces] 里。
+ *
+ * 旧入口值先按 [asAgendaEntry] 折成日程，其余不是顶级工作区的值（例如只能被解析、
+ * 不能被渲染的 `LAST_OPENED`）回退到日程。这样组合根不需要「什么都不渲染」的兜底分支：
+ * 一个没有解释的空白工作区对用户毫无意义，比落错页更差。
+ */
+fun LaunchDestination.toTopLevelWorkspace(): LaunchDestination =
+    asAgendaEntry().takeIf { it in topLevelWorkspaces } ?: LaunchDestination.AGENDA
 
 /**
  * 启动位置的统一优先级：外部日程请求 > 保存的启动入口 > 上次打开 > 当前规划日的日程。

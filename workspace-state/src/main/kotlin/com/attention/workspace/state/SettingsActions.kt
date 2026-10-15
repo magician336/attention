@@ -14,7 +14,9 @@ interface SettingsActions {
 
     /**
      * 保存规划日界线（0–1439 分钟）与每日容量（分钟，null 表示不设上限）。
-     * 校验规则仍然由 `:domain` 的 StoredSettings 负责，页面只把用户输入交上来。
+     *
+     * 是否合法由 `:domain` 的 `PlannerSettings` 判定，页面在发出这条意图之前先问一次同一个判定，
+     * 只为了把被拒绝的原因显示出来；真正落库的那一次仍由领域与 `SettingsStore` 兜底校验。
      */
     fun savePlanningDaySettings(boundaryMinutes: Int, dailyCapacityMinutes: Int?)
 
