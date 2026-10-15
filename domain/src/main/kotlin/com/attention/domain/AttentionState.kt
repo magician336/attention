@@ -7,7 +7,13 @@ import java.time.ZoneId
 import java.util.UUID
 import kotlinx.serialization.Serializable
 
-@Serializable
+/*
+ * 这个文件里的数据类一律不再标 `@Serializable`：备份格式由备份协议自己的模型承载（见 ADR 0005
+ * 「备份协议的边界」），领域加一个字段不应该自动改变用户手上的备份文件。以前标注在这里的作用只剩
+ * 「给字段对照测试读描述符」，那是测试自己的需求，不该反过来成为领域的义务——今天对照测试已经改用
+ * 反射读构造参数，标注也就没有留下的理由。
+ */
+
 data class StoredSettings(
     val planningDayBoundaryMinutes: Int = PlannerSettings.DEFAULT_BOUNDARY_MINUTES,
     val weekStartDay: Int = DayOfWeek.MONDAY.value,
@@ -40,7 +46,6 @@ enum class ScheduleFrequency { DAILY, WEEKLY, MONTHLY }
  */
 enum class LaunchDestination { TODAY, TARGETS, ALL_DATES, STATISTICS, LAST_OPENED, AGENDA }
 
-@Serializable
 data class Target(
     val id: String = newId(),
     val parentId: String? = null,
@@ -53,7 +58,6 @@ data class Target(
     val expanded: Boolean = true,
 )
 
-@Serializable
 data class GoalStage(
     val id: String = newId(),
     val targetId: String,
@@ -64,7 +68,6 @@ data class GoalStage(
     val completed: Boolean = false,
 )
 
-@Serializable
 data class TimeEntry(
     val id: String = newId(),
     val planningDate: String,
@@ -76,7 +79,6 @@ data class TimeEntry(
     val scheduleEntryId: String? = null,
 )
 
-@Serializable
 data class ScheduleEntry(
     val id: String = newId(),
     val planningDate: String,
@@ -91,7 +93,6 @@ data class ScheduleEntry(
     val recurrenceRuleId: String? = null,
 )
 
-@Serializable
 data class RecurrenceRule(
     val id: String = newId(),
     val title: String,
@@ -107,7 +108,6 @@ data class RecurrenceRule(
     val reminderMinuteOfDay: Int? = null,
 )
 
-@Serializable
 data class Migration(
     val id: String = newId(),
     val targetId: String,
@@ -118,7 +118,6 @@ data class Migration(
     val cancelled: Boolean = false,
 )
 
-@Serializable
 data class FutureGoalRule(
     val id: String = newId(),
     val targetId: String,
@@ -129,7 +128,6 @@ data class FutureGoalRule(
     val dueDate: String? = null,
 )
 
-@Serializable
 data class PeriodSnapshot(
     val id: String = newId(),
     val targetId: String,
@@ -144,7 +142,6 @@ data class PeriodSnapshot(
     val stageId: String = "",
 )
 
-@Serializable
 data class TargetMove(
     val id: String = newId(),
     val targetId: String,
@@ -152,7 +149,6 @@ data class TargetMove(
     val effectiveFrom: String,
 )
 
-@Serializable
 data class ActiveTimer(
     val targetId: String?,
     val startedAtEpochMillis: Long,
@@ -163,10 +159,15 @@ data class ActiveTimer(
     val scheduleEntryId: String? = null,
 )
 
+/**
+ * 计时器里已经完成的一段计时。
+ *
+ * 这个类型仍然可序列化，而且不是为备份：Room 的 `ActiveTimerEntity` 把计时片段整列存成 JSON，
+ * 经 `BusinessMappers` 的 `roomJson` 编解码（生产路径）。摘掉标注会让运行时计时现场读不回来。
+ */
 @Serializable
 data class TimerSegment(val startedAtEpochMillis: Long, val endedAtEpochMillis: Long)
 
-@Serializable
 data class Milestone(
     val id: String = newId(),
     val kind: String,
@@ -175,7 +176,6 @@ data class Milestone(
     val achievedAtEpochMillis: Long,
 )
 
-@Serializable
 data class AttentionState(
     val settings: StoredSettings = StoredSettings(),
     val targets: List<Target> = emptyList(),

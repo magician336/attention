@@ -23,9 +23,14 @@ import com.attention.domain.TimeEntrySource
 import com.attention.domain.TimeEntrySourceSerializer
 import com.attention.domain.TimerSegment
 import com.attention.domain.recalculateExperience
-import kotlinx.serialization.KSerializer
+import kotlin.reflect.KClass
+import kotlin.reflect.KParameter
+import kotlin.reflect.KType
+import kotlin.reflect.full.primaryConstructor
+import kotlinx.serialization.InternalSerializationApi
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.serializer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -47,9 +52,11 @@ import org.junit.Test
  * - 协议模型相对领域类型唯一的「可选性」差异被钉死，不许悄悄增加
  *   （[the_only_optionality_difference_is_the_row_id_the_protocol_requires]）。
  *
- * 过渡状态：领域的数据类仍然标着 `@Serializable`，所以这张表用序列化描述符来对照字段；对照时协议枚举
- * 先按 `protocolEnumToDomainEnum` 翻译成领域枚举——两侧承载的是同名但不同身份的枚举（备份协议那一份
- * 见 `BackupProtocolEnums`）。领域的数据类哪天不再可序列化，这里就要换一种对照方式。
+ * 领域侧的可序列化标注已经摘掉（见 ADR 0005「备份协议的边界」），所以这张表用 Kotlin 反射读
+ * 两个类型的构造参数来对照字段：构造参数顺序就是声明顺序，`KParameter.isOptional` 就是「这个字段
+ * 有没有默认值」。序列化描述符只留给协议侧——协议模型仍然要真的能被编解码，它的那种顺序与可选性
+ * 只有描述符说得准。对照时协议枚举按类型名翻译成领域枚举（两侧承载的是同名但不同身份的枚举，
+ * 备份协议那一份见 `BackupProtocolEnums`）。
  */
 class BackupDomainMappingTest {
 
@@ -60,22 +67,22 @@ class BackupDomainMappingTest {
      * 校验，不必靠注释维持一致。
      */
     private val mappedTypes: List<MappedType> = listOf(
-        MappedType("settings", StoredSettings.serializer(), BackupStoredSettings.serializer()),
-        MappedType("targets", Target.serializer(), BackupTarget.serializer()),
-        MappedType("goalStages", GoalStage.serializer(), BackupGoalStage.serializer()),
-        MappedType("timeEntries", TimeEntry.serializer(), BackupTimeEntry.serializer()),
-        MappedType("schedules", ScheduleEntry.serializer(), BackupScheduleEntry.serializer()),
-        MappedType("recurrenceRules", RecurrenceRule.serializer(), BackupRecurrenceRule.serializer()),
-        MappedType("migrations", Migration.serializer(), BackupMigration.serializer()),
-        MappedType("futureGoalRules", FutureGoalRule.serializer(), BackupFutureGoalRule.serializer()),
-        MappedType("periodSnapshots", PeriodSnapshot.serializer(), BackupPeriodSnapshot.serializer()),
-        MappedType("targetMoves", TargetMove.serializer(), BackupTargetMove.serializer()),
-        MappedType("milestones", Milestone.serializer(), BackupMilestone.serializer()),
-        MappedType("activeTimer", ActiveTimer.serializer(), BackupActiveTimer.serializer()),
+        MappedType("settings", StoredSettings::class, BackupStoredSettings::class),
+        MappedType("targets", Target::class, BackupTarget::class),
+        MappedType("goalStages", GoalStage::class, BackupGoalStage::class),
+        MappedType("timeEntries", TimeEntry::class, BackupTimeEntry::class),
+        MappedType("schedules", ScheduleEntry::class, BackupScheduleEntry::class),
+        MappedType("recurrenceRules", RecurrenceRule::class, BackupRecurrenceRule::class),
+        MappedType("migrations", Migration::class, BackupMigration::class),
+        MappedType("futureGoalRules", FutureGoalRule::class, BackupFutureGoalRule::class),
+        MappedType("periodSnapshots", PeriodSnapshot::class, BackupPeriodSnapshot::class),
+        MappedType("targetMoves", TargetMove::class, BackupTargetMove::class),
+        MappedType("milestones", Milestone::class, BackupMilestone::class),
+        MappedType("activeTimer", ActiveTimer::class, BackupActiveTimer::class),
         MappedType(
             "activeTimer.completedSegments",
-            TimerSegment.serializer(),
-            BackupTimerSegment.serializer(),
+            TimerSegment::class,
+            BackupTimerSegment::class,
         ),
     )
 
@@ -95,7 +102,7 @@ class BackupDomainMappingTest {
         mappedTypes.forEach { mapped ->
             assertEquals(
                 "${mapped.path} 的领域侧与协议侧字段数量不一致：协议模型凭空多出字段，或漏掉了字段。" +
-                    "给领域类型新增一个进入备份的字段时，必须同时加进 ${mapped.protocol.descriptor.serialName}。",
+                    "给领域类型新增一个进入备份的字段时，必须同时加进 ${mapped.protocol.protocolName()}。",
                 mapped.domain.shape(),
                 mapped.protocol.shape(),
             )
@@ -111,16 +118,16 @@ class BackupDomainMappingTest {
         assertEquals(
             "对照表与清单对「备份里有哪些协议模型」的说法不一致：见 BackupProtocolPayloads。",
             declared.toSortedMap(),
-            mappedTypes.associate { it.protocol.descriptor.serialName to it.path }.toSortedMap(),
+            mappedTypes.associate { it.protocol.protocolName() to it.path }.toSortedMap(),
         )
         mappedTypes.forEach { mapped ->
             assertTrue(
-                "${mapped.path} 的协议侧类型 ${mapped.protocol.descriptor.serialName} 不在备份协议自己的包里",
-                BackupProtocolPayloads.isProtocolType(mapped.protocol.descriptor.serialName),
+                "${mapped.path} 的协议侧类型 ${mapped.protocol.protocolName()} 不在备份协议自己的包里",
+                BackupProtocolPayloads.isProtocolType(mapped.protocol.protocolName()),
             )
             assertTrue(
-                "${mapped.path} 的领域侧类型 ${mapped.domain.descriptor.serialName} 不在 :domain 里",
-                mapped.domain.descriptor.serialName.startsWith(DOMAIN_PREFIX),
+                "${mapped.path} 的领域侧类型 ${mapped.domain.qualifiedName} 不在 :domain 里",
+                mapped.domain.qualifiedName!!.startsWith(DOMAIN_PREFIX),
             )
         }
     }
@@ -192,13 +199,10 @@ class BackupDomainMappingTest {
     fun the_only_optionality_difference_is_the_row_id_the_protocol_requires() {
         val differences = mutableListOf<String>()
         mappedTypes.forEach { mapped ->
-            (0 until mapped.domain.descriptor.elementsCount).forEach { index ->
-                if (!mapped.protocol.descriptor.isElementOptional(index) &&
-                    mapped.domain.descriptor.isElementOptional(index)
-                ) {
-                    differences += "${mapped.path}.${mapped.domain.descriptor.getElementName(index)}"
-                }
-            }
+            val requiredByProtocol = mapped.protocol.requiredFieldNames()
+            mapped.domain.valueParameters()
+                .filter { it.isOptional && it.name in requiredByProtocol }
+                .forEach { differences += "${mapped.path}.${it.name}" }
         }
 
         assertEquals(
@@ -381,26 +385,23 @@ class BackupDomainMappingTest {
 /** 一个进入备份的领域类型，与承载它的协议模型。 */
 private data class MappedType(
     val path: String,
-    val domain: KSerializer<*>,
-    val protocol: KSerializer<*>,
+    val domain: KClass<*>,
+    val protocol: KClass<*>,
 ) {
     init {
-        require(domain.descriptor.kind == kotlinx.serialization.descriptors.StructureKind.CLASS) {
-            "$path 的领域侧必须是一个数据类"
-        }
-        require(protocol.descriptor.kind == kotlinx.serialization.descriptors.StructureKind.CLASS) {
-            "$path 的协议侧必须是一个数据类"
-        }
+        requireNotNull(domain.primaryConstructor) { "$path 的领域侧必须是一个数据类" }
+        requireNotNull(protocol.primaryConstructor) { "$path 的协议侧必须是一个数据类" }
     }
 }
 
 private const val DOMAIN_PREFIX = "com.attention.domain."
+private const val BACKUP_PACKAGE = "com.attention.app.data.backup."
 
 /**
  * 协议枚举 → 它对应的领域枚举，按序列化标识配对。
  *
  * 协议字段承载的是备份协议自己的枚举（[BackupProtocolEnums]），领域字段承载的是领域枚举，两者名字
- * 一样、身份不同。逐字段对照时要先把协议枚举翻译成领域枚举再比，否则 `cadence`、`source`、
+ * 一样、身份不同。逐字段对照时两侧的类型名要对齐到同一套名字，否则 `cadence`、`source`、
  * `frequency` 这几列永远对不上，而对不上的原因不是真的缺字段。
  *
  * 这张表因此是护栏的一部分而不是装饰：它列出的协议枚举必须正好是清单里 [BackupPayloadKind.PROTOCOL_ENUM]
@@ -413,11 +414,49 @@ private val protocolEnumToDomainEnum: Map<String, String> = mapOf(
     BackupScheduleFrequency.serializer().descriptor.serialName to ScheduleFrequencySerializer.descriptor.serialName,
 )
 
+/** 清单按 [kotlinx.serialization] 的序列化标识登记，所以这里问描述符，不问类型名。 */
+@OptIn(InternalSerializationApi::class)
+private fun KClass<*>.protocolName(): String = serializer().descriptor.serialName
+
+/**
+ * 协议描述符里「没有默认值、必须出现在文档里」的字段名。
+ *
+ * 只有协议侧用描述符：协议模型真的要编解码 JSON，「这个字段缺了会怎样」只有描述符说得准，
+ * 而且缺字段的历史备份读成什么也由它决定。
+ */
+@OptIn(InternalSerializationApi::class)
+private fun SerialDescriptor.requiredFieldNames(): Set<String> =
+    (0 until elementsCount).filterNot { isElementOptional(it) }.map { getElementName(it) }.toSet()
+
+/** 协议侧「必须自带」的字段名；领域侧的可选性由 [KParameter.isOptional] 回答，两边不必用同一套手段。 */
+@OptIn(InternalSerializationApi::class)
+private fun KClass<*>.requiredFieldNames(): Set<String> = serializer().descriptor.requiredFieldNames()
+
+/** 数据类的构造参数，按声明顺序；`$stable` 之类的合成成员不在里面。 */
+private fun KClass<*>.valueParameters(): List<KParameter> = requireNotNull(primaryConstructor)
+    .parameters.filter { it.kind == KParameter.Kind.VALUE }
+
 /** `名称:类型` 的有序形状，字段名、字段顺序与字段类型都在里面。 */
-private fun KSerializer<*>.shape(): List<String> {
-    val descriptor: SerialDescriptor = descriptor
-    return (0 until descriptor.elementsCount).map { index ->
-        val type = descriptor.getElementDescriptor(index).serialName
-        "${descriptor.getElementName(index)}:${protocolEnumToDomainEnum[type] ?: type}"
+private fun KClass<*>.shape(): List<String> = valueParameters().map { "${it.name}:${it.type.renderType()}" }
+
+/**
+ * 类型名，类型参数一并带出来。
+ *
+ * 可空性两侧是一致的，所以这里不区分 `String` 与 `String?`：真要多一层「领域可空、协议必填」的语义，
+ * [the_only_optionality_difference_is_the_row_id_the_protocol_requires] 会在默认值的差别上抓到。
+ *
+ * 协议包里自己的类型去掉 `Backup` 前缀再比对，因为两侧承载的是同名但不同身份的类型：枚举见
+ * [protocolEnumToDomainEnum]，嵌套的记录（`BackupTimerSegment` 对 `TimerSegment`）在对照表里本来就是
+ * 单独的一行，字段只要指向同一对类型即可。记录的身份由 [MappedType] 顶层的清单核对保证。
+ */
+private fun KType.renderType(): String {
+    val classifier = requireNotNull(classifier as? KClass<*>)
+    val simpleName = requireNotNull(classifier.simpleName)
+    val name = if (classifier.qualifiedName?.startsWith(BACKUP_PACKAGE) == true) {
+        simpleName.removePrefix("Backup")
+    } else {
+        simpleName
     }
+    val arguments = arguments.mapNotNull { it.type }.map { it.renderType() }
+    return if (arguments.isEmpty()) name else "$name<${arguments.joinToString(", ")}>"
 }
