@@ -118,6 +118,11 @@ AttentionViewModel、Room、DataStore、SAF 与权限 API。设置页的 `notifi
 `asAgendaEntry()` 兼容映射把它们落成日程，`SettingsSnapshot` 与 `AttentionBackup` 的默认值
 也已统一成 `AGENDA`，因此新写出的设置与备份不再把旧名称写回去。
 
+组合根渲染哪个页面由领域函数 `LaunchDestination.toTopLevelWorkspace()` 决定，它一定返回
+日程、目标树、统计三者之一：旧入口先折成日程，`LAST_OPENED` 这类只能被解析、不能被渲染的
+值回退到日程。组合根因此没有「什么都不渲染」的分支——一个没有解释的空白工作区对用户毫无
+意义，比落错页更差。
+
 ### 平台副作用的验证面（验收标准 5）
 
 计时器、提醒权限、通知权限与 SAF 备份/恢复全部由组合根 adapter 执行，页面只发意图。
@@ -137,7 +142,9 @@ AttentionViewModel、Room、DataStore、SAF 与权限 API。设置页的 `notifi
 因此「状态已加载」并不蕴含「落点已纠正」——写回那条 effect 捕获到的正是纠正之前的暂定值。
 `shouldPersistLastOpened` 现在要求四个条件同时成立：设置已读到、不在设置页、
 **状态已加载**，以及**落点已确定**（来自外部请求、已被状态纠正，或用户自己点过）。
-这条规则是纯函数，`WorkspaceNavigationTest` 在 JVM 上逐条钉住每一种组合。
+这条规则是纯函数，`WorkspaceNavigationTest` 在 JVM 上取样钉住它：四个条件各自能单独挡住写回的
+组合、两条限制同时成立时放行，以及每个条件不成立时的结果。它不是对 16 种组合的穷举，
+未取样的组合靠这条纯函数本身与代码评审保证。
 
 验收标准的补充：宿主级用例的隔离只做一件事，不放宽任何断言——
 `WorkspaceHostSettingsBarrier.quiesce` 在每条宿主用例结束后等共享 DataStore 的写入停稳，

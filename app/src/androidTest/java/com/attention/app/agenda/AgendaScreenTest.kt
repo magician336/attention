@@ -38,7 +38,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * 所有日期页的直接测试：只给它 fake screen state 与 fake actions，
+ * 日程页的直接测试：只给它 fake screen state 与 fake actions，
  * 断言可见标签、选中规划日、导航与筛选 intent、创建/编辑/完成 intent，
  * 以及从日程条目起计时的来源关联，不经过 ViewModel、Room 与权限 API。
  *
@@ -299,7 +299,7 @@ class AgendaScreenTest {
         assertEquals(listOf("r1"), intents.deletedRecords)
     }
 
-    /** 所有日期页是可滚动长页，断言与点击前先滚到目标节点。 */
+    /** 日程页是可滚动长页，断言与点击前先滚到目标节点。 */
     private fun node(text: String, substring: Boolean = false) =
         composeRule.onNodeWithText(text, substring = substring).performScrollTo()
 

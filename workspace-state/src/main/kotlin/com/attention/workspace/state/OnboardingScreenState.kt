@@ -35,7 +35,7 @@ fun onboardingScreenState(): OnboardingScreenState = OnboardingScreenState(
         OnboardingPage(
             title = "日程",
             body = "日程按规划日组织你今天要做的事。每条日程有标题、起止时间与预计分钟，" +
-                "可以关联目标树里的目标；完成的日程与实际投入一起进入统计。",
+                "可以关联目标树里的目标；预计时长和完成标记只是安排，实际投入由计时或手动补记产生。",
         ),
         OnboardingPage(
             title = "目标树",

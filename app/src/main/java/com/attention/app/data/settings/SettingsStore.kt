@@ -166,8 +166,9 @@ private fun Preferences.toSettingsSnapshot(): SettingsSnapshot = SettingsSnapsho
     weekStartDay = get(Keys.WEEK_START_DAY)?.takeIf { it in 1..7 }
         ?: SettingsSnapshot.DEFAULT_WEEK_START_DAY,
     dailyCapacityMinutes = get(Keys.DAILY_CAPACITY_MINUTES)?.takeIf { it > 0 },
-    launchDestination = get(Keys.LAUNCH_DESTINATION).toLaunchDestination(),
-    // 「上次打开」的历史按领域语义读取：旧版本值等价于日程入口，无效历史回退到日程。
+    // 启动入口与「上次打开」的历史都按领域语义读取：旧版本值等价于日程入口，无效历史回退到日程，
+    // 因此新写出的设置不再把旧名称写回去。
+    launchDestination = launchDestinationFromPersistedName(get(Keys.LAUNCH_DESTINATION)),
     lastOpenedDestination = launchDestinationFromPersistedName(get(Keys.LAST_OPENED_DESTINATION)),
     onboardingCompleted = get(Keys.ONBOARDING_COMPLETED) ?: false,
     notificationsEnabled = get(Keys.NOTIFICATIONS_ENABLED) ?: true,
@@ -183,14 +184,3 @@ private fun MutablePreferences.writeSnapshot(snapshot: SettingsSnapshot) {
     this[Keys.ONBOARDING_COMPLETED] = snapshot.onboardingCompleted
     this[Keys.NOTIFICATIONS_ENABLED] = snapshot.notificationsEnabled
 }
-
-/**
- * 启动入口偏好的读取。旧版本值仍然按旧页面打开，兼容映射到「日程」只作用于
- * 「上次打开」的历史（见 [launchDestinationFromPersistedName]）。
- *
- * 无法解析的值是无效偏好而不是有效历史，因此回退到日程入口；旧枚举值本身仍然保留，
- * 历史 DataStore 与备份里的 `TODAY` / `ALL_DATES` 依旧读得出来。
- */
-private fun String?.toLaunchDestination(): LaunchDestination = runCatching {
-    this?.let(LaunchDestination::valueOf) ?: LaunchDestination.AGENDA
-}.getOrDefault(LaunchDestination.AGENDA)
