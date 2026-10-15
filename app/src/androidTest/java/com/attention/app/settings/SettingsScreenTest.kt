@@ -221,6 +221,18 @@ class SettingsScreenTest {
         assertEquals(1, intents.closed)
     }
 
+    @Test
+    fun the_onboarding_can_be_reopened_from_here() {
+        // 从设置重新打开引导是本票要求的唯一入口：页面只发出 intent，全屏引导由组合根举起
+        val intents = RecordingSettingsActions()
+        mount(state = screenState(LaunchDestination.TARGETS), actions = intents)
+
+        composeRule.onNodeWithTag("settings-open-onboarding").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("settings-open-onboarding").performClick()
+
+        assertEquals(1, intents.onboardingOpens)
+    }
+
     /** 设置页是可滚动长页，断言与点击前先滚到目标节点。 */
     private fun node(text: String) = composeRule.onNodeWithText(text).performScrollTo()
 
@@ -274,6 +286,7 @@ class SettingsScreenTest {
         val weekStarts = mutableListOf<Int>()
         val dataIntents = mutableListOf<String>()
         var notificationRequests = 0
+        var onboardingOpens = 0
         var closed = 0
 
         override fun selectLaunchDestination(destination: LaunchDestination) {
@@ -322,6 +335,10 @@ class SettingsScreenTest {
 
         override fun close() {
             closed++
+        }
+
+        override fun openOnboarding() {
+            onboardingOpens++
         }
     }
 }

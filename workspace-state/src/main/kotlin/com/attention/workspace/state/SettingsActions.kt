@@ -39,6 +39,9 @@ interface SettingsActions {
     /** 恢复最近一次导入前的备份，需要用户显式确认；确认对话框由组合根打开。 */
     fun restoreLastImportBackup()
 
+    /** 重新打开首次使用引导。引导是说明式的，重看它同样不写任何业务数据。 */
+    fun openOnboarding()
+
     /** 离开设置页，回到统计页。设置页不是顶级工作区，因此它不写入「上次打开」。 */
     fun close()
 }

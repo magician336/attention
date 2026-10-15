@@ -79,6 +79,7 @@ import com.attention.app.ui.theme.attentionTokens
 import com.attention.app.agenda.AgendaScreen
 import com.attention.app.agenda.AgendaSelection
 import com.attention.app.agenda.rememberAgendaSelection
+import com.attention.app.onboarding.OnboardingScreen
 import com.attention.app.settings.SettingsScreen
 import com.attention.app.statistics.StatisticsScreen
 import com.attention.app.statistics.StatisticsSelection
@@ -89,12 +90,14 @@ import com.attention.app.today.TodayOnboardingCard
 import com.attention.workspace.state.AgendaActions
 import com.attention.workspace.state.AgendaRecurrenceDraft
 import com.attention.workspace.state.AgendaScheduleDraft
+import com.attention.workspace.state.OnboardingActions
 import com.attention.workspace.state.OnboardingScheduleDraft
 import com.attention.workspace.state.SettingsActions
 import com.attention.workspace.state.StatisticsActions
 import com.attention.workspace.state.TargetsActions
 import com.attention.workspace.state.TodayActions
 import com.attention.workspace.state.agendaScreenState
+import com.attention.workspace.state.onboardingScreenState
 import com.attention.workspace.state.settingsScreenState
 import com.attention.workspace.state.statisticsScreenState
 import com.attention.workspace.state.targetsScreenState
@@ -268,6 +271,7 @@ private class SettingsActionsAdapter(
     private val onExportSchedulesCsv: () -> Unit,
     private val onExportCsvBundle: () -> Unit,
     private val onRequestRestoreImportBackup: () -> Unit,
+    private val onOpenOnboarding: () -> Unit,
     private val onClose: () -> Unit,
 ) : SettingsActions {
     override fun selectLaunchDestination(destination: LaunchDestination) {
@@ -302,6 +306,26 @@ private class SettingsActionsAdapter(
     override fun restoreLastImportBackup() = onRequestRestoreImportBackup()
 
     override fun close() = onClose()
+
+    // 重新打开引导：组合根负责把独立的全屏引导举到工作区之上，页面只发出这一条意图。
+    override fun openOnboarding() = onOpenOnboarding()
+}
+
+/**
+ * 首次使用引导的 actions adapter，在组合根一侧组装。
+ *
+ * 引导只有一个落地：更新引导状态（`SettingsSnapshot.onboardingCompleted`），并把用户送到
+ * 当前规划日的日程。它**不**创建目标、日程、设置或时间记录——adapter 里除了
+ * `viewModel.finishOnboarding()` 之外没有任何写业务数据的调用，这正是本票与旧引导卡片的区别。
+ */
+private class OnboardingActionsAdapter(
+    private val viewModel: AttentionViewModel,
+    private val onCompleted: () -> Unit,
+) : OnboardingActions {
+    override fun completeOnboarding() {
+        viewModel.finishOnboarding()
+        onCompleted()
+    }
 }
 
 /**
@@ -591,6 +615,13 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     }
     var destinationChosen by remember { mutableStateOf(hasExternalScheduleRequest) }
     var settingsOpen by remember { mutableStateOf(false) }
+    // 引导是否被用户重新打开：设置页的「重新打开引导」把它举起来。
+    // 自动出现的那一次由持久化的引导状态决定，不由这个变量决定。
+    var onboardingRequested by remember { mutableStateOf(false) }
+    // 引导状态直接读设置快照，并允许「还没读到」这个第三种状态：
+    // 未读到时不显示引导，因此已完成引导的老用户不会先看到一帧全屏引导。
+    val persistedSettings by remember { context.createSettingsStore().settings }
+        .collectAsStateWithLifecycle(initialValue = null)
     var persistedSettingsLoaded by remember { mutableStateOf(false) }
     var jsonPreview by remember { mutableStateOf<String?>(null) }
     var pendingJsonBackup by remember { mutableStateOf<ExportDocument?>(null) }
@@ -891,6 +922,11 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                 }
             },
             onRequestRestoreImportBackup = { restoreImportPromptVisible = true },
+            // 重新打开引导：先把设置页让出去，再把全屏引导举起来。
+            onOpenOnboarding = {
+                settingsOpen = false
+                onboardingRequested = true
+            },
             // 返回时回到统计页：设置页从统计进入，所以 destination 一直是统计。
             onClose = { settingsOpen = false },
         )
@@ -942,7 +978,32 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         )
     }
 
-    Scaffold(
+    // 引导是独立全屏的：它盖在整个工作区之上，因此顶栏、底部导航与页面内容都不渲染。
+    // 自动出现的那一次只由持久化的引导状态决定（没读到设置之前不显示），
+    // 从设置页重新打开的那一次由 [onboardingRequested] 决定；两种来源离开后都不再自动出现。
+    val onboardingVisible = onboardingRequested || persistedSettings?.onboardingCompleted == false
+    val onboardingState = onboardingScreenState()
+    val onboardingActions: OnboardingActions = remember(viewModel) {
+        OnboardingActionsAdapter(
+            viewModel = viewModel,
+            onCompleted = {
+                // 完成或跳过都落到当前规划日的日程：离开引导、离开设置页，并把日程页的
+                // 日期范围交回给当前规划日（页面侧的语义由页面 module 提供）。
+                onboardingRequested = false
+                settingsOpen = false
+                destinationChosen = true
+                destination = LaunchDestination.AGENDA
+                agendaSelection.followPlanningDay()
+            },
+        )
+    }
+
+    if (onboardingVisible) {
+        OnboardingScreen(state = onboardingState, actions = onboardingActions)
+    }
+    // 引导出现时工作区整体不渲染：顶栏、底部导航与页面内容都让位给这层独立全屏引导。
+    if (!onboardingVisible) {
+        Scaffold(
         topBar = { TopAppBar(title = { Text("Attention") }) },
         bottomBar = {
             // 主工作区收敛为日程、目标树、统计三个入口：今天/明天/所有日期是日程页里的范围，
@@ -1022,6 +1083,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             scheduleExportMessage?.let { Text(it, modifier = Modifier.padding(horizontal = 16.dp)) }
             csvBundleMessage?.let { Text(it, modifier = Modifier.padding(horizontal = 16.dp)) }
         }
+    }
     }
     pendingImport?.let { plan ->
         AlertDialog(

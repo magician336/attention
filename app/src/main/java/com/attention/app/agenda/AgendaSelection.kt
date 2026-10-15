@@ -62,6 +62,17 @@ internal class AgendaSelection(
         selectDate(null)
     }
 
+    /**
+     * 丢掉本次会话里的显式选择，重新跟随组合根注入的当前规划日。
+     *
+     * 「跟随当前规划日」不是「选中某一天」，也不是「所有日期」，所以它需要自己一个入口；
+     * 引导结束时用它把用户送回当前规划日的日程。
+     */
+    fun followPlanningDay() {
+        chosen = null
+        explicitlyChosen = false
+    }
+
     /** 以投影已解析出的当前选中日为基准前后位移规划日。 */
     fun shiftDays(amount: Long, currentDate: LocalDate) {
         selectDate(currentDate.plusDays(amount))
