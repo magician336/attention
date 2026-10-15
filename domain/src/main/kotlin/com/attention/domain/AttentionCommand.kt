@@ -118,12 +118,34 @@ sealed interface AttentionCommand {
         }
     }
 
+    /**
+     * Decides one schedule entry's completion from its planned duration and the actual
+     * investment linked to it.
+     *
+     * Reached the plan: the entry becomes completed. Short of the plan, or with no planned
+     * duration at all, the entry keeps its state and the decision stays the user's. Running it
+     * again settles nothing twice, because the completion only reads investment that already
+     * exists and milestones are deduplicated by instance key.
+     */
+    data class SettleScheduleCompletion(val entryId: String) : AttentionCommand {
+        override fun execute(state: AttentionState, now: Instant, zone: ZoneId): AttentionCommandResult {
+            require(state.schedules.any { it.id == entryId }) { "日程条目不存在" }
+            return state.completeScheduleMetByInvestment(entryId).withMilestonesFor(
+                affectedPlanningDates = state.timeEntries
+                    .filter { it.scheduleEntryId == entryId }
+                    .map { LocalDate.parse(it.planningDate) },
+                achievedAtEpochMillis = now.toEpochMilli(),
+            )
+        }
+    }
+
     /** Settles the active timer and evaluates every planning day it touched. */
     data object StopTimer : AttentionCommand {
         override fun execute(state: AttentionState, now: Instant, zone: ZoneId): AttentionCommandResult {
-            if (state.activeTimer == null) return AttentionCommandResult(state)
+            val active = state.activeTimer ?: return AttentionCommandResult(state)
             val stopped = state.stopTimer(now, zone)
-            return stopped.state.withMilestonesFor(
+            val settled = stopped.state.completeScheduleMetByInvestment(active.scheduleEntryId)
+            return settled.withMilestonesFor(
                 affectedPlanningDates = stopped.entries.map { LocalDate.parse(it.planningDate) },
                 achievedAtEpochMillis = now.toEpochMilli(),
                 generatedTimeEntries = stopped.entries,
@@ -140,7 +162,7 @@ sealed interface AttentionCommand {
             if (active.targetId == targetId) return AttentionCommandResult(state)
 
             val stopped = state.stopTimer(now, zone)
-            val settled = stopped.state.withMilestonesFor(
+            val settled = stopped.state.completeScheduleMetByInvestment(active.scheduleEntryId).withMilestonesFor(
                 affectedPlanningDates = stopped.entries.map { LocalDate.parse(it.planningDate) },
                 achievedAtEpochMillis = now.toEpochMilli(),
                 generatedTimeEntries = stopped.entries,
@@ -161,7 +183,7 @@ sealed interface AttentionCommand {
                 ?: throw IllegalArgumentException("时间记录不存在")
             val nextState = state.editTimeEntry(entryId, durationMinutes, targetId, note)
             val edited = nextState.timeEntries.first { it.id == entryId }
-            return nextState.withMilestonesFor(
+            return nextState.completeScheduleMetByInvestment(existing.scheduleEntryId).withMilestonesFor(
                 affectedPlanningDates = setOf(LocalDate.parse(existing.planningDate)),
                 achievedAtEpochMillis = now.toEpochMilli(),
                 generatedTimeEntries = listOf(edited),

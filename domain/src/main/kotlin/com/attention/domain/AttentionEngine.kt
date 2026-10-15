@@ -201,15 +201,13 @@ fun AttentionState.capacitySummary(date: String): CapacitySummary {
 }
 
 /**
- * Returns the minutes reserved by one saved schedule entry.
+ * 计划时长：用户为这条日程承诺的分钟数，没有承诺时返回 null。
  *
- * A positive estimate is the user's planning value and therefore takes
- * precedence over the optional time range. Invalid imported estimates fall
- * back to a valid complete range, while a partial or invalid range contributes
- * zero minutes. This keeps malformed imported entries from reducing a day's
- * used capacity below zero.
+ * 口径与每日容量一致：正数预计时长是用户的计划值，优先于可选时间段；无效的
+ * 预计时长回退到完整有效的时间段，部分或无效时间段不算承诺。因此容量计算与
+ * 「计划时长」说的是同一件事，二者不会给出不同的答案。
  */
-private fun ScheduleEntry.capacityMinutes(): Int = estimatedMinutes
+fun ScheduleEntry.plannedMinutes(): Int? = estimatedMinutes
     ?.takeIf { it > 0 }
     ?: if (
         startMinute != null &&
@@ -220,8 +218,16 @@ private fun ScheduleEntry.capacityMinutes(): Int = estimatedMinutes
     ) {
         endMinute - startMinute
     } else {
-        0
+        null
     }
+
+/**
+ * Returns the minutes reserved by one saved schedule entry.
+ *
+ * A schedule entry without a planned duration reserves nothing, which keeps
+ * malformed imported entries from reducing a day's used capacity below zero.
+ */
+private fun ScheduleEntry.capacityMinutes(): Int = plannedMinutes() ?: 0
 
 fun AttentionState.periodStats(date: LocalDate, cadence: GoalCadence): PeriodStats {
     val range = periodRange(date, cadence)
@@ -624,6 +630,32 @@ fun AttentionState.confirmScheduleCompleted(entryId: String, durationMinutes: In
             scheduleEntryId = entryId,
         ),
     ).recalculateExperience()
+}
+
+/** 与这条日程关联的实际投入合计：只统计 `scheduleEntryId` 指向它的时间记录。 */
+fun AttentionState.scheduleInvestedMinutes(entryId: String): Int =
+    timeEntries.filter { it.scheduleEntryId == entryId }.sumOf(TimeEntry::durationMinutes)
+
+/**
+ * 达到计划时长才算完成。没有计划时长的日程不由系统猜测，它保持用户自己的判断。
+ */
+fun AttentionState.isScheduleInvestmentMet(entryId: String): Boolean {
+    val planned = schedules.firstOrNull { it.id == entryId }?.plannedMinutes() ?: return false
+    return scheduleInvestedMinutes(entryId) >= planned
+}
+
+/**
+ * 把已达标且仍未完成的日程标记完成。
+ *
+ * 这是幂等的：已经完成的日程不再变化，并且不新增任何时间记录——完成状态只是
+ * 对既有实际投入的读数，投入来源与它结算时写入的来源保持一致。
+ */
+fun AttentionState.completeScheduleMetByInvestment(entryId: String?): AttentionState {
+    if (entryId == null || !isScheduleInvestmentMet(entryId)) return this
+    if (schedules.first { it.id == entryId }.completed) return this
+    return copy(schedules = schedules.map { entry ->
+        if (entry.id == entryId) entry.copy(completed = true) else entry
+    })
 }
 
 private fun AttentionState.validateScheduleEntry(entry: ScheduleEntry) {
