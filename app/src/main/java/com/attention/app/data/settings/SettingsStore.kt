@@ -13,6 +13,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.attention.domain.LaunchDestination
 import com.attention.domain.PlannerSettings
 import com.attention.domain.StoredSettings
+import com.attention.domain.launchDestinationFromPersistedName
 import java.io.IOException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -24,7 +25,8 @@ data class SettingsSnapshot(
     val weekStartDay: Int = DEFAULT_WEEK_START_DAY,
     val dailyCapacityMinutes: Int? = null,
     val launchDestination: LaunchDestination = LaunchDestination.TODAY,
-    val lastOpenedDestination: LaunchDestination = LaunchDestination.TODAY,
+    // 没有有效历史时，「上次打开」回退到日程入口。
+    val lastOpenedDestination: LaunchDestination = LaunchDestination.AGENDA,
     val onboardingCompleted: Boolean = false,
     val notificationsEnabled: Boolean = true,
 ) {
@@ -163,7 +165,8 @@ private fun Preferences.toSettingsSnapshot(): SettingsSnapshot = SettingsSnapsho
         ?: SettingsSnapshot.DEFAULT_WEEK_START_DAY,
     dailyCapacityMinutes = get(Keys.DAILY_CAPACITY_MINUTES)?.takeIf { it > 0 },
     launchDestination = get(Keys.LAUNCH_DESTINATION).toLaunchDestination(),
-    lastOpenedDestination = get(Keys.LAST_OPENED_DESTINATION).toLaunchDestination(),
+    // 「上次打开」的历史按领域语义读取：旧版本值等价于日程入口，无效历史回退到日程。
+    lastOpenedDestination = launchDestinationFromPersistedName(get(Keys.LAST_OPENED_DESTINATION)),
     onboardingCompleted = get(Keys.ONBOARDING_COMPLETED) ?: false,
     notificationsEnabled = get(Keys.NOTIFICATIONS_ENABLED) ?: true,
 )
@@ -179,6 +182,10 @@ private fun MutablePreferences.writeSnapshot(snapshot: SettingsSnapshot) {
     this[Keys.NOTIFICATIONS_ENABLED] = snapshot.notificationsEnabled
 }
 
+/**
+ * 启动入口偏好的读取。旧版本值仍然按旧页面打开，兼容映射到「日程」只作用于
+ * 「上次打开」的历史（见 [launchDestinationFromPersistedName]）。
+ */
 private fun String?.toLaunchDestination(): LaunchDestination = runCatching {
     this?.let(LaunchDestination::valueOf) ?: LaunchDestination.TODAY
 }.getOrDefault(LaunchDestination.TODAY)

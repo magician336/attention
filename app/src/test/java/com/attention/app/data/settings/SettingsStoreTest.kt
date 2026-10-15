@@ -4,6 +4,7 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.attention.domain.LaunchDestination
+import com.attention.domain.resolveLaunchDestination
 import java.nio.file.Files
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -115,6 +116,44 @@ class SettingsStoreTest {
         val updated = store.settings.first()
         assertEquals(LaunchDestination.STATISTICS, updated.launchDestination)
         assertEquals(LaunchDestination.TARGETS, updated.lastOpenedDestination)
+        file.delete()
+        Unit
+    }
+
+    @Test
+    fun legacy_last_opened_history_is_read_as_the_schedule_entry() = runBlocking {
+        // 旧版本写入的「上次打开」历史等价于日程入口，无法解析的历史回退到日程
+        listOf("TODAY", "ALL_DATES", "REMOVED_DESTINATION").forEach { persisted ->
+            val file = Files.createTempFile("attention-settings", ".preferences_pb").toFile()
+            val dataStore = PreferenceDataStoreFactory.create { file }
+            dataStore.edit {
+                it[stringPreferencesKey("last_opened_destination")] = persisted
+            }
+            val store = DataStoreSettingsStore(dataStore)
+
+            assertEquals(LaunchDestination.AGENDA, store.settings.first().lastOpenedDestination)
+            assertEquals(LaunchDestination.TODAY, store.settings.first().launchDestination)
+            file.delete()
+        }
+        Unit
+    }
+
+    @Test
+    fun a_self_referencing_last_opened_history_resolves_to_the_schedule_entry() = runBlocking {
+        // 历史记录为「上次打开」本身时，读取保持原值，解析回退到日程入口
+        val file = Files.createTempFile("attention-settings", ".preferences_pb").toFile()
+        val dataStore = PreferenceDataStoreFactory.create { file }
+        dataStore.edit {
+            it[stringPreferencesKey("last_opened_destination")] = LaunchDestination.LAST_OPENED.name
+        }
+        val store = DataStoreSettingsStore(dataStore)
+
+        val lastOpened = store.settings.first().lastOpenedDestination
+        assertEquals(LaunchDestination.LAST_OPENED, lastOpened)
+        assertEquals(
+            LaunchDestination.AGENDA,
+            resolveLaunchDestination(LaunchDestination.LAST_OPENED, lastOpened),
+        )
         file.delete()
         Unit
     }

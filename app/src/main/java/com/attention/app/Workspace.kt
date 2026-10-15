@@ -853,7 +853,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                     LaunchDestination.ALL_DATES to "所有日期",
                     LaunchDestination.STATISTICS to "统计",
                 ).forEach { (item, label) ->
-                    if (destination == item && !settingsOpen) AttentionButton(onClick = { settingsOpen = false; destinationChosen = true }) { Text(label) }
+                    if (selectedNavigationDestination(destination) == item && !settingsOpen) AttentionButton(onClick = { settingsOpen = false; destinationChosen = true }) { Text(label) }
                     else AttentionOutlinedButton(onClick = { settingsOpen = false; destinationChosen = true; destination = item }) { Text(label) }
                 }
                 if (settingsOpen) AttentionButton(onClick = {}) { Text("设置") }
@@ -882,7 +882,12 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                     actions = settingsActions,
                 )
             } else when (destination) {
-                LaunchDestination.TODAY, LaunchDestination.LAST_OPENED -> TodayScreen(
+                // 「日程」入口打开当前规划日，与今天工作台是同一个页面；底部导航的
+                // 四个入口与标签本票不变，收敛为三项属于后续票。
+                LaunchDestination.TODAY,
+                LaunchDestination.AGENDA,
+                LaunchDestination.LAST_OPENED,
+                -> TodayScreen(
                     state = todayState,
                     actions = todayActions,
                 )
@@ -1058,6 +1063,13 @@ internal fun initialLaunchDestination(
 } else {
     resolveLaunchDestination(requested, lastOpened)
 }
+
+/**
+ * 「日程」入口落在底部导航现有的「今天」项上：底部导航的四个入口与标签本票不变，
+ * 因此选中态与页面外观在导航收敛为三项之前保持一致。
+ */
+internal fun selectedNavigationDestination(destination: LaunchDestination): LaunchDestination =
+    if (destination == LaunchDestination.AGENDA) LaunchDestination.TODAY else destination
 
 internal fun shouldPersistLastOpened(settingsLoaded: Boolean, settingsOpen: Boolean): Boolean =
     settingsLoaded && !settingsOpen
