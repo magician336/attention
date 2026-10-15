@@ -636,9 +636,13 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         context.createSettingsStore().settings.first()
         persistedSettingsLoaded = true
     }
-    androidx.compose.runtime.LaunchedEffect(destination, settingsOpen, persistedSettingsLoaded) {
+    // 「上次打开」写回之前必须等 ViewModel 真的把持久化状态读上来：[state] 在那之前是一份空的
+    // 默认值，据此算出来的启动落点只是暂定值。把它抢先写回去会覆盖用户上次真正停留的页面，
+    // 于是「启动入口=上次打开」的用户会被拽到默认的日程页，且这次覆盖是持久的（#174 实跑间歇失败）。
+    val stateLoaded by viewModel.stateLoaded.collectAsStateWithLifecycle()
+    androidx.compose.runtime.LaunchedEffect(destination, settingsOpen, persistedSettingsLoaded, stateLoaded) {
         // 底部导航只有三项，因此「上次打开」写入的永远是它自己：旧入口值先按领域兼容映射落成日程。
-        if (shouldPersistLastOpened(persistedSettingsLoaded, settingsOpen)) {
+        if (shouldPersistLastOpened(persistedSettingsLoaded, settingsOpen, stateLoaded)) {
             viewModel.saveLastOpened(destination.asAgendaEntry())
         }
     }
@@ -1095,8 +1099,20 @@ private fun Context.findActivity(): Activity? = when (this) {
 
 private const val REMINDER_PERMISSION_REQUEST_CODE = 4101
 
-internal fun shouldPersistLastOpened(settingsLoaded: Boolean, settingsOpen: Boolean): Boolean =
-    settingsLoaded && !settingsOpen
+/**
+ * 「上次打开」能不能写回去。
+ *
+ * 三个条件缺一不可：设置确实读到了（[settingsLoaded]）、当前不在设置页（[settingsOpen] 为假，
+ * 设置页不是顶级工作区）、以及**领域状态已经真的加载**（[stateLoaded]）。
+ *
+ * 最后一个条件是必须的：[state] 在加载完成之前是一份空的默认值，据此解析出来的启动落点只是暂定值，
+ * 写回去会永久覆盖用户上次真正停留的页面。
+ */
+internal fun shouldPersistLastOpened(
+    settingsLoaded: Boolean,
+    settingsOpen: Boolean,
+    stateLoaded: Boolean,
+): Boolean = settingsLoaded && !settingsOpen && stateLoaded
 
 /**
  * 一次返回键按下时它该落在哪里。返回键处理是平台行为，因此决策点留在组合根侧，

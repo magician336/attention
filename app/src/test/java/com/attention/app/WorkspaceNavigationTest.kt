@@ -64,8 +64,19 @@ class WorkspaceNavigationTest {
 
     @Test
     fun last_opened_is_not_written_until_persisted_settings_are_loaded() {
-        assertEquals(false, shouldPersistLastOpened(false, false))
-        assertEquals(false, shouldPersistLastOpened(true, true))
-        assertEquals(true, shouldPersistLastOpened(true, false))
+        assertEquals(false, shouldPersistLastOpened(false, false, true))
+        assertEquals(false, shouldPersistLastOpened(true, true, true))
+        assertEquals(true, shouldPersistLastOpened(true, false, true))
+    }
+
+    @Test
+    fun last_opened_is_not_written_while_the_domain_state_is_still_the_empty_default() {
+        // 领域状态加载之前，[state] 是一份空默认值：据此解析出来的启动落点只是暂定值，
+        // 写回去会覆盖用户上次真正停留的页面，因此必须等状态真的读上来。
+        assertEquals(false, shouldPersistLastOpened(true, false, false))
+        assertEquals(false, shouldPersistLastOpened(false, false, false))
+        // 设置页不是顶级工作区：两条限制各自都能单独挡住写回
+        assertEquals(false, shouldPersistLastOpened(false, false, true))
+        assertEquals(false, shouldPersistLastOpened(true, true, true))
     }
 }
