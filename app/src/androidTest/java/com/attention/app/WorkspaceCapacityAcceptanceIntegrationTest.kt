@@ -24,7 +24,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.attention.app.data.room.AttentionDatabase
 import com.attention.app.data.room.RoomBusinessDataRepository
 import com.attention.app.data.settings.SettingsSnapshot
-import com.attention.app.data.settings.createSettingsStore
 import com.attention.domain.AttentionState
 import com.attention.domain.RecurrenceRule
 import com.attention.domain.ScheduleEntry
@@ -42,6 +41,10 @@ import org.junit.runner.RunWith
 class WorkspaceCapacityAcceptanceIntegrationTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
+
+    // 被销毁的 Activity 仍可能在收尾时写回「上次打开」：等写入停稳再放行下一条用例。
+    @get:Rule(order = 1)
+    val settingsBarrier = WorkspaceHostSettingsBarrier.quiesceAfterActivity
 
     @Before
     fun stubDocumentPickerIntents() {
@@ -108,21 +111,9 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
             .performScrollTo()
             .assert(hasText("已安排 60 / 60 分钟", substring = true))
 
-        // Workbench settings survive activity recreation, and JSON backup remains user-visible.
-        composeRule.onNode(hasText("今天") and hasClickAction()).performClick()
-        replace("planning-boundary-input", "240")
-        click("daily-capacity-save")
-        composeRule.waitForIdle()
-        composeRule.onNodeWithText("规划日界线 04:00 · 每周从周一开始").assertExists()
-
-        composeRule.activityRule.scenario.recreate()
-        composeRule.waitForIdle()
-        composeRule.onNodeWithText("规划日界线 04:00 · 每周从周一开始").assertExists()
-        composeRule.onNodeWithTag("daily-capacity-summary", useUnmergedTree = true)
-            .performScrollTo()
-            .assert(hasText("/ 60 分钟", substring = true))
-
-        composeRule.onNode(hasText("统计") and hasClickAction()).performClick()
+        // JSON backup remains user-visible: #173 moved it off the statistics page into the
+        // standalone settings page reached from 「设置与数据」.
+        openSettingsFromStatistics()
         composeRule.onNodeWithText("预览 JSON 备份").performScrollTo().performClick()
         // The export launches the system document picker in its own process; the stubbed
         // intent keeps the round trip in-process so the Compose hierarchy stays alive.
@@ -139,7 +130,8 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
 
     @Test
     fun restore_import_backup_requires_explicit_confirmation() {
-        composeRule.onNode(hasText("统计") and hasClickAction()).performClick()
+        // 恢复入口随「设置与数据」搬到了设置页，确认对话框与取消行为不变（#173）
+        openSettingsFromStatistics()
         composeRule.onNodeWithText("恢复最近一次导入前备份").performScrollTo().performClick()
 
         composeRule.onNodeWithTag("restore-import-dialog", useUnmergedTree = true).assertExists()
@@ -148,8 +140,19 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
         composeRule.onNodeWithTag("restore-import-dialog", useUnmergedTree = true).assertDoesNotExist()
     }
 
+    /** 从统计页底部的「设置与数据」进入独立设置页。 */
+    private fun openSettingsFromStatistics() {
+        composeRule.onNode(hasText("统计") and hasClickAction()).performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("statistics-open-settings").performScrollTo().performClick()
+        composeRule.waitForIdle()
+    }
+
     private fun openAgenda() {
-        composeRule.onNode(hasText("所有日期") and hasClickAction()).performClick()
+        // 「所有日期」现在是日程页里的一个日期范围，不再是底部的顶级入口
+        composeRule.onNodeWithTag("nav-agenda", useUnmergedTree = true).performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).performScrollTo().performClick()
         composeRule.waitForIdle()
     }
 
@@ -217,13 +220,14 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
                             ),
                         ),
                     )
-                    context.createSettingsStore().setSnapshot(
-                        SettingsSnapshot(
-                            dailyCapacityMinutes = 60,
-                            onboardingCompleted = true,
-                        ),
-                    )
                 }
+                // 共享 DataStore 会被别的测试类的 Activity 写回：播种后读回确认才算数。
+                WorkspaceHostSettingsBarrier.quiesceAndSeed(
+                    SettingsSnapshot(
+                        dailyCapacityMinutes = 60,
+                        onboardingCompleted = true,
+                    ),
+                )
             } finally {
                 database.close()
             }

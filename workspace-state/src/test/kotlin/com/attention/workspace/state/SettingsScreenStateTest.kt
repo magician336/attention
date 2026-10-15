@@ -2,6 +2,7 @@ package com.attention.workspace.state
 
 import com.attention.domain.AttentionState
 import com.attention.domain.LaunchDestination
+import com.attention.domain.StoredSettings
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -17,8 +18,8 @@ class SettingsScreenStateTest {
     private val zone: ZoneId = ZoneId.of("Asia/Shanghai")
 
     @Test
-    fun launch_destination_options_are_listed_in_a_fixed_order() {
-        // 启动入口的可见标签与顺序是设置页的既有行为
+    fun launch_destination_options_are_the_four_top_level_workspaces() {
+        // 启动入口对用户统一呈现为日程、目标树、统计、上次打开；今天与所有日期不再是入口
         val screenState = settingsScreenState(
             state = AttentionState(),
             now = now,
@@ -27,14 +28,30 @@ class SettingsScreenStateTest {
 
         assertEquals(
             listOf(
-                LaunchDestination.TODAY to "今天",
+                LaunchDestination.AGENDA to "日程",
                 LaunchDestination.TARGETS to "目标树",
-                LaunchDestination.ALL_DATES to "所有日期",
                 LaunchDestination.STATISTICS to "统计",
                 LaunchDestination.LAST_OPENED to "上次打开",
             ),
             screenState.options.map { it.destination to it.label },
         )
+    }
+
+    @Test
+    fun a_legacy_persisted_entry_is_shown_as_the_agenda_option() {
+        // 旧版本持久化的今天 / 所有日期都按领域兼容映射显示为「日程（当前）」
+        listOf(LaunchDestination.TODAY, LaunchDestination.ALL_DATES).forEach { legacy ->
+            val screenState = settingsScreenState(
+                state = AttentionState(launchDestination = legacy),
+                now = now,
+                zone = zone,
+            )
+
+            assertEquals(
+                listOf(LaunchDestination.AGENDA),
+                screenState.options.filter { it.selected }.map { it.destination },
+            )
+        }
     }
 
     @Test
@@ -50,6 +67,55 @@ class SettingsScreenStateTest {
         assertEquals(
             listOf(LaunchDestination.TARGETS),
             screenState.options.filter { it.selected }.map { it.destination },
+        )
+    }
+
+    @Test
+    fun planning_day_boundary_capacity_and_week_start_come_from_the_stored_settings() {
+        // 规划日界线、周起始日与每日容量是设置页要编辑的三项，值来自持久化设置
+        val screenState = settingsScreenState(
+            state = AttentionState(
+                settings = StoredSettings(
+                    planningDayBoundaryMinutes = 90,
+                    weekStartDay = 3,
+                    dailyCapacityMinutes = 240,
+                ),
+            ),
+            now = now,
+            zone = zone,
+        )
+
+        assertEquals(90, screenState.planningDayBoundaryMinutes)
+        assertEquals(240, screenState.dailyCapacityMinutes)
+        assertEquals(
+            listOf(3),
+            screenState.weekDayOptions.filter { it.selected }.map { it.day },
+        )
+        assertEquals(
+            listOf(1, 2, 3, 4, 5, 6, 7),
+            screenState.weekDayOptions.map { it.day },
+        )
+        assertEquals("周三", screenState.weekDayOptions.first { it.selected }.label)
+    }
+
+    @Test
+    fun an_unset_daily_capacity_is_projected_as_null() {
+        // 每日容量是可选项：没有设置时页面拿到的是空值而不是 0
+        val screenState = settingsScreenState(AttentionState(), now, zone)
+
+        assertEquals(null, screenState.dailyCapacityMinutes)
+    }
+
+    @Test
+    fun notification_availability_is_injected_by_the_composition_root() {
+        // 通知是否可用是平台事实，投影只透传注入值
+        assertEquals(
+            false,
+            settingsScreenState(AttentionState(), now, zone, notificationsEnabled = false).notificationsEnabled,
+        )
+        assertEquals(
+            true,
+            settingsScreenState(AttentionState(), now, zone, notificationsEnabled = true).notificationsEnabled,
         )
     }
 
@@ -70,8 +136,8 @@ class SettingsScreenStateTest {
     }
 
     @Test
-    fun last_opened_falls_back_to_today_when_there_is_no_page_to_restore() {
-        // 「上次打开」自身指向「上次打开」时回落到今天工作台
+    fun last_opened_falls_back_to_the_schedule_when_there_is_no_page_to_restore() {
+        // 「上次打开」自身指向「上次打开」时回落到日程入口
         val screenState = settingsScreenState(
             state = AttentionState(
                 launchDestination = LaunchDestination.LAST_OPENED,
@@ -81,7 +147,7 @@ class SettingsScreenStateTest {
             zone = zone,
         )
 
-        assertEquals(LaunchDestination.TODAY, screenState.resolvedDestination)
+        assertEquals(LaunchDestination.AGENDA, screenState.resolvedDestination)
     }
 
     @Test

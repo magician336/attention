@@ -30,7 +30,11 @@ enum class TimeEntrySource { MANUAL, TIMER, SCHEDULE_CONFIRMED, IMPORT }
 enum class ScheduleFrequency { DAILY, WEEKLY, MONTHLY }
 
 @Serializable
-enum class LaunchDestination { TODAY, TARGETS, ALL_DATES, STATISTICS, LAST_OPENED }
+/**
+ * 启动入口。[AGENDA] 是「日程」的正式语义；[TODAY] 与 [ALL_DATES] 是旧版本持久化的入口值，
+ * 它们仍然存在并按旧页面打开，删除它们属于后续的收缩工作。
+ */
+enum class LaunchDestination { TODAY, TARGETS, ALL_DATES, STATISTICS, LAST_OPENED, AGENDA }
 
 @Serializable
 data class Target(
@@ -183,8 +187,10 @@ data class AttentionState(
     val experience: Long = 0,
     val activeTimer: ActiveTimer? = null,
     val onboardingCompleted: Boolean = false,
-    val launchDestination: LaunchDestination = LaunchDestination.TODAY,
-    val lastOpenedDestination: LaunchDestination = LaunchDestination.TODAY,
+    // 空状态的入口默认是日程：旧值 TODAY 语义等价于日程，但继续以它为默认
+    // 会让新写出的备份持续带旧入口名。旧枚举值本身仍然保留（见 [LaunchDestination]）。
+    val launchDestination: LaunchDestination = LaunchDestination.AGENDA,
+    val lastOpenedDestination: LaunchDestination = LaunchDestination.AGENDA,
     val notificationsEnabled: Boolean = true,
 )
 

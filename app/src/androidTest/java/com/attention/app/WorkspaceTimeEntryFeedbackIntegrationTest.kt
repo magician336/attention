@@ -2,8 +2,10 @@ package com.attention.app
 
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -33,13 +35,17 @@ import org.junit.runner.RunWith
 /**
  * 反馈层的页面接入验收：删除实际投入必须先确认，确认之后仍然可以撤销。
  *
- * 这条用例走真实页面路径：今天工作台上的删除按钮 → 确认弹窗 → 撤销提示 → 数据回到原样。
+ * 这条用例走真实页面路径：日程页上的实际投入删除按钮 → 确认弹窗 → 撤销提示 → 数据回到原样。
  * 它证明撤销真的调用了恢复动作，而不只是弹出一个撤销入口。
  */
 @RunWith(AndroidJUnit4::class)
 class WorkspaceTimeEntryFeedbackIntegrationTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
+
+    // 被销毁的 Activity 仍可能在收尾时写回「上次打开」：等写入停稳再放行下一条用例。
+    @get:Rule(order = 1)
+    val settingsBarrier = WorkspaceHostSettingsBarrier.quiesceAfterActivity
 
     companion object {
         private const val TIMEOUT = 10_000L
@@ -73,6 +79,8 @@ class WorkspaceTimeEntryFeedbackIntegrationTest {
             } finally {
                 database.close()
             }
+            // #177：未完成引导时第一次启动是全屏引导；这条用例要看的是引导之后的工作区
+            WorkspaceGuideSeed.markCompleted()
         }
     }
 
@@ -127,20 +135,21 @@ class WorkspaceTimeEntryFeedbackIntegrationTest {
     @Test
     fun the_target_picker_shows_the_selection_with_a_mark_not_only_a_colour() {
         openToday()
-        // The picker sits at the bottom of a card taller than the viewport, so scroll to the
-        // line just below it; scrolling to the card title alone would leave it off-screen.
-        composeRule.onNodeWithText("本规划日已记录", substring = true).performScrollTo()
+        // The manual ledger editor now lives on the agenda page, so the picker opens with 编辑.
+        composeRule.onNodeWithTag("edit-time-$ENTRY_ID").performScrollTo().performClick()
         composeRule.waitForIdle()
 
-        // 目标选择器必须在颜色之外说清楚当前选中了谁。
-        composeRule.onNodeWithTag(AttentionFeedbackTags.SELECTED, useUnmergedTree = true).assertIsDisplayed()
-        composeRule.onNodeWithTag(AttentionFeedbackTags.SELECTED_MARK, useUnmergedTree = true).assertIsDisplayed()
-        composeRule.onNodeWithTag(AttentionFeedbackTags.SELECTED_LABEL, useUnmergedTree = true)
-            .assert(hasText("已选中：未归属"))
+        // 目标选择器必须在颜色之外说清楚当前选中了谁：勾选图标 + “已选中：…”文案。
+        // 查询限定在编辑表单里的那一个选择器上，避免与页面其它选择态混淆。
+        val picker = composeRule.onNodeWithTag("edit-time-target-$ENTRY_ID").performScrollTo()
+        picker.assert(hasAnyDescendant(hasText("已选中：$TARGET_TITLE")))
+        picker.assert(hasAnyDescendant(hasTestTag(AttentionFeedbackTags.SELECTED_MARK)))
+        picker.assert(hasAnyDescendant(hasTestTag(AttentionFeedbackTags.SELECTED_LABEL)))
     }
 
     private fun openToday() {
-        composeRule.onNode(hasText("今天") and hasClickAction()).performClick()
+        // 「今天」不再是顶级入口：合并后的日程页默认打开当前规划日，手动账本在这一页上。
+        composeRule.onNodeWithTag("nav-agenda", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
     }
 

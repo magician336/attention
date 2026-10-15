@@ -37,6 +37,10 @@ class WorkspaceGoalSummaryCorrectionIntegrationTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
 
+    // 被销毁的 Activity 仍可能在收尾时写回「上次打开」：等写入停稳再放行下一条用例。
+    @get:Rule(order = 1)
+    val settingsBarrier = WorkspaceHostSettingsBarrier.quiesceAfterActivity
+
     companion object {
         private const val TARGET_ID = "ui-summary-correction-target"
         private const val STAGE_ID = "ui-summary-correction-stage"
@@ -71,6 +75,8 @@ class WorkspaceGoalSummaryCorrectionIntegrationTest {
             } finally {
                 database.close()
             }
+            // #177：未完成引导时第一次启动是全屏引导；这条用例要看的是引导之后的工作区
+            WorkspaceGuideSeed.markCompleted()
         }
     }
 
@@ -84,7 +90,7 @@ class WorkspaceGoalSummaryCorrectionIntegrationTest {
         composeRule.waitForIdle()
         assertSummary(15)
 
-        composeRule.onNode(hasText("今天") and hasClickAction()).performClick()
+        composeRule.onNodeWithTag("nav-agenda", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("edit-time-$OWNED_ENTRY_ID").performScrollTo().performClick()
         composeRule.onNodeWithTag("edit-time-minutes-$OWNED_ENTRY_ID", useUnmergedTree = true).performScrollTo().performTextReplacement("20")
@@ -93,7 +99,7 @@ class WorkspaceGoalSummaryCorrectionIntegrationTest {
         openTargetDetails()
         assertSummary(25)
 
-        composeRule.onNode(hasText("今天") and hasClickAction()).performClick()
+        composeRule.onNodeWithTag("nav-agenda", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("delete-time-$OWNED_ENTRY_ID").performScrollTo().performClick()
         composeRule.waitForIdle()

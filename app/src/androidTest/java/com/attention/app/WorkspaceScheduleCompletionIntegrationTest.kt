@@ -27,6 +27,10 @@ class WorkspaceScheduleCompletionIntegrationTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
 
+    // 被销毁的 Activity 仍可能在收尾时写回「上次打开」：等写入停稳再放行下一条用例。
+    @get:Rule(order = 1)
+    val settingsBarrier = WorkspaceHostSettingsBarrier.quiesceAfterActivity
+
     @Test
     fun completion_toggle_is_available_from_the_agenda_row() {
         openAgenda()
@@ -50,7 +54,10 @@ class WorkspaceScheduleCompletionIntegrationTest {
     }
 
     private fun openAgenda() {
-        composeRule.onNode(hasText("所有日期") and hasClickAction()).performClick()
+        // 「所有日期」现在是日程页里的一个日期范围，不再是底部的顶级入口
+        composeRule.onNode(hasText("日程") and hasClickAction()).performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).performScrollTo().performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithText(SCHEDULE_TITLE).assertExists()
     }
@@ -78,6 +85,8 @@ class WorkspaceScheduleCompletionIntegrationTest {
             } finally {
                 database.close()
             }
+            // #177：未完成引导时第一次启动是全屏引导；这条用例要看的是引导之后的工作区
+            WorkspaceGuideSeed.markCompleted()
         }
     }
 }

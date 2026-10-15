@@ -26,6 +26,10 @@ class WorkspaceAgendaCapacityIntegrationTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
 
+    // 被销毁的 Activity 仍可能在收尾时写回「上次打开」：等写入停稳再放行下一条用例。
+    @get:Rule(order = 1)
+    val settingsBarrier = WorkspaceHostSettingsBarrier.quiesceAfterActivity
+
     @Test
     fun agenda_shows_capacity_per_planning_day_without_combining_all_dates() {
         openAgenda()
@@ -62,7 +66,10 @@ class WorkspaceAgendaCapacityIntegrationTest {
     }
 
     private fun openAgenda() {
-        composeRule.onNode(hasText("所有日期") and hasClickAction()).performClick()
+        // 「所有日期」现在是日程页里的一个日期范围，不再是底部的顶级入口
+        composeRule.onNodeWithTag("nav-agenda", useUnmergedTree = true).performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).performScrollTo().performClick()
         composeRule.waitForIdle()
     }
 

@@ -60,7 +60,9 @@ class AttentionStateReaderTest {
         val initial = reader.state.first()
         assertEquals(180, initial.settings.planningDayBoundaryMinutes)
         assertEquals(1, initial.settings.weekStartDay)
-        assertEquals(LaunchDestination.TODAY, initial.launchDestination)
+        // 没有有效偏好时入口回退到日程，而不是把旧入口名 TODAY 当作默认值
+        assertEquals(LaunchDestination.AGENDA, initial.launchDestination)
+        assertEquals(LaunchDestination.AGENDA, initial.lastOpenedDestination)
         assertTrue(initial.targets.isEmpty())
 
         business.replace(AttentionState(targets = listOf(Target("target", title = "学习"))))

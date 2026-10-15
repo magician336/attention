@@ -13,6 +13,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.attention.domain.LaunchDestination
 import com.attention.domain.PlannerSettings
 import com.attention.domain.StoredSettings
+import com.attention.domain.launchDestinationFromPersistedName
 import java.io.IOException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -23,8 +24,11 @@ data class SettingsSnapshot(
     val planningDayBoundaryMinutes: Int = PlannerSettings.DEFAULT_BOUNDARY_MINUTES,
     val weekStartDay: Int = DEFAULT_WEEK_START_DAY,
     val dailyCapacityMinutes: Int? = null,
-    val launchDestination: LaunchDestination = LaunchDestination.TODAY,
-    val lastOpenedDestination: LaunchDestination = LaunchDestination.TODAY,
+    // 没有有效偏好时，「启动入口」回退到日程入口：旧值 TODAY 语义等价于日程，
+    // 但继续以它为默认会把旧名称持续写回 DataStore。
+    val launchDestination: LaunchDestination = LaunchDestination.AGENDA,
+    // 没有有效历史时，「上次打开」回退到日程入口。
+    val lastOpenedDestination: LaunchDestination = LaunchDestination.AGENDA,
     val onboardingCompleted: Boolean = false,
     val notificationsEnabled: Boolean = true,
 ) {
@@ -162,8 +166,10 @@ private fun Preferences.toSettingsSnapshot(): SettingsSnapshot = SettingsSnapsho
     weekStartDay = get(Keys.WEEK_START_DAY)?.takeIf { it in 1..7 }
         ?: SettingsSnapshot.DEFAULT_WEEK_START_DAY,
     dailyCapacityMinutes = get(Keys.DAILY_CAPACITY_MINUTES)?.takeIf { it > 0 },
-    launchDestination = get(Keys.LAUNCH_DESTINATION).toLaunchDestination(),
-    lastOpenedDestination = get(Keys.LAST_OPENED_DESTINATION).toLaunchDestination(),
+    // 启动入口与「上次打开」的历史都按领域语义读取：旧版本值等价于日程入口，无效历史回退到日程，
+    // 因此新写出的设置不再把旧名称写回去。
+    launchDestination = launchDestinationFromPersistedName(get(Keys.LAUNCH_DESTINATION)),
+    lastOpenedDestination = launchDestinationFromPersistedName(get(Keys.LAST_OPENED_DESTINATION)),
     onboardingCompleted = get(Keys.ONBOARDING_COMPLETED) ?: false,
     notificationsEnabled = get(Keys.NOTIFICATIONS_ENABLED) ?: true,
 )
@@ -178,7 +184,3 @@ private fun MutablePreferences.writeSnapshot(snapshot: SettingsSnapshot) {
     this[Keys.ONBOARDING_COMPLETED] = snapshot.onboardingCompleted
     this[Keys.NOTIFICATIONS_ENABLED] = snapshot.notificationsEnabled
 }
-
-private fun String?.toLaunchDestination(): LaunchDestination = runCatching {
-    this?.let(LaunchDestination::valueOf) ?: LaunchDestination.TODAY
-}.getOrDefault(LaunchDestination.TODAY)

@@ -13,6 +13,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.attention.app.data.RoomAttentionStateRepository
 import com.attention.app.data.room.AttentionDatabase
 import com.attention.app.data.room.RoomBusinessDataRepository
+import com.attention.app.data.settings.SettingsSnapshot
 import com.attention.app.data.settings.createSettingsStore
 import com.attention.domain.AttentionState
 import com.attention.domain.ScheduleEntry
@@ -31,44 +32,34 @@ class WorkspaceCapacityIntegrationTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
 
+    // 被销毁的 Activity 仍可能在收尾时写回「上次打开」：等写入停稳再放行下一条用例。
+    @get:Rule(order = 1)
+    val settingsBarrier = WorkspaceHostSettingsBarrier.quiesceAfterActivity
+
+    /**
+     * 今天工作台的每日容量卡片本次下线（最终形态由 #128/#131 决定），
+     * 因此这条用例钉住的是仍然存在的那一半：合并后的日程页按规划日展示每日容量，
+     * 并且在 Activity 重建后仍然读到同一份设置。
+     */
     @Test
-    fun capacity_rejects_invalid_input_preserves_value_and_clears_across_recreation() {
-        var capacityInput = composeRule.onNodeWithTag("daily-capacity-input", useUnmergedTree = true).performScrollTo()
-        var saveButton = composeRule.onNodeWithTag("daily-capacity-save", useUnmergedTree = true).performScrollTo()
-        var summary = composeRule.onNodeWithTag("daily-capacity-summary", useUnmergedTree = true).performScrollTo()
-
-        capacityInput.performTextReplacement("60")
-        saveButton.performClick()
-        waitForText("已安排 90 / 60 分钟（超载）")
+    fun the_agenda_page_keeps_showing_the_planning_day_capacity_across_recreation() {
+        var summary = composeRule.onNodeWithTag("agenda-capacity-summary", useUnmergedTree = true).performScrollTo()
         summary.assert(hasText("已安排 90 / 60 分钟（超载）", substring = true))
 
         composeRule.activityRule.scenario.recreate()
         composeRule.waitForIdle()
         waitForText("已安排 90 / 60 分钟（超载）")
-        capacityInput = composeRule.onNodeWithTag("daily-capacity-input", useUnmergedTree = true).performScrollTo()
-        saveButton = composeRule.onNodeWithTag("daily-capacity-save", useUnmergedTree = true).performScrollTo()
-        summary = composeRule.onNodeWithTag("daily-capacity-summary", useUnmergedTree = true).performScrollTo()
+        summary = composeRule.onNodeWithTag("agenda-capacity-summary", useUnmergedTree = true).performScrollTo()
         summary.assert(hasText("已安排 90 / 60 分钟（超载）", substring = true))
 
-        listOf("0", "-5", "abc").forEach { invalidInput ->
-            capacityInput.performTextReplacement(invalidInput)
-            saveButton.performClick()
-            waitForText("已安排 90 / 60 分钟（超载）")
-            waitForText("正整数")
-            composeRule.onNodeWithTag("daily-capacity-error", useUnmergedTree = true).assert(hasText("正整数", substring = true))
-            summary.assert(hasText("已安排 90 / 60 分钟（超载）", substring = true))
+        runBlocking {
+            ApplicationProvider.getApplicationContext<android.content.Context>()
+                .createSettingsStore()
+                .setSnapshot(SettingsSnapshot(dailyCapacityMinutes = null, onboardingCompleted = true))
         }
-
-        capacityInput.performTextReplacement("")
-        saveButton.performClick()
-        waitForText("已安排 90 分钟")
-        summary.assert(hasText("已安排 90 分钟", substring = true))
-        summary.assert(hasText("未设置", substring = true))
-
-        composeRule.activityRule.scenario.recreate()
         composeRule.waitForIdle()
-        waitForText("已安排 90 分钟")
-        composeRule.onNodeWithTag("daily-capacity-summary", useUnmergedTree = true)
+        waitForText("已安排 90 分钟（每日容量未设置）")
+        composeRule.onNodeWithTag("agenda-capacity-summary", useUnmergedTree = true)
             .performScrollTo()
             .assert(hasText("已安排 90 分钟", substring = true))
             .assert(hasText("未设置", substring = true))
@@ -99,6 +90,10 @@ class WorkspaceCapacityIntegrationTest {
                         state.copy(
                             schedules = listOf(ScheduleEntry(SCHEDULE_ID, date, "UI-容量", estimatedMinutes = 90)),
                         ),
+                    )
+                    // replace 会写入这份状态里的规划设置，因此每日容量必须在它之后写。
+                    context.createSettingsStore().setSnapshot(
+                        SettingsSnapshot(dailyCapacityMinutes = 60, onboardingCompleted = true),
                     )
                 }
             } finally {
