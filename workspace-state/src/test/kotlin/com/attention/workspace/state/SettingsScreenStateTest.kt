@@ -70,8 +70,8 @@ class SettingsScreenStateTest {
     }
 
     @Test
-    fun last_opened_falls_back_to_today_when_there_is_no_page_to_restore() {
-        // 「上次打开」自身指向「上次打开」时回落到今天工作台
+    fun last_opened_falls_back_to_the_schedule_when_there_is_no_page_to_restore() {
+        // 「上次打开」自身指向「上次打开」时回落到日程入口
         val screenState = settingsScreenState(
             state = AttentionState(
                 launchDestination = LaunchDestination.LAST_OPENED,
@@ -81,7 +81,7 @@ class SettingsScreenStateTest {
             zone = zone,
         )
 
-        assertEquals(LaunchDestination.TODAY, screenState.resolvedDestination)
+        assertEquals(LaunchDestination.AGENDA, screenState.resolvedDestination)
     }
 
     @Test

@@ -293,6 +293,7 @@ class RoomBackupIntegrationTest {
             milestones = listOf(com.attention.domain.Milestone("current-milestone", "goal_period", "current", 20L, 200L)),
             experience = 45L,
             activeTimer = ActiveTimer(target.id, 300L, paused = true, lastPlanningDate = "2026-10-08"),
+            lastOpenedDestination = LaunchDestination.AGENDA,
         )
         val incoming = AttentionBackupCodec.encode(
             AttentionState(
@@ -332,7 +333,7 @@ class RoomBackupIntegrationTest {
         val backupStore = InMemoryImportBackupStore()
         val reminders = FailingReminderCoordinator()
         val repository = RoomAttentionStateRepository(RoomBusinessDataRepository(database), settingsStore(), backupStore, reminders)
-        val current = AttentionState(settings = StoredSettings(planningDayBoundaryMinutes = 30), targets = listOf(Target("reminder-current", title = "当前")), schedules = listOf(ScheduleEntry("current-schedule", "2026-10-08", "当前日程")))
+        val current = AttentionState(settings = StoredSettings(planningDayBoundaryMinutes = 30), targets = listOf(Target("reminder-current", title = "当前")), schedules = listOf(ScheduleEntry("current-schedule", "2026-10-08", "当前日程")), lastOpenedDestination = LaunchDestination.AGENDA)
         repository.replace(current)
         reminders.failNext = true
         val incoming = AttentionBackupCodec.encode(AttentionState(settings = StoredSettings(planningDayBoundaryMinutes = 120), targets = listOf(Target("reminder-incoming", title = "导入")), schedules = listOf(ScheduleEntry("incoming-schedule", "2026-10-09", "导入日程"))))
@@ -382,6 +383,7 @@ class RoomBackupIntegrationTest {
         val current = AttentionState(
             targets = listOf(currentTarget),
             activeTimer = ActiveTimer(currentTarget.id, 100L, lastPlanningDate = "2026-10-08"),
+            lastOpenedDestination = LaunchDestination.AGENDA,
         )
         val archivedTarget = Target("archived-target", title = "归档目标", archived = true)
         val incoming = AttentionBackupCodec.encode(

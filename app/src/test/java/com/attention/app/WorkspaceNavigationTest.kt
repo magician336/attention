@@ -25,8 +25,25 @@ class WorkspaceNavigationTest {
             resolveLaunchDestination(LaunchDestination.LAST_OPENED, LaunchDestination.STATISTICS),
         )
         assertEquals(
-            LaunchDestination.TODAY,
+            LaunchDestination.AGENDA,
             resolveLaunchDestination(LaunchDestination.LAST_OPENED, LaunchDestination.LAST_OPENED),
+        )
+    }
+
+    @Test
+    fun the_schedule_entry_opens_the_current_planning_day_and_keeps_the_bottom_bar_unchanged() {
+        // 「日程」入口落在底部导航现有的「今天」项上，因此导航与页面外观不变
+        assertEquals(
+            LaunchDestination.AGENDA,
+            initialLaunchDestination(false, LaunchDestination.AGENDA, LaunchDestination.TARGETS),
+        )
+        assertEquals(
+            LaunchDestination.TODAY,
+            selectedNavigationDestination(LaunchDestination.AGENDA),
+        )
+        assertEquals(
+            LaunchDestination.ALL_DATES,
+            selectedNavigationDestination(LaunchDestination.ALL_DATES),
         )
     }
 
