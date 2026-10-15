@@ -21,7 +21,23 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 
-/** Stable, versioned JSON protocol. Domain objects are never serialized directly for backups. */
+/**
+ * 稳定、带版本的 JSON 协议文档（version 1）。
+ *
+ * 陈述实情：协议字段**直接承载领域类型本身**。`StoredSettings`、`Target`、`TimeEntry`、
+ * `ScheduleEntry` 等都是 `:domain` 的数据类，`@Serializable` 直接长在这些类型上，
+ * 备份格式里不存在一层独立于领域的 DTO 映射。曾经这里写着「领域对象从不直接参与备份序列化」，
+ * 与代码相反，并因此把一次反序列化缺陷的排查带偏——去找一层并不存在的映射层。
+ *
+ * 协议的顶层字段之间只通过字符串外键（`targetId`、`scheduleEntryId` 等）互相引用，
+ * 没有任何顶层领域类型直接嵌套另一个，所以每个集合都是一个扁平行列。协议内部唯一的
+ * 嵌套是活动计时器里的计时片段列表（[com.attention.domain.TimerSegment]）——它跟着计时器
+ * 一起序列化，因此同样属于协议承载的内容。
+ *
+ * 已知抽象错位：协议把领域类型当作自己的字段类型，而不是拥有自己形状的备份 DTO。
+ * 迁移记录在 #202。迁移之前，「协议到底承载了哪些领域类型」由 [BackupProtocolPayloads]
+ * 这份显式清单陈述，并由单元测试保证清单与实际字段始终一致。
+ */
 @Serializable
 data class AttentionBackup(
     val version: Int = CURRENT_VERSION,
