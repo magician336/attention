@@ -64,16 +64,12 @@ import java.time.LocalDate
  *
  * 提醒权限不在这里申请：页面只发出 [AgendaActions.requestReminderPermission] intent，
  * 权限检查与申请由组合根 adapter 完成（ADR-0005 第 4 节「Android adapter 归属组合根」）。
- *
- * [onboarding] 是组合根注入的引导内容插槽：引导卡片属于它自己的页面 module，
- * 日程页因此不认识引导的类型与状态，只决定是否渲染它。
  */
 @Composable
 internal fun AgendaScreen(
     state: AgendaScreenState,
     actions: AgendaActions,
     openScheduleId: String? = null,
-    onboarding: (@Composable () -> Unit)? = null,
 ) {
     val tokens = attentionTokens()
     val today = state.planningDate.toString()
@@ -124,7 +120,6 @@ internal fun AgendaScreen(
                 }
             }
         }
-        onboarding?.invoke()
         // 日期范围切换：今天、明天与所有日期是同一页上的三个范围，不是三个顶级入口。
         // 选中态用填充色之外的图标与语义表达，不依赖颜色单独传达。
         if (state.ranges.isNotEmpty()) {

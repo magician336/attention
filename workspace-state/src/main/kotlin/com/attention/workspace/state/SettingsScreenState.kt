@@ -18,6 +18,17 @@ data class LaunchDestinationOption(
     val selected: Boolean,
 )
 
+/** 周起始日的名字。名字取自 `CONTEXT.md` 已有词汇，不新造领域词。 */
+fun weekDayLabel(day: Int): String = when (day) {
+    1 -> "周一"
+    2 -> "周二"
+    3 -> "周三"
+    4 -> "周四"
+    5 -> "周五"
+    6 -> "周六"
+    else -> "周日"
+}
+
 /**
  * 设置页上的一个周起始日选项。标签沿用 [weekDayLabel]，页面只负责渲染与发出选择 intent。
  */

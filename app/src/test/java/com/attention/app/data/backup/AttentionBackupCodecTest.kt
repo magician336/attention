@@ -18,8 +18,10 @@ import com.attention.domain.TargetMove
 import com.attention.domain.TimeEntry
 import com.attention.domain.TimeEntrySource
 import com.attention.domain.TimerSegment
+import com.attention.domain.asAgendaEntry
 import com.attention.domain.capacitySummary
 import com.attention.domain.recalculateExperience
+import com.attention.domain.resolveLaunchDestination
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -108,6 +110,32 @@ class AttentionBackupCodecTest {
     fun preview_reports_missing_settings_field() {
         val encoded = """{"version":1,"targets":[],"goalStages":[],"timeEntries":[],"schedules":[],"recurrenceRules":[],"migrations":[],"futureGoalRules":[],"periodSnapshots":[],"targetMoves":[],"milestones":[],"experience":0,"activeTimer":null,"onboardingCompleted":false,"launchDestination":"TODAY","lastOpenedDestination":"TODAY","notificationsEnabled":true}"""
         assertFalse(AttentionBackupCodec.preview(encoded).hasSettings)
+    }
+
+    /**
+     * 旧版本备份 JSON 里的入口名称必须仍然解码得出来，并且等价于「日程」。
+     *
+     * [LaunchDestination] 是按名称序列化进备份的（kotlinx.serialization 的枚举按名编码，
+     * `ignoreUnknownKeys` 只放宽键名、不放宽枚举值）。因此「读不到就回退日程」这条性质
+     * 必须在备份路径上也成立：删除旧入口枚举值之前，这里就是拦住那一步的回归网。
+     */
+    @Test
+    fun legacy_persisted_entry_names_in_a_backup_import_as_the_schedule_entry() {
+        val legacy = """{"version":1,"settings":{},"targets":[],"goalStages":[],"timeEntries":[],"schedules":[],"recurrenceRules":[],"migrations":[],"futureGoalRules":[],"periodSnapshots":[],"targetMoves":[],"milestones":[],"experience":0,"activeTimer":null,"onboardingCompleted":true,"launchDestination":"TODAY","lastOpenedDestination":"ALL_DATES","notificationsEnabled":true}"""
+
+        val restored = AttentionBackupCodec.decode(legacy)
+
+        // 旧入口值仍然等价于日程入口：导入不会崩，也不会静默变成别的页面
+        assertEquals(LaunchDestination.AGENDA, restored.launchDestination.asAgendaEntry())
+        assertEquals(LaunchDestination.AGENDA, restored.lastOpenedDestination.asAgendaEntry())
+        // 读成「上次打开」时按同一套规则落回日程
+        assertEquals(
+            LaunchDestination.AGENDA,
+            resolveLaunchDestination(
+                LaunchDestination.LAST_OPENED,
+                restored.lastOpenedDestination,
+            ),
+        )
     }
 
     @Test
