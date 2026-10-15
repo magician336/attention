@@ -186,7 +186,7 @@ class UnknownEnumValueToleranceTest {
      */
     @Test
     fun the_backup_path_and_the_database_path_agree_on_an_unrecognized_name() {
-        listOf("SOME_FUTURE_PAGE", "SPRINTLY", "FROZEN_AT_MIDNIGHT", "", "daily").forEach { name ->
+        everyNameBothSidesMightSee().forEach { name ->
             assertEquals(
                 "启动入口：备份路径与数据库/设置路径对 \"$name\" 的结论不一致",
                 LaunchDestinationSerializer.fromPersistedName(name).name,
@@ -231,4 +231,28 @@ class UnknownEnumValueToleranceTest {
             )
         }
     }
+}
+
+/**
+ * 两侧可能见到的全部名字：**协议侧与领域侧所有枚举常量的并集**，外加几个谁都不认识的样本。
+ *
+ * 用并集而不是几个固定的陌生名字，是因为固定名单只试得到「改默认值」这一种偏离。试到全部常量名
+ * 之后，任何「某个名字在一侧认得、另一侧不认得」的情形都会暴露成结论不一致——而那正是「单侧
+ * 新增」「单侧删除」「单侧改名」的后果。
+ *
+ * 不过这三类偏离今天多半**先被编译器拦住**：协议侧与领域侧都有对这几个枚举的穷举 `when`，改一个
+ * 常量名就要同步所有分支，编译不过。对照测试是第二道网，编译器是第一道。这里列全常量名是为了
+ * 万一将来某个分支改成非穷举、或者默认值以外的行为出现分叉时，这一层仍然兜得住。
+ */
+private fun everyNameBothSidesMightSee(): Set<String> = buildSet {
+    addAll(LaunchDestination.entries.map { it.name })
+    addAll(BackupLaunchDestination.entries.map { it.name })
+    addAll(GoalCadence.entries.map { it.name })
+    addAll(BackupGoalCadence.entries.map { it.name })
+    addAll(TimeEntrySource.entries.map { it.name })
+    addAll(BackupTimeEntrySource.entries.map { it.name })
+    addAll(ScheduleFrequency.entries.map { it.name })
+    addAll(BackupScheduleFrequency.entries.map { it.name })
+    // 谁都不认识的样本：空串、纯空白、大小写不符、明显是未来某个版本的名字
+    addAll(listOf("", " ", "daily", "SOME_FUTURE_PAGE", "SPRINTLY", "FROZEN_AT_MIDNIGHT"))
 }

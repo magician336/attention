@@ -37,7 +37,7 @@ date: 2026-10-14
 version 1 备份文档由 `app` 的备份协议包自带模型承载，领域类型一概不参与：
 
 - `BackupProtocolModels` 是文档的持久化载体，字段集合必须与对应领域类型一一对应；
-- `BackupProtocolEnums` 是文档里那五个按名出现的枚举，连同「名字认不出来时读成什么」这条规则；
+- `BackupProtocolEnums` 是文档里那四个按名出现的枚举，连同「名字认不出来时读成什么」这条规则（它们在文档里一共占五个字段：启动入口两处，加上节奏、来源、频率各一处）；
 - `BackupProtocolPayloads` 是承载点清单，登记每个协议模型在文档里的位置；
 - `AttentionBackup` 用协议模型组装文档，codec 只在协议模型上编解码。
 
