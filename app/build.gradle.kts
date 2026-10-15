@@ -60,6 +60,9 @@ dependencies {
     debugImplementation(libs.compose.ui.tooling)
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)
+    // 领域类型不再为备份而序列化，字段对照改用 Kotlin 反射读构造参数；
+    // 顺序与「有没有默认值」这两件事只有反射拿得到，序列化描述符已经交回给协议侧。
+    testImplementation(kotlin("reflect"))
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.espresso.core)
