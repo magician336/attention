@@ -1,13 +1,22 @@
 package com.attention.app.agenda
 
 import androidx.activity.compose.setContent
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
@@ -33,6 +42,7 @@ import com.attention.workspace.state.AgendaTimeRecord
 import java.time.LocalDate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -276,10 +286,117 @@ class AgendaScreenTest {
         val intents = RecordingAgendaActions()
         mount(planningDayScreenState(planningDay, activeTimer = runningTimer()), intents)
 
-        composeRule.onNodeWithText("正在计时：写周报 · 3 分钟").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("agenda-running-timer-stop", useUnmergedTree = true).performScrollTo().performClick()
 
         assertEquals(1, intents.stoppedTimers)
+    }
+
+    @Test
+    fun the_running_timer_is_pinned_above_the_timeline() {
+        // 正在计时的条目固定在时间轴顶部：它排在日期筛选与时间轴之前，用户不必先滚动去找。
+        mount(planningDayScreenState(planningDay, activeTimer = runningTimer()))
+
+        val tags = orderedTestTags()
+        val timerIndex = tags.indexOf("agenda-running-timer")
+        val timelineIndex = tags.indexOf("agenda-schedule-row-e2")
+        val filterIndex = tags.indexOf("agenda-date-menu")
+
+        assertTrue("运行中的计时必须渲染：" + tags, timerIndex >= 0)
+        assertTrue("时间轴条目必须渲染：" + tags, timelineIndex >= 0)
+        assertTrue("时间轴筛选必须在：" + tags, filterIndex >= 0)
+        assertTrue("计时应固定在时间轴顶部，实际顺序：" + tags, timerIndex < timelineIndex)
+        assertTrue("计时应固定在时间轴顶部，实际顺序：" + tags, timerIndex < filterIndex)
+    }
+
+    @Test
+    fun a_running_timer_shows_elapsed_status_and_three_controls() {
+        // 运行中：已投入时长、颜色之外的状态语义，以及暂停 / 结束并保存两个主控制。
+        val intents = RecordingAgendaActions()
+        mount(planningDayScreenState(planningDay, activeTimer = runningTimer()), intents)
+
+        composeRule.onNodeWithTag("agenda-running-timer-elapsed", useUnmergedTree = true)
+            .performScrollTo().assert(hasText("已投入 3 分钟"))
+        // 状态不只靠锈橙色：图标与文字都说出「计时中」。
+        composeRule.onNodeWithTag("agenda-running-timer-status", useUnmergedTree = true)
+            .performScrollTo().assert(hasText("计时中"))
+        node("计时中").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("计时中").assertExists()
+        node("已暂停").assertDoesNotExist()
+
+        composeRule.onNodeWithTag("agenda-running-timer-pause", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-running-timer-stop", useUnmergedTree = true).performScrollTo().performClick()
+
+        assertEquals(1, intents.pausedTimers)
+        assertEquals(1, intents.stoppedTimers)
+    }
+
+    @Test
+    fun the_running_timer_carries_a_brand_emphasis_chip_that_no_schedule_row_has() {
+        // 锈橙强调是一个只属于运行中计时的强调标记：色块上再挂状态图标语义，
+        // 日程条目行不带它，因此「这一条醒着」不会被读成一整页都醒着。
+        mount(planningDayScreenState(planningDay, activeTimer = runningTimer()))
+
+        composeRule.onNodeWithTag("agenda-running-timer-tint", useUnmergedTree = true)
+            .assertExists()
+            .assert(hasContentDescription("计时中"))
+        composeRule.onNodeWithTag("agenda-running-timer", useUnmergedTree = true)
+            .assert(hasAnyDescendant(hasTestTag("agenda-running-timer-tint")))
+        // 整页只有计时卡带这个强调标记，日程条目行不带。
+        val emphasisMarks = composeRule.onAllNodesWithTag("agenda-running-timer-tint", useUnmergedTree = true)
+            .fetchSemanticsNodes()
+        assertEquals("计时强调标记只能出现在运行中的计时上", 1, emphasisMarks.size)
+    }
+
+    @Test
+    fun a_paused_timer_says_it_is_unsaved_and_offers_resume_or_end() {
+        // 暂停不是保存：卡片必须说清「尚未保存」，并把恢复与结束并保存摆出来。
+        val intents = RecordingAgendaActions()
+        mount(planningDayScreenState(planningDay, activeTimer = pausedTimer()), intents)
+
+        composeRule.onNodeWithTag("agenda-running-timer-status", useUnmergedTree = true)
+            .performScrollTo().assert(hasText("已暂停"))
+        composeRule.onNodeWithContentDescription("已暂停").assertExists()
+        val hint = node("已投入的 3 分钟尚未保存：恢复继续计时，或结束并保存后计入实际投入。", substring = false)
+        hint.assertIsDisplayed()
+
+        composeRule.onNodeWithTag("agenda-running-timer-resume", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-running-timer-stop", useUnmergedTree = true).performScrollTo().performClick()
+
+        assertEquals(1, intents.resumedTimers)
+        assertEquals(1, intents.stoppedTimers)
+        composeRule.onNodeWithTag("agenda-running-timer-pause", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun the_more_menu_keeps_the_secondary_timer_actions_off_the_first_screen() {
+        // 低频动作收进更多菜单：切换目标与从此刻继续都不占首屏。
+        val intents = RecordingAgendaActions()
+        mount(planningDayScreenState(planningDay, activeTimer = runningTimer()), intents)
+
+        composeRule.onNodeWithTag("agenda-running-timer-more", useUnmergedTree = true).performScrollTo()
+        composeRule.onNodeWithTag("agenda-running-timer-recover", useUnmergedTree = true).assertDoesNotExist()
+        composeRule.onNodeWithTag("agenda-running-timer-switch-t1", useUnmergedTree = true).assertDoesNotExist()
+
+        composeRule.onNodeWithTag("agenda-running-timer-more", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-running-timer-recover", useUnmergedTree = true).performClick()
+        composeRule.onNodeWithTag("agenda-running-timer-more", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-running-timer-switch-t1", useUnmergedTree = true).performClick()
+        composeRule.onNodeWithTag("agenda-running-timer-more", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-running-timer-switch-unowned", useUnmergedTree = true).performClick()
+
+        assertEquals(listOf("recover"), intents.dataIntents)
+        assertEquals(listOf("t1", "unowned"), intents.switchedTimerTargets)
+    }
+
+    @Test
+    fun the_more_menu_marks_the_current_timer_target_in_words() {
+        // 当前目标同样用文字标出，不靠高亮颜色单独表达。
+        mount(planningDayScreenState(planningDay, activeTimer = runningTimer()))
+
+        composeRule.onNodeWithTag("agenda-running-timer-more", useUnmergedTree = true).performScrollTo().performClick()
+
+        composeRule.onNodeWithTag("agenda-running-timer-switch-t1", useUnmergedTree = true)
+            .assert(hasText("切换到「工作」（当前）"))
     }
 
     @Test
@@ -302,6 +419,20 @@ class AgendaScreenTest {
     /** 日程页是可滚动长页，断言与点击前先滚到目标节点。 */
     private fun node(text: String, substring: Boolean = false) =
         composeRule.onNodeWithText(text, substring = substring).performScrollTo()
+
+    /**
+     * 语义树里从上到下出现的 testTag 顺序。页面是纵向滚动的，用顺序断言「置顶」
+     * 才不受当前滚动位置与屏幕高度影响。
+     */
+    private fun orderedTestTags(): List<String> {
+        val tags = mutableListOf<String>()
+        fun walk(node: SemanticsNode) {
+            node.config.getOrNull(SemanticsProperties.TestTag)?.let(tags::add)
+            node.children.forEach(::walk)
+        }
+        walk(composeRule.onRoot(useUnmergedTree = true).fetchSemanticsNode())
+        return tags
+    }
 
     private val planningDay: LocalDate = LocalDate.of(2026, 3, 5)
 
@@ -412,8 +543,23 @@ class AgendaScreenTest {
         recordedMinutesLabel = if (timeRecords.isEmpty()) "" else "本规划日已记录：30 分钟",
     )
 
-    /** 运行中的计时：紧凑计时条只需要目标名与已经投入的分钟数。 */
-    private fun runningTimer() = AgendaActiveTimer(targetLabel = "写周报", paused = false, elapsedMinutes = 3)
+    /** 运行中的计时：目标名、已经投入的分钟数与状态文字都由投影给出。 */
+    private fun runningTimer() = AgendaActiveTimer(
+        targetLabel = "写周报",
+        targetId = "t1",
+        paused = false,
+        elapsedMinutes = 3,
+        elapsedLabel = "已投入 3 分钟",
+        statusLabel = "计时中",
+        pendingHintLabel = null,
+    )
+
+    /** 暂停中的计时：投影已经把「尚未保存」与下一步写成一句话。 */
+    private fun pausedTimer() = runningTimer().copy(
+        paused = true,
+        statusLabel = "已暂停",
+        pendingHintLabel = "已投入的 3 分钟尚未保存：恢复继续计时，或结束并保存后计入实际投入。",
+    )
 
     /** 一条手动记的实际投入。 */
     private fun record() = AgendaTimeRecord(
@@ -464,6 +610,9 @@ class AgendaScreenTest {
         val deletedRecords = mutableListOf<String>()
         var stoppedTimers = 0
         var permissionRequests = 0
+        var pausedTimers = 0
+        var resumedTimers = 0
+        val switchedTimerTargets = mutableListOf<String>()
 
         override fun selectPlanningDate(date: LocalDate?) {
             selectedDates += date
@@ -511,6 +660,22 @@ class AgendaScreenTest {
 
         override fun stopRunningTimer() {
             stoppedTimers++
+        }
+
+        override fun pauseRunningTimer() {
+            pausedTimers++
+        }
+
+        override fun resumeRunningTimer() {
+            resumedTimers++
+        }
+
+        override fun recoverRunningTimerFromNow() {
+            dataIntents += "recover"
+        }
+
+        override fun switchRunningTimerTarget(targetId: String?) {
+            switchedTimerTargets += targetId ?: "unowned"
         }
 
         override fun editTime(entryId: String, minutes: Int, targetId: String?, note: String) {

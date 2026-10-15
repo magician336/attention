@@ -1,5 +1,6 @@
 package com.attention.app.agenda
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,8 +16,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.EventNote
+import androidx.compose.material.icons.filled.PauseCircle
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -99,24 +103,99 @@ internal fun AgendaScreen(
     ) {
         Text(state.headingLabel, style = tokens.typography.display, modifier = Modifier.testTag("agenda-filter"))
         Text("日程条目可带预计时长；它不会自动变成实际投入。")
-        // 运行中的计时留在日程页：计时卡下线之后，用户仍然必须看得见并停得掉正在跑的计时。
+        // 运行中的计时固定在时间轴顶部：它排在日期筛选与时间轴之前，用户不必先滚动去找。
+        // 计时卡下线之后，用户仍然必须看得见并停得掉正在跑的计时。
         state.activeTimer?.let { timer ->
-            Card(Modifier.fillMaxWidth().testTag("agenda-running-timer"), shape = RoundedCornerShape(tokens.radius.medium)) {
-                Row(
+            var timerMoreExpanded by remember(timer.targetId) { mutableStateOf(false) }
+            val rust = tokens.brand.timingInProgress
+            Card(
+                modifier = Modifier.fillMaxWidth().testTag("agenda-running-timer"),
+                shape = RoundedCornerShape(tokens.radius.medium),
+                colors = CardDefaults.cardColors(containerColor = rust.container),
+            ) {
+                Column(
                     Modifier.padding(tokens.spacing.medium),
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            "正在计时：${timer.targetLabel} · ${timer.elapsedMinutes} 分钟" +
-                                if (timer.paused) "（已暂停）" else "",
-                            style = tokens.typography.body,
-                        )
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        // 状态不只靠颜色：色块里的图标与旁边的文字都说出计时中 / 已暂停。
+                        Box(
+                            Modifier
+                                .background(rust.container, RoundedCornerShape(tokens.radius.small))
+                                .testTag("agenda-running-timer-tint")
+                                .padding(tokens.spacing.small),
+                        ) {
+                            Icon(
+                                imageVector = if (timer.paused) Icons.Filled.PauseCircle else Icons.Filled.Timer,
+                                // 图标本身也带语义：读屏用户不靠颜色也知道现在是暂停还是运行。
+                                contentDescription = timer.statusLabel,
+                                tint = rust.onContainer,
+                                modifier = Modifier.size(tokens.spacing.medium),
+                            )
+                        }
+                        Column(Modifier.weight(1f)) {
+                            // 「正在计时：<目标>」是既有宿主验收用例与读屏都认的文案，保持原样。
+                            Text("正在计时：${timer.targetLabel}", style = tokens.typography.title)
+                            Text(timer.statusLabel, modifier = Modifier.testTag("agenda-running-timer-status"))
+                        }
                     }
-                    AttentionTextButton(
-                        onClick = actions::stopRunningTimer,
-                        modifier = Modifier.testTag("agenda-running-timer-stop"),
-                    ) { Text("停止计时") }
+                    Text(timer.elapsedLabel, modifier = Modifier.testTag("agenda-running-timer-elapsed"))
+                    // 暂停不等于已保存：这一行告诉用户下一步该走恢复还是结束并保存。
+                    timer.pendingHintLabel?.let { hint ->
+                        Text(hint, modifier = Modifier.testTag("agenda-running-timer-hint"))
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (timer.paused) {
+                            AttentionButton(
+                                onClick = actions::resumeRunningTimer,
+                                modifier = Modifier.testTag("agenda-running-timer-resume"),
+                            ) { Text("恢复计时") }
+                        } else {
+                            AttentionOutlinedButton(
+                                onClick = actions::pauseRunningTimer,
+                                modifier = Modifier.testTag("agenda-running-timer-pause"),
+                            ) { Text("暂停") }
+                        }
+                        AttentionOutlinedButton(
+                            onClick = actions::stopRunningTimer,
+                            modifier = Modifier.testTag("agenda-running-timer-stop"),
+                        ) { Text("结束并保存") }
+                        // 次级操作收在这里：首屏只留暂停 / 恢复与结束并保存。
+                        Box {
+                            AttentionTextButton(
+                                onClick = { timerMoreExpanded = true },
+                                modifier = Modifier.testTag("agenda-running-timer-more"),
+                            ) { Text("更多") }
+                            DropdownMenu(
+                                expanded = timerMoreExpanded,
+                                onDismissRequest = { timerMoreExpanded = false },
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("从此刻继续") },
+                                    onClick = { actions.recoverRunningTimerFromNow(); timerMoreExpanded = false },
+                                    modifier = Modifier.testTag("agenda-running-timer-recover"),
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("切换到「未归属活动」") },
+                                    onClick = { actions.switchRunningTimerTarget(null); timerMoreExpanded = false },
+                                    modifier = Modifier.testTag("agenda-running-timer-switch-unowned"),
+                                )
+                                // 当前目标同样用文字标出，不靠高亮颜色单独表达。
+                                state.targets.forEach { target ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                "切换到「${target.title}」" +
+                                                    if (target.targetId == timer.targetId) "（当前）" else "",
+                                            )
+                                        },
+                                        onClick = { actions.switchRunningTimerTarget(target.targetId); timerMoreExpanded = false },
+                                        modifier = Modifier.testTag("agenda-running-timer-switch-${target.targetId}"),
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -406,7 +485,10 @@ private fun AgendaScheduleRowCard(
 ) {
     val tokens = attentionTokens()
     val entry: ScheduleEntry = row.entry
-    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
+    Card(
+        Modifier.fillMaxWidth().testTag("agenda-schedule-row-${entry.id}"),
+        shape = RoundedCornerShape(tokens.radius.medium),
+    ) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(row.title, style = tokens.typography.body)

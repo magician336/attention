@@ -79,12 +79,24 @@ data class AgendaRangeOption(
 /**
  * 运行中的计时。计时卡下线之后，运行中的计时仍然必须在日程页看得见并能停止，
  * 否则用户会失去停掉一次计时的唯一入口。
+ *
+ * 状态不只靠颜色表达：锈橙色由页面用品牌语义色画出，[statusLabel] 与页面上的图标
+ * 一起把「计时中 / 已暂停」讲清楚；[pendingHintLabel] 在暂停时告诉用户这还没保存，
+ * 以及下一步该走恢复还是结束并保存。
  */
 data class AgendaActiveTimer(
     val targetLabel: String,
+    /** 当前计时目标；「切换计时目标」菜单用它标出当前选中的那一个，null 是未归属活动。 */
+    val targetId: String?,
     val paused: Boolean,
     /** 到注入时刻为止的整分钟实际投入；不足 1 分钟为 0。 */
     val elapsedMinutes: Int,
+    /** 已投入时长的可读文本。 */
+    val elapsedLabel: String,
+    /** 计时中 / 已暂停：颜色之外的第二重状态语义。 */
+    val statusLabel: String,
+    /** 暂停时才有的下一步提示；运行中为 null。 */
+    val pendingHintLabel: String?,
 )
 
 /**
@@ -222,10 +234,20 @@ fun agendaScreenState(
             "新增日程"
         },
         activeTimer = state.activeTimer?.let { timer ->
+            val elapsedMinutes = (timer.elapsedMillis(now) / 60_000L).toInt()
             AgendaActiveTimer(
                 targetLabel = state.timerTargetLabel(timer.targetId),
+                targetId = timer.targetId,
                 paused = timer.paused,
-                elapsedMinutes = (timer.elapsedMillis(now) / 60_000L).toInt(),
+                elapsedMinutes = elapsedMinutes,
+                elapsedLabel = "已投入 $elapsedMinutes 分钟",
+                statusLabel = if (timer.paused) "已暂停" else "计时中",
+                // 暂停不是保存：这行提示必须同时说清「还没记入」与「下一步做什么」。
+                pendingHintLabel = if (timer.paused) {
+                    "已投入的 $elapsedMinutes 分钟尚未保存：恢复继续计时，或结束并保存后计入实际投入。"
+                } else {
+                    null
+                },
             )
         },
         timeRecords = if (selectedDate == null) {
