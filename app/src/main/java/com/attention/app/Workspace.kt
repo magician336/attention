@@ -482,6 +482,14 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         mutableStateOf(resolveInitialLaunchDestination(hasExternalScheduleRequest, state.launchDestination, state.lastOpenedDestination))
     }
     var destinationChosen by remember { mutableStateOf(hasExternalScheduleRequest) }
+    // 启动落点是否已经落到一个「真实」的取值上，而不是仍停在暂定值上。
+    //
+    // [destination] 的初值是由**空的默认状态**解析出来的暂定值；状态真的读上来之后，
+    // 下一个 LaunchedEffect 才把它纠正成用户保存的入口。这个纠正与「上次打开」的写回
+    // 发生在同一次重组里：写回那条 effect 捕获到的是纠正之前的暂定值，于是会把暂定值
+    // 当成用户真正停留的页面写回去，把「上次打开」永久改成日程（#179 设备实跑间歇失败）。
+    // 因此写回额外要求落点已经确定：要么来自外部请求，要么已被纠正，要么用户自己点过。
+    var destinationSettled by remember { mutableStateOf(hasExternalScheduleRequest) }
     var settingsOpen by remember { mutableStateOf(false) }
     // 引导是否被用户重新打开：设置页的「重新打开引导」把它举起来。
     // 自动出现的那一次由持久化的引导状态决定，不由这个变量决定。
@@ -630,19 +638,22 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     androidx.compose.runtime.LaunchedEffect(state.launchDestination, state.lastOpenedDestination) {
         if (!destinationChosen && !hasExternalScheduleRequest) {
             destination = resolveLaunchDestination(state.launchDestination, state.lastOpenedDestination)
+            // 落点此刻才是用户保存的那个；在这之前写回去的都是暂定值。
+            destinationSettled = true
         }
     }
     androidx.compose.runtime.LaunchedEffect(Unit) {
         context.createSettingsStore().settings.first()
         persistedSettingsLoaded = true
     }
-    // 「上次打开」写回之前必须等 ViewModel 真的把持久化状态读上来：[state] 在那之前是一份空的
-    // 默认值，据此算出来的启动落点只是暂定值。把它抢先写回去会覆盖用户上次真正停留的页面，
-    // 于是「启动入口=上次打开」的用户会被拽到默认的日程页，且这次覆盖是持久的（#174 实跑间歇失败）。
+    // 「上次打开」写回之前必须等 ViewModel 真的把持久化状态读上来（[state] 在那之前是一份空的
+    // 默认值），并且必须等启动落点已经确定：落点的初值也是由那份空默认值解析出来的暂定值，
+    // 与状态纠正发生在同一次重组里，写回那条 effect 捕获到的正是纠正之前的暂定值。
+    // 把它抢先写回去会永久覆盖用户上次真正停留的页面（#174、#179 设备实跑间歇失败）。
     val stateLoaded by viewModel.stateLoaded.collectAsStateWithLifecycle()
-    androidx.compose.runtime.LaunchedEffect(destination, settingsOpen, persistedSettingsLoaded, stateLoaded) {
+    androidx.compose.runtime.LaunchedEffect(destination, settingsOpen, persistedSettingsLoaded, stateLoaded, destinationSettled) {
         // 底部导航只有三项，因此「上次打开」写入的永远是它自己：旧入口值先按领域兼容映射落成日程。
-        if (shouldPersistLastOpened(persistedSettingsLoaded, settingsOpen, stateLoaded)) {
+        if (shouldPersistLastOpened(persistedSettingsLoaded, settingsOpen, stateLoaded, destinationSettled)) {
             viewModel.saveLastOpened(destination.asAgendaEntry())
         }
     }
@@ -866,6 +877,8 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                             // 从设置页切回主工作区：先离开设置，再换顶级页面。
                             settingsOpen = false
                             destinationChosen = true
+                            // 用户亲手点的落点一定是真实的：这一次的写回不必再等状态纠正。
+                            destinationSettled = true
                             destination = item
                         },
                         modifier = Modifier.testTag("nav-${item.name.lowercase()}"),
@@ -1102,17 +1115,21 @@ private const val REMINDER_PERMISSION_REQUEST_CODE = 4101
 /**
  * 「上次打开」能不能写回去。
  *
- * 三个条件缺一不可：设置确实读到了（[settingsLoaded]）、当前不在设置页（[settingsOpen] 为假，
- * 设置页不是顶级工作区）、以及**领域状态已经真的加载**（[stateLoaded]）。
+ * 四个条件缺一不可：设置确实读到了（[settingsLoaded]）、当前不在设置页（[settingsOpen] 为假，
+ * 设置页不是顶级工作区）、**领域状态已经真的加载**（[stateLoaded]），以及**启动落点已经确定**
+ * （[destinationSettled]）。
  *
- * 最后一个条件是必须的：[state] 在加载完成之前是一份空的默认值，据此解析出来的启动落点只是暂定值，
- * 写回去会永久覆盖用户上次真正停留的页面。
+ * 后两个条件是必须的，它们挡的是同一种写回：[state] 在加载完成之前是一份空的默认值，
+ * 启动落点 [WorkspaceApp] 里的 [destination] 初值又是由这份空默认值解析出来的暂定值，
+ * 据此写回去会永久覆盖用户上次真正停留的页面。状态纠正与写回发生在同一次重组里，
+ * 所以「状态已加载」并不蕴含「落点已纠正」——两者必须分别判断。
  */
 internal fun shouldPersistLastOpened(
     settingsLoaded: Boolean,
     settingsOpen: Boolean,
     stateLoaded: Boolean,
-): Boolean = settingsLoaded && !settingsOpen && stateLoaded
+    destinationSettled: Boolean,
+): Boolean = settingsLoaded && !settingsOpen && stateLoaded && destinationSettled
 
 /**
  * 一次返回键按下时它该落在哪里。返回键处理是平台行为，因此决策点留在组合根侧，

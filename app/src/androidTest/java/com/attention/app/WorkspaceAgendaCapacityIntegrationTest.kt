@@ -26,6 +26,10 @@ class WorkspaceAgendaCapacityIntegrationTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
 
+    // 被销毁的 Activity 仍可能在收尾时写回「上次打开」：等写入停稳再放行下一条用例。
+    @get:Rule(order = 1)
+    val settingsBarrier = WorkspaceHostSettingsBarrier.quiesceAfterActivity
+
     @Test
     fun agenda_shows_capacity_per_planning_day_without_combining_all_dates() {
         openAgenda()

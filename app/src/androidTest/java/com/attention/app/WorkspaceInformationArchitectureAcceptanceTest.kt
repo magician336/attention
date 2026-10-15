@@ -58,6 +58,10 @@ class WorkspaceInformationArchitectureAcceptanceTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
 
+    // 被销毁的 Activity 仍可能在收尾时写回「上次打开」：等写入停稳再放行下一条用例。
+    @get:Rule(order = 1)
+    val settingsBarrier = WorkspaceHostSettingsBarrier.quiesceAfterActivity
+
     /**
      * 验收标准 1：底部导航只出现日程、目标树、统计三项，中文标签始终可见，
      * 图标与选中态可访问。
@@ -162,8 +166,8 @@ class WorkspaceInformationArchitectureAcceptanceTest {
         assertEquals(before.schedules, after.schedules)
         assertEquals(before.timeEntries, after.timeEntries)
         assertEquals(before.settings, after.settings)
-        // 引导状态仍然为已完成，且业务数据规模与种子一致
-        assertEquals(listOf(TARGET_ID), after.targets.map { it.id })
+        // 引导状态仍然为已完成，且业务数据规模与种子一致（种子含父目标与它的子目标）
+        assertEquals(listOf(TARGET_ID, CHILD_TARGET_ID), after.targets.map { it.id })
         assertEquals(listOf(TODAY_ENTRY_ID, TOMORROW_ENTRY_ID), after.schedules.map { it.id })
         assertEquals(listOf(ENTRY_ID), after.timeEntries.map { it.id })
         assertTrue(WorkspaceHostSettingsBarrier.read().onboardingCompleted)
@@ -185,7 +189,7 @@ class WorkspaceInformationArchitectureAcceptanceTest {
         composeRule.waitUntil(TIMEOUT) {
             composeRule.onAllNodesWithTag("agenda-running-timer").fetchSemanticsNodes().isNotEmpty()
         }
-        composeRule.onNodeWithText("正在计时：UI-验收目标", substring = true).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("正在计时：UI-验收父目标", substring = true).performScrollTo().assertIsDisplayed()
         assertEquals(TODAY_ENTRY_ID, readBusinessState().activeTimer?.scheduleEntryId)
         composeRule.onNodeWithTag("agenda-running-timer-stop", useUnmergedTree = true).performScrollTo().performClick()
         composeRule.waitUntil(TIMEOUT) {
@@ -207,6 +211,11 @@ class WorkspaceInformationArchitectureAcceptanceTest {
         composeRule.onNodeWithText("UI-验收父目标", substring = true).performScrollTo().assertIsDisplayed()
 
         // 备份与恢复 + 通知不可用提示：仍然从统计页底部的「设置与数据」进入
+        // 停止计时的短时提示会盖住统计页最下方的「打开设置」（两者同一块区域），
+        // 因此先等提示自己消失再点：这条用例要验的是入口仍然点得到，不是提示层的行为。
+        composeRule.waitUntil(TIMEOUT) {
+            composeRule.onAllNodesWithTag("attention.feedback.snackbar").fetchSemanticsNodes().isEmpty()
+        }
         composeRule.onNodeWithTag("statistics-open-settings").performScrollTo().performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithText("备份数据").performScrollTo().assertIsDisplayed()

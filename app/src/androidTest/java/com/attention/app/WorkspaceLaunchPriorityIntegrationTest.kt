@@ -50,6 +50,9 @@ class WorkspaceLaunchPriorityIntegrationTest {
     fun closeLaunchedActivity() {
         scenario?.close()
         scenario = null
+        // 关掉 Activity 之后，它组合根里那条「上次打开」写回的协程还可能落盘一次。
+        // 等写入停稳，下一条用例的播种才不会被上一个 Activity 抢走（#179 实跑间歇失败）。
+        WorkspaceHostSettingsBarrier.quiesce()
     }
 
     @Test
@@ -192,18 +195,23 @@ class WorkspaceLaunchPriorityIntegrationTest {
     }
 
     private fun seed(launchDestination: LaunchDestination, lastOpened: LaunchDestination) {
-        val state = AttentionState()
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val database = AttentionDatabase.create(context)
         try {
             runBlocking {
+                // 启动入口必须随业务数据一起交给 replace()：[RoomAttentionStateRepository.replace]
+                // 会按这份状态重写 DataStore，若这里只给一份默认状态，它就会把「上次打开」
+                // 覆盖成默认入口，与随后的播种互相抢跑（#179 设备实跑间歇失败）。
                 repository(database).replace(
-                    state.copy(
+                    AttentionState(
                         targets = listOf(Target(TARGET_ID, title = "UI-启动目标")),
                         schedules = listOf(
                             ScheduleEntry(TODAY_ENTRY_ID, TODAY, TODAY_ENTRY_TITLE, estimatedMinutes = 30, targetId = TARGET_ID),
                             ScheduleEntry(FAR_ENTRY_ID, FAR_DATE, FAR_ENTRY_TITLE, estimatedMinutes = 20, targetId = TARGET_ID),
                         ),
+                        launchDestination = launchDestination,
+                        lastOpenedDestination = lastOpened,
+                        onboardingCompleted = true,
                     ),
                 )
             }

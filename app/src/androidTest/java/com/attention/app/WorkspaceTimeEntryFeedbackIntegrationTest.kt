@@ -43,6 +43,10 @@ class WorkspaceTimeEntryFeedbackIntegrationTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
 
+    // 被销毁的 Activity 仍可能在收尾时写回「上次打开」：等写入停稳再放行下一条用例。
+    @get:Rule(order = 1)
+    val settingsBarrier = WorkspaceHostSettingsBarrier.quiesceAfterActivity
+
     companion object {
         private const val TIMEOUT = 10_000L
         private const val TARGET_ID = "ui-feedback-target"

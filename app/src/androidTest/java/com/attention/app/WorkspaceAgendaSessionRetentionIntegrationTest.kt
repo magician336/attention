@@ -42,6 +42,10 @@ class WorkspaceAgendaSessionRetentionIntegrationTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
 
+    // 被销毁的 Activity 仍可能在收尾时写回「上次打开」：等写入停稳再放行下一条用例。
+    @get:Rule(order = 1)
+    val settingsBarrier = WorkspaceHostSettingsBarrier.quiesceAfterActivity
+
     /** 会话内：切到目标树再回到日程，仍然停在正在处理的那个日期范围。 */
     @Test
     fun the_date_range_survives_a_round_trip_to_the_target_tree() {

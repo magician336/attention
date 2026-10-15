@@ -46,6 +46,10 @@ class WorkspaceBackNavigationIntegrationTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
 
+    // 被销毁的 Activity 仍可能在收尾时写回「上次打开」：等写入停稳再放行下一条用例。
+    @get:Rule(order = 1)
+    val settingsBarrier = WorkspaceHostSettingsBarrier.quiesceAfterActivity
+
     @Test
     fun several_workspace_switches_then_back_does_not_replay_the_tab_history() {
         // 在日程、目标树、统计之间来回切换多次

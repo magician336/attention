@@ -32,6 +32,10 @@ class WorkspaceCapacityIntegrationTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
 
+    // 被销毁的 Activity 仍可能在收尾时写回「上次打开」：等写入停稳再放行下一条用例。
+    @get:Rule(order = 1)
+    val settingsBarrier = WorkspaceHostSettingsBarrier.quiesceAfterActivity
+
     /**
      * 今天工作台的每日容量卡片本次下线（最终形态由 #128/#131 决定），
      * 因此这条用例钉住的是仍然存在的那一半：合并后的日程页按规划日展示每日容量，
