@@ -63,6 +63,15 @@ fun updateSchedule(entry: ScheduleEntry, reminderMinuteOfDay: Int?)
     fun startTimerFromEntry(entry: ScheduleEntry)
 
     /**
+     * 就地开始一次自由计时：不先建日程，[targetId] 为 null 表示记在未归属活动下。
+     *
+     * 它与 [startTimerFromEntry] 是两条不同的 intent，因为产出的时间记录来源不同：
+     * 自由计时的 `scheduleEntryId` 必须为 null，不能拿某条日程冒充来源。
+     * 前台计时服务与恢复提示仍由组合根 adapter 处理。
+     */
+    fun startFreeTimer(targetId: String?)
+
+    /**
      * 结束并保存运行中的计时。计时卡下线之后，这是日程页上唯一能停掉一次计时的入口，
      * 因此它必须留在同一页；结算、经验与里程碑仍由 `:domain` 计算，前台服务由组合根停掉。
      */

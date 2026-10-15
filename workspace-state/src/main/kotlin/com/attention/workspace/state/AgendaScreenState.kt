@@ -172,6 +172,42 @@ data class AgendaTargetOption(
 )
 
 /**
+ * 工作台统一 `+` 菜单里的一个主要动作。
+ *
+ * 两个动作都是「用户想做点什么的」入口：安排一件未来的事，或为正在发生的事开始计时。
+ * 它们是一个集合而不是两个各自散落的按钮，因此新增动作只需在这里加一项。
+ */
+enum class AgendaQuickAction {
+    /** 打开添加日程的底部表单面板。 */
+    ADD_SCHEDULE,
+
+    /** 就地挑一个未归属活动或未归档计划，开始一次自由计时。 */
+    START_FREE_TIMER,
+}
+
+/**
+ * `+` 菜单里的一个动作。[label] 是可见文案与读屏读到的名字，
+ * 页面按 [action] 决定打开哪一块面板，因此页面不需要自己翻译动作语义。
+ */
+data class AgendaQuickActionOption(
+    val action: AgendaQuickAction,
+    val label: String,
+)
+
+/**
+ * 「开始自由计时」里一个可以选的计时目标。
+ *
+ * [targetId] 为 null 表示未归属活动——自由计时不必先有日程，也不必先有计划，
+ * 所以它永远排在第一个。[selected] 由投影标出当前正在计时的那个目标，
+ * 页面用文字表达它，不靠颜色单独传达选中态。
+ */
+data class AgendaFreeTimerOption(
+    val targetId: String?,
+    val label: String,
+    val selected: Boolean = false,
+)
+
+/**
  * 日程页专有的不可变状态。它不携带完整的 [AttentionState]，
  * 当前时间与时区由组合根注入，投影与页面都不读系统时钟。
  *
@@ -208,6 +244,20 @@ data class AgendaScreenState(
     val highlightAddSchedule: Boolean = false,
     /** 添加日程卡片的标题，选中明天时说明在为哪一天安排。 */
     val addScheduleHeadingLabel: String = "新增日程",
+    /**
+     * 添加日程底部面板打开时的规划日。没有显式选过日期时它就是当前规划日，
+     * 选了哪一天就用那一天——面板因此不需要用户先输一遍日期。
+     */
+    val addScheduleDefaultDate: String = "",
+    /** 同一条默认规划日的可读标签，用作面板上的字段说明。 */
+    val addScheduleDefaultDateLabel: String = "",
+    /** 工作台 `+` 菜单里的主要动作，顺序与标签都由投影给出。 */
+    val quickActions: List<AgendaQuickActionOption> = quickActionOptions(),
+    /**
+     * 「开始自由计时」可以选的目标：未归属活动加未归档计划。
+     * 自由计时不要求先建日程，因此这里不是日程条目。
+     */
+    val freeTimerOptions: List<AgendaFreeTimerOption> = listOf(AgendaFreeTimerOption(null, "未归属活动")),
     /** 运行中的计时；null 表示没有计时在进行。 */
     val activeTimer: AgendaActiveTimer? = null,
     /** 所选规划日上的实际投入；所有日期视图为空。 */
@@ -333,6 +383,14 @@ fun agendaScreenState(
         } else {
             "新增日程"
         },
+        addScheduleDefaultDate = (selectedDate ?: planningDay).toString(),
+        addScheduleDefaultDateLabel = "规划日 ${selectedDate ?: planningDay}",
+        quickActions = quickActionOptions(),
+        freeTimerOptions = freeTimerOptions(
+            targets = state.targets.filterNot { it.archived }.map { it.id to it.title },
+            hasRunningTimer = state.activeTimer != null,
+            activeTargetId = state.activeTimer?.targetId,
+        ),
         activeTimer = state.activeTimer?.let { timer ->
             val elapsedMinutes = (timer.elapsedMillis(now) / 60_000L).toInt()
             AgendaActiveTimer(
@@ -434,6 +492,34 @@ private fun recurrenceDetailLabel(rule: RecurrenceRule): String = when (rule.fre
     ScheduleFrequency.DAILY -> "每日"
     ScheduleFrequency.WEEKLY -> "每周 ${rule.weekdays.joinToString(",") { agendaWeekdayLabel(it) }}"
     ScheduleFrequency.MONTHLY -> "每月 ${rule.dayOfMonth} 日"
+}
+
+/**
+ * 工作台 `+` 菜单的两个主要动作。它们是投影的一部分，因此页面上的菜单项、顺序与
+ * 文案都由 [AgendaScreenState] 给出，页面没有自己的副本。
+ */
+fun quickActionOptions(): List<AgendaQuickActionOption> = listOf(
+    AgendaQuickActionOption(AgendaQuickAction.ADD_SCHEDULE, "添加日程"),
+    AgendaQuickActionOption(AgendaQuickAction.START_FREE_TIMER, "开始自由计时"),
+)
+
+/**
+ * 自由计时的可选项：未归属活动排在最前，后面是未归档计划。
+ *
+ * 选中态由「是否真的有计时在进行」与 [activeTargetId] 一起得出：没有计时在跑时
+ * 没有一个目标是当前目标，页面因此不用自己读运行中的计时，也不用颜色表达
+ * 「现在计的是哪一个」。
+ */
+fun freeTimerOptions(
+    targets: List<Pair<String, String>>,
+    hasRunningTimer: Boolean,
+    activeTargetId: String?,
+): List<AgendaFreeTimerOption> = buildList {
+    fun selected(targetId: String?): Boolean = hasRunningTimer && targetId == activeTargetId
+    add(AgendaFreeTimerOption(null, "未归属活动", selected = selected(null)))
+    targets.forEach { (targetId, title) ->
+        add(AgendaFreeTimerOption(targetId, title, selected = selected(targetId)))
+    }
 }
 
 /** 每日容量的一行展示。容量是否超载由 `:domain` 的 [CapacitySummary] 判定。 */

@@ -813,4 +813,73 @@ class AgendaScreenStateTest {
         assertNull("已经有安排时不显示空态引导", withEntries.workbenchEmptyLabel)
         assertTrue("所有日期视图的空态仍走所有日期的文案", project(state = stateWith()).workbenchEmptyLabel == null)
     }
+
+    @Test
+    fun the_quick_add_menu_offers_add_schedule_and_start_a_free_timer() {
+        // 「+」菜单只有两个主要动作：安排一件事，和为已经发生的事开始计时。
+        // 顺序与标签都由投影给出，页面因此没有自己的动作副本。
+        val menu = project(state = stateWith()).quickActions
+
+        assertEquals(
+            listOf(
+                AgendaQuickActionOption(AgendaQuickAction.ADD_SCHEDULE, "添加日程"),
+                AgendaQuickActionOption(AgendaQuickAction.START_FREE_TIMER, "开始自由计时"),
+            ),
+            menu,
+        )
+    }
+
+    @Test
+    fun the_free_timer_options_are_the_unowned_activity_and_the_unarchived_plans() {
+        // 自由计时不需要先建日程：能选的是未归属活动与未归档计划，归档计划不出现
+        val state = AttentionState(
+            targets = listOf(
+                Target(id = "t-active", title = "写作"),
+                Target(id = "t-archived", title = "旧计划", archived = true),
+            ),
+        )
+
+        val options = project(state = state).freeTimerOptions
+
+        assertEquals(
+            listOf(
+                AgendaFreeTimerOption(null, "未归属活动", false),
+                AgendaFreeTimerOption("t-active", "写作", false),
+            ),
+            options,
+        )
+    }
+
+    @Test
+    fun the_free_timer_option_marks_the_current_timer_target_in_words() {
+        // 选中态不靠颜色：正在计时的那个目标由投影标出来，页面原样展示。
+        val state = AttentionState(
+            targets = listOf(Target(id = "t1", title = "写作")),
+            activeTimer = ActiveTimer(
+                targetId = "t1",
+                startedAtEpochMillis = now.minusSeconds(300).toEpochMilli(),
+                lastPlanningDate = "2026-03-05",
+            ),
+        )
+
+        val options = project(state = state).freeTimerOptions
+
+        assertEquals(listOf(false, true), options.map { it.selected })
+    }
+
+    @Test
+    fun the_add_schedule_sheet_defaults_to_the_planning_day_in_view() {
+        // 底部面板打开时规划日已经填好：没选过就落在当前规划日，选了哪一天就用那一天
+        val allDates = project(state = stateWith(), selectedScope = AgendaRangeScope.ALL_DATES)
+        val tomorrow = project(
+            state = stateWith(),
+            selectedDate = today.plusDays(1),
+            selectedScope = AgendaRangeScope.TOMORROW,
+        )
+
+        assertEquals("2026-03-05", allDates.addScheduleDefaultDate)
+        assertEquals("规划日 2026-03-05", allDates.addScheduleDefaultDateLabel)
+        assertEquals("2026-03-06", tomorrow.addScheduleDefaultDate)
+        assertEquals("规划日 2026-03-06", tomorrow.addScheduleDefaultDateLabel)
+    }
 }

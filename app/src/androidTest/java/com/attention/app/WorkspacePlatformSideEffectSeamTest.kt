@@ -61,11 +61,19 @@ class WorkspacePlatformSideEffectSeamTest {
         }
 
         // 提醒权限：页面只发出申请意图，权限对话框由组合根 adapter 负责
+        // 添加日程的表单住在底部面板里：先通过工作台的 `+` 菜单把它打开，
+        // 提醒属于低频字段，因此还要展开「更多设置」。
+        composeRule.onNodeWithTag("agenda-quick-add", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-quick-add-schedule", useUnmergedTree = true).performClick()
+        composeRule.waitForIdle()
         composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true).performScrollTo()
             .performTextReplacement("带提醒的日程")
+        composeRule.onNodeWithTag("agenda-add-more-toggle", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.waitForIdle()
         composeRule.onNodeWithTag("agenda-reminder-input", useUnmergedTree = true).performScrollTo()
             .performTextReplacement("09:00")
         composeRule.onNodeWithTag("agenda-add-submit", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.waitForIdle()
 
         assertEquals(540, agenda.addedSchedules.single().reminderMinuteOfDay)
         assertEquals(1, agenda.permissionRequests)
@@ -170,6 +178,7 @@ class WorkspacePlatformSideEffectSeamTest {
     private class RecordingAgendaActions : AgendaActions {
         val addedSchedules = mutableListOf<AgendaScheduleDraft>()
         val startedTimerEntries = mutableListOf<ScheduleEntry>()
+        val startedFreeTimerTargets = mutableListOf<String?>()
         var permissionRequests = 0
 
         override fun selectPlanningDate(date: LocalDate?) = Unit
@@ -180,6 +189,7 @@ class WorkspacePlatformSideEffectSeamTest {
         override fun confirmScheduleCompleted(entryId: String) = Unit
         override fun toggleScheduleCompleted(entryId: String) = Unit
         override fun startTimerFromEntry(entry: ScheduleEntry) { startedTimerEntries += entry }
+        override fun startFreeTimer(targetId: String?) { startedFreeTimerTargets += targetId }
         override fun stopRunningTimer() = Unit
         override fun pauseRunningTimer() = Unit
         override fun resumeRunningTimer() = Unit

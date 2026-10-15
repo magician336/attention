@@ -228,6 +228,7 @@ private class AgendaActionsAdapter(
     private val currentPlanningDay: () -> LocalDate,
     private val zone: ZoneId,
     private val onStartTimerFromEntry: (ScheduleEntry) -> Unit,
+    private val onStartFreeTimer: (String?) -> Unit,
     private val onRequestReminderPermission: () -> Unit,
     private val onStopTimer: () -> Unit,
     private val onRecoverTimerFromNow: () -> Unit,
@@ -301,6 +302,10 @@ private class AgendaActionsAdapter(
         onStartTimerFromEntry(entry)
         onFeedback(AgendaOperationFeedback.TIMER_STARTED)
     }
+
+    // 自由计时没有日程来源：scheduleEntryId 必须是 null，不能拿某条日程冒充来源。
+    // 平台动作（前台计时服务、恢复提示、通知权限提示）与从条目起计时完全一致。
+    override fun startFreeTimer(targetId: String?) = onStartFreeTimer(targetId)
 
     // 运行中的计时只能从日程页停掉：平台动作（停前台计时服务、撤掉恢复提示）仍归组合根。
     override fun stopRunningTimer() {
@@ -776,6 +781,24 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         )
     }
 
+    // 自由计时：不带日程来源，只带一个计划（或未归属活动）。平台动作与上面同一条路径，
+    // 差别只在产出的时间记录没有 scheduleEntryId。
+    fun startFreeTimer(targetId: String?) {
+        viewModel.startTimer(
+            targetId = targetId,
+            onSuccess = {
+                AttentionBootReceiver.cancelRecoveryPrompt(context)
+                if (!notificationsEnabled(context)) {
+                    feedbackScope.launch {
+                        feedback.showMessage("通知权限未开启，计时仍会保存；通知栏控制不可用。")
+                    }
+                }
+                ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
+            },
+            scheduleEntryId = null,
+        )
+    }
+
     val currentWeekStartDay by androidx.compose.runtime.rememberUpdatedState(state.settings.weekStartDay)
     // 日程页的选中范围由页面 module 提供类型与迁移语义，组合根只持有一个实例来喂投影。
     // 这一个实例挂在组合根上、活过页面切换，因此会话内的日期筛选被保留；
@@ -905,6 +928,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             currentPlanningDay = { currentAgendaPlanningDay },
             zone = injectedZone,
             onStartTimerFromEntry = ::startTimerFromSchedule,
+            onStartFreeTimer = ::startFreeTimer,
             onRequestReminderPermission = { requestReminderPermission(context) },
             onStopTimer = {
                 viewModel.stopTimer(onSuccess = {

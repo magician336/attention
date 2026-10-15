@@ -26,7 +26,9 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -35,12 +37,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.attention.app.ui.components.AttentionButton
@@ -58,7 +57,11 @@ import com.attention.domain.ScheduleEntry
 import com.attention.domain.ScheduleFrequency
 import com.attention.workspace.state.AgendaActions
 import com.attention.workspace.state.AgendaActiveTimer
+import com.attention.workspace.state.AgendaFreeTimerOption
+import com.attention.workspace.state.AgendaQuickAction
+import com.attention.workspace.state.AgendaQuickActionOption
 import com.attention.workspace.state.AgendaRangeScope
+import com.attention.workspace.state.AgendaScheduleDraft
 import com.attention.workspace.state.AgendaScreenState
 import com.attention.workspace.state.AgendaScheduleRow
 import com.attention.workspace.state.AgendaTargetOption
@@ -67,7 +70,6 @@ import com.attention.workspace.state.AgendaWorkbenchSection
 import com.attention.workspace.state.AGENDA_RETRY_LABEL
 import com.attention.workspace.state.agendaLabel
 import com.attention.workspace.state.agendaWeekdayLabel
-import kotlinx.coroutines.launch
 import java.time.LocalDate
 
 /**
@@ -104,8 +106,10 @@ internal fun AgendaScreen(
     // 重复日程折叠在页面 module 内：它是次级入口，能力没有删除，只是收在一次点击之后。
     val disclosure = rememberAgendaDisclosureState()
     val scrollState = rememberScrollState()
-    val scope = rememberCoroutineScope()
-    var addScheduleTop by remember { mutableStateOf(0f) }
+    var quickMenuExpanded by remember { mutableStateOf(false) }
+    var addSheetOpen by remember { mutableStateOf(false) }
+    var freeTimerSheetOpen by remember { mutableStateOf(false) }
+    var addMoreExpanded by remember { mutableStateOf(false) }
     var editingRow by remember { mutableStateOf<AgendaScheduleRow?>(null) }
     var editingRecord by remember { mutableStateOf<AgendaTimeRecord?>(null) }
     var pendingDeleteRecordId by remember { mutableStateOf<String?>(null) }
@@ -116,6 +120,8 @@ internal fun AgendaScreen(
             notificationOpenHandled = true
         }
     }
+    // 面板里的规划日默认落在正在看的那一天：投影已经算好，页面不自己判断「哪一天」。
+    val sheetDate = state.addScheduleDefaultDate.ifBlank { date }
     fun selectDate(value: LocalDate?) {
         actions.selectPlanningDate(value)
         date = value?.toString() ?: today
@@ -125,10 +131,22 @@ internal fun AgendaScreen(
         val parsed = runCatching { LocalDate.parse(date) }.getOrNull()
         if (parsed == null) dateError = true else selectDate(parsed)
     }
+    fun closeAddSheet() {
+        addSheetOpen = false
+        addMoreExpanded = false
+    }
     Column(
         Modifier.fillMaxSize().verticalScroll(scrollState).padding(tokens.spacing.large),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        // 「+」菜单是首屏的主入口，它不依赖本地数据，因此读取期间也照样在。
+        AgendaQuickAddMenu(
+            options = state.quickActions,
+            expanded = quickMenuExpanded,
+            onExpandedChange = { quickMenuExpanded = it },
+            onAddSchedule = { quickMenuExpanded = false; addMoreExpanded = false; addSheetOpen = true },
+            onStartFreeTimer = { quickMenuExpanded = false; addSheetOpen = false; freeTimerSheetOpen = true },
+        )
         // 读取本地数据的两件事都是组合根注入的事实，页面只按它们渲染（ADR-0005 第 1 节）：
         // 还没读到给轻量时间轴骨架，读失败给带「重试」的错误状态。两者都不重排区块——
         // 骨架复用同一批区块容器标识，因此首屏结构与顺序在三种状态下始终一致。
@@ -156,23 +174,19 @@ internal fun AgendaScreen(
                     state = state,
                     actions = actions,
                     onEditRow = { editingRow = it },
-                    onAddFirstSchedule = {
-                        // 空态直接给出添加日程入口：把添加表单滚进视野，而不是让用户自己找
-                        scope.launch { scrollState.animateScrollTo(addScheduleTop.toInt()) }
-                    },
+                    // 空态直接给出添加日程入口：表单住在底部面板里，这里是把它打开。
+                    onAddFirstSchedule = { addMoreExpanded = false; addSheetOpen = true },
                 )
 
                 AgendaWorkbenchSection.RUNNING_TIMER -> state.activeTimer?.let { timer ->
-                    AgendaRunningTimerSection(timer = timer, targets = state.targets, actions = actions)
+                    Column(Modifier.fillMaxWidth().testTag("agenda-section-timer")) {
+                        AgendaRunningTimerSection(timer = timer, targets = state.targets, actions = actions)
+                    }
                 }
 
                 AgendaWorkbenchSection.ADD_SCHEDULE -> {
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .onGloballyPositioned { coordinates -> addScheduleTop = coordinates.positionInParent().y },
-                    ) {
-                        AgendaAddScheduleSection(state = state, scheduleForm = scheduleForm, date = date, actions = actions)
+                    Column(Modifier.fillMaxWidth().testTag("agenda-section-add")) {
+                        AgendaAddScheduleSection(state = state, onOpen = { addMoreExpanded = false; addSheetOpen = true })
                     }
                 }
 
@@ -224,6 +238,70 @@ internal fun AgendaScreen(
                 editingRow = null
             },
         )
+    }
+    // 两块底部面板都是 Material 3 的 sheet：表单控件与选择器都在页面 module 内，
+    // 页面因此不需要任何 Android API（ADR-0005 第 4 节）。
+    AgendaAddScheduleSheet(
+        state = state,
+        form = scheduleForm,
+        visible = addSheetOpen,
+        initialPlanningDay = sheetDate,
+        moreExpanded = addMoreExpanded,
+        onToggleMore = { addMoreExpanded = !addMoreExpanded },
+        onDismiss = ::closeAddSheet,
+        onSubmit = { draft, reminderRequested ->
+            actions.addSchedule(draft)
+            if (reminderRequested) actions.requestReminderPermission()
+            closeAddSheet()
+        },
+    )
+    AgendaFreeTimerSheet(
+        options = state.freeTimerOptions,
+        visible = freeTimerSheetOpen,
+        onStart = { targetId ->
+            actions.startFreeTimer(targetId)
+            freeTimerSheetOpen = false
+        },
+        onDismiss = { freeTimerSheetOpen = false },
+    )
+}
+
+/**
+ * 工作台统一的 `+` 入口。菜单里的动作由投影给出，页面只按动作打开对应的那一块面板。
+ *
+ * 入口本身带可读标签（按钮文字与图标说明），因此读屏用户不靠图标也知道这里能做什么。
+ */
+@Composable
+private fun AgendaQuickAddMenu(
+    options: List<AgendaQuickActionOption>,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onAddSchedule: () -> Unit,
+    onStartFreeTimer: () -> Unit,
+) {
+    val tokens = attentionTokens()
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+        AttentionOutlinedButton(
+            onClick = { onExpandedChange(true) },
+            modifier = Modifier.testTag("agenda-quick-add"),
+        ) { Text("＋") }
+        DropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }) {
+            options.forEach { action ->
+                DropdownMenuItem(
+                    text = { Text(action.label) },
+                    onClick = when (action.action) {
+                        AgendaQuickAction.ADD_SCHEDULE -> onAddSchedule
+                        AgendaQuickAction.START_FREE_TIMER -> onStartFreeTimer
+                    },
+                    modifier = Modifier.testTag(
+                        when (action.action) {
+                            AgendaQuickAction.ADD_SCHEDULE -> "agenda-quick-add-schedule"
+                            AgendaQuickAction.START_FREE_TIMER -> "agenda-quick-add-free-timer"
+                        },
+                    ),
+                )
+            }
+        }
     }
 }
 
@@ -573,78 +651,183 @@ private fun AgendaRunningTimerSection(
     }
 }
 
-/** 首屏第四块：添加日程入口。表单本身仍是页面本地状态，提交时只发一个草稿 intent。 */
+/**
+ * 首屏第四块：添加日程的入口。表单本身在底部面板里（[AgendaAddScheduleSheet]），
+ * 这一块只负责告诉用户「新增日程」在哪里，并把它打开。
+ *
+ * 选中明天时入口被突出：颜色之外还有图标与文案，说明在为哪一天安排。
+ */
 @Composable
 private fun AgendaAddScheduleSection(
     state: AgendaScreenState,
-    scheduleForm: AgendaScheduleForm,
-    date: String,
-    actions: AgendaActions,
+    onOpen: () -> Unit,
 ) {
     val tokens = attentionTokens()
-    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(tokens.radius.medium)) {
-        Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            // 选中明天时突出添加日程：颜色之外还有图标与文案，说明在为哪一天安排。
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = if (state.highlightAddSchedule) Modifier.testTag("agenda-add-highlight") else Modifier,
-            ) {
-                if (state.highlightAddSchedule) {
-                    Icon(Icons.AutoMirrored.Filled.EventNote, contentDescription = "为明天安排日程", modifier = Modifier.size(tokens.spacing.medium))
-                }
-                Text(state.addScheduleHeadingLabel, style = tokens.typography.body)
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = if (state.highlightAddSchedule) Modifier.testTag("agenda-add-highlight") else Modifier,
+        ) {
+            if (state.highlightAddSchedule) {
+                Icon(Icons.AutoMirrored.Filled.EventNote, contentDescription = "为明天安排日程", modifier = Modifier.size(tokens.spacing.medium))
             }
-            OutlinedTextField(scheduleForm.title, scheduleForm::changeTitle, label = { Text("日程标题") }, modifier = Modifier.fillMaxWidth().testTag("agenda-title-input"), singleLine = true)
+            Text(state.addScheduleHeadingLabel, style = tokens.typography.body)
+        }
+        AttentionButton(onClick = onOpen, modifier = Modifier.testTag("agenda-open-add-sheet")) {
+            Text(state.addScheduleHeadingLabel)
+        }
+    }
+}
+
+/**
+ * 添加日程的底部表单面板。高频的添加流程被压在这一层里：面板一打开，规划日已经填好，
+ * 标题与时间段、预计投入摆在一屏，备注、提醒与关联计划收在「更多设置」后面。
+ *
+ * 表单状态仍是页面本地状态（[AgendaScheduleForm]），提交只发一个草稿 intent；
+ * 提醒时刻的绝对换算由组合根按注入的时区完成，页面因此不读系统时钟与系统时区。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AgendaAddScheduleSheet(
+    state: AgendaScreenState,
+    form: AgendaScheduleForm,
+    visible: Boolean,
+    initialPlanningDay: String,
+    moreExpanded: Boolean,
+    onToggleMore: () -> Unit,
+    onDismiss: () -> Unit,
+    onSubmit: (AgendaScheduleDraft, Boolean) -> Unit,
+) {
+    val tokens = attentionTokens()
+    if (!visible) return
+    // 规划日在面板打开时就填好：默认是正在看的那一天，用户仍然可以改成别的日子。
+    var planningDay by remember(initialPlanningDay) { mutableStateOf(initialPlanningDay) }
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag("agenda-add-sheet"),
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = tokens.spacing.large)
+                .padding(bottom = tokens.spacing.large),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(state.addScheduleHeadingLabel, style = tokens.typography.title)
+            OutlinedTextField(
+                planningDay,
+                { planningDay = it },
+                label = { Text("规划日 YYYY-MM-DD") },
+                modifier = Modifier.fillMaxWidth().testTag("agenda-add-planning-day"),
+                singleLine = true,
+            )
+            OutlinedTextField(
+                form.title,
+                form::changeTitle,
+                label = { Text("日程标题") },
+                modifier = Modifier.fillMaxWidth().testTag("agenda-title-input"),
+                singleLine = true,
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(scheduleForm.startTime, scheduleForm::changeStartTime, label = { Text("开始时间 HH:mm（可选）") }, modifier = Modifier.weight(1f).testTag("agenda-start-input"), singleLine = true)
-                OutlinedTextField(scheduleForm.endTime, scheduleForm::changeEndTime, label = { Text("结束时间 HH:mm（可选）") }, modifier = Modifier.weight(1f).testTag("agenda-end-input"), singleLine = true)
-                OutlinedTextField(scheduleForm.estimate, scheduleForm::changeEstimate, label = { Text("预计分钟") }, modifier = Modifier.width(110.dp).testTag("agenda-estimate-input"), singleLine = true)
+                OutlinedTextField(form.startTime, form::changeStartTime, label = { Text("开始时间 HH:mm（可选）") }, modifier = Modifier.weight(1f).testTag("agenda-start-input"), singleLine = true)
+                OutlinedTextField(form.endTime, form::changeEndTime, label = { Text("结束时间 HH:mm（可选）") }, modifier = Modifier.weight(1f).testTag("agenda-end-input"), singleLine = true)
             }
-            OutlinedTextField(scheduleForm.reminderTime, scheduleForm::changeReminderTime, label = { Text("提醒 HH:mm（可选）") }, modifier = Modifier.fillMaxWidth().testTag("agenda-reminder-input"), singleLine = true)
-            OutlinedTextField(scheduleForm.note, scheduleForm::changeNote, label = { Text("备注（可选）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-            Box {
-                AttentionOutlinedButton(onClick = { scheduleForm.toggleTargetMenu(true) }) {
-                    Text(state.targets.firstOrNull { it.targetId == scheduleForm.targetId }?.title ?: "关联计划（可选）")
-                }
-                DropdownMenu(
-                    expanded = scheduleForm.targetMenuExpanded,
-                    onDismissRequest = { scheduleForm.toggleTargetMenu(false) },
-                ) {
-                    DropdownMenuItem(text = { Text("不关联计划") }, onClick = { scheduleForm.selectTarget(null) })
-                    state.targets.forEach { target ->
-                        DropdownMenuItem(text = { Text(target.title) }, onClick = { scheduleForm.selectTarget(target.targetId) })
+            OutlinedTextField(form.estimate, form::changeEstimate, label = { Text("预计分钟") }, modifier = Modifier.fillMaxWidth().testTag("agenda-estimate-input"), singleLine = true)
+            // 低频字段收在「更多设置」后面：展开状态用文字说明，标签本身告诉读屏它是什么。
+            AttentionTextButton(onClick = onToggleMore, modifier = Modifier.testTag("agenda-add-more-toggle")) {
+                Text(if (moreExpanded) "收起更多设置" else "更多设置（备注、提醒与关联计划）")
+            }
+            if (moreExpanded) {
+                OutlinedTextField(form.note, form::changeNote, label = { Text("备注（可选）") }, modifier = Modifier.fillMaxWidth().testTag("agenda-note-input"), singleLine = true)
+                OutlinedTextField(form.reminderTime, form::changeReminderTime, label = { Text("提醒 HH:mm（可选）") }, modifier = Modifier.fillMaxWidth().testTag("agenda-reminder-input"), singleLine = true)
+                Box {
+                    AttentionOutlinedButton(onClick = { form.toggleTargetMenu(true) }, modifier = Modifier.testTag("agenda-add-target")) {
+                        Text(state.targets.firstOrNull { it.targetId == form.targetId }?.title ?: "关联计划（可选）")
+                    }
+                    DropdownMenu(
+                        expanded = form.targetMenuExpanded,
+                        onDismissRequest = { form.toggleTargetMenu(false) },
+                    ) {
+                        DropdownMenuItem(text = { Text("不关联计划") }, onClick = { form.selectTarget(null) })
+                        state.targets.forEach { target ->
+                            DropdownMenuItem(text = { Text(target.title) }, onClick = { form.selectTarget(target.targetId) })
+                        }
                     }
                 }
             }
-            scheduleForm.error?.let { AttentionInlineError(message = it) }
+            form.error?.let { AttentionInlineError(message = it) }
             AttentionButton(modifier = Modifier.testTag("agenda-add-submit"), onClick = {
-                val parsedDate = runCatching { LocalDate.parse(date) }.getOrNull()
-                val parsedStart = parseScheduleMinute(scheduleForm.startTime)
-                val parsedEnd = parseScheduleMinute(scheduleForm.endTime, allowEndOfDay = true)
-                val estimated = scheduleForm.estimate.trim().takeIf(String::isNotEmpty)?.toIntOrNull()
-                val parsedReminder = parseScheduleMinute(scheduleForm.reminderTime)
+                val parsedDate = runCatching { LocalDate.parse(planningDay) }.getOrNull()
+                val parsedStart = parseScheduleMinute(form.startTime)
+                val parsedEnd = parseScheduleMinute(form.endTime, allowEndOfDay = true)
+                val estimated = form.estimate.trim().takeIf(String::isNotEmpty)?.toIntOrNull()
+                val parsedReminder = parseScheduleMinute(form.reminderTime)
                 val error = validateScheduleForm(
                     ScheduleFormInput(
-                        title = scheduleForm.title,
+                        title = form.title,
                         date = parsedDate,
-                        startText = scheduleForm.startTime,
-                        endText = scheduleForm.endTime,
-                        estimateText = scheduleForm.estimate,
+                        startText = form.startTime,
+                        endText = form.endTime,
+                        estimateText = form.estimate,
                         startMinute = parsedStart,
                         endMinute = parsedEnd,
                         estimateMinutes = estimated,
-                        reminderText = scheduleForm.reminderTime,
+                        reminderText = form.reminderTime,
                         reminderMinute = parsedReminder,
                     ),
                 )
+                // 校验没过就只显示错误：不发保存意图，也没有任何数据被写入。
                 if (error != null) {
-                    scheduleForm.showError(error)
+                    form.showError(error)
                 } else {
-                    actions.addSchedule(scheduleForm.toDraft(parsedDate!!))
-                    if (parsedReminder != null) actions.requestReminderPermission()
-                    scheduleForm.reset()
+                    onSubmit(form.toDraft(parsedDate!!), parsedReminder != null)
+                    form.reset()
                 }
             }) { Text("添加日程") }
+        }
+    }
+}
+
+/**
+ * 「开始自由计时」的目标选择面板。就地挑一个未归属活动或未归档计划就开始，
+ * 不需要先建一条日程——自由计时的时间记录因此没有日程来源。
+ *
+ * 当前正在计时的目标用文字标出，不靠高亮颜色单独表达。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AgendaFreeTimerSheet(
+    options: List<AgendaFreeTimerOption>,
+    visible: Boolean,
+    onStart: (String?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val tokens = attentionTokens()
+    if (!visible) return
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag("agenda-free-timer-sheet"),
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = tokens.spacing.large)
+                .padding(bottom = tokens.spacing.large),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text("开始自由计时", style = tokens.typography.title)
+            Text("选一个目标就开始计时：不需要先添加日程。")
+            options.forEach { option ->
+                val tag = option.targetId
+                    ?.let { "agenda-free-timer-target-$it" }
+                    ?: "agenda-free-timer-unowned"
+                AttentionOutlinedButton(
+                    onClick = { onStart(option.targetId) },
+                    modifier = Modifier.fillMaxWidth().testTag(tag),
+                ) { Text(option.label + if (option.selected) "（当前）" else "") }
+            }
         }
     }
 }
