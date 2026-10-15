@@ -156,6 +156,21 @@ class ScheduleBackfillCommandTest {
     }
 
     @Test
+    fun a_schedule_that_exceeds_the_daily_capacity_is_still_saved_with_its_backfill() {
+        // 每日容量只是可解释的提示：它被判定为超载，但不会拦住保存日程，也不会拦住同一次保存里的补记
+        val (state, target) = stateWithTarget()
+        val withCapacity = state.copy(settings = StoredSettings(dailyCapacityMinutes = 45))
+        val long = newEntry(target.id).copy(estimatedMinutes = 400)
+
+        val result = AttentionCommand.SaveSchedule(long, backfill(20, target.id)).execute(withCapacity, now, zone)
+
+        assertTrue("这一天的安排确实超载", result.state.exceedsDailyCapacity(long))
+        assertEquals(listOf(long), result.state.schedules)
+        assertEquals(1, result.generatedTimeEntries.size)
+        assertEquals(20, result.state.scheduleInvestedMinutes(long.id))
+    }
+
+    @Test
     fun replaying_the_same_submission_never_creates_a_second_investment() {
         val (state, target) = stateWithTarget()
         val fill = backfill(45, target.id, requestId = "request-replay")

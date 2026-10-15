@@ -31,6 +31,84 @@ fun AttentionState.agendaEntries(planningDate: LocalDate? = null): List<Schedule
     )
     .toList()
 
+/**
+ * 这条日程条目有没有具体开始时间。
+ *
+ * 有开始时间的日程落在时间轴上按开始/结束时间排列；没有的日程仍然属于这一天，
+ * 但它没有时刻可排，因此进入独立的「未安排时间」区域，而不是被排到时间轴末尾假装有位置。
+ */
+fun ScheduleEntry.hasStartTime(): Boolean = startMinute != null
+
+/**
+ * 一个规划日上的时间轴分组。
+ *
+ * [timed] 是有具体开始时间的日程，按开始时间、结束时间与稳定 id 排列，正在计时的那条固定在最前；
+ * [unscheduled] 是这一天里没有具体时间的日程。
+ */
+data class AgendaTimeline(
+    val timed: List<ScheduleEntry>,
+    val unscheduled: List<ScheduleEntry>,
+)
+
+/** 所有日期视图下的一个规划日分组，它自己带这一天的时间轴。 */
+data class AgendaDayTimeline(
+    val planningDate: String,
+    val timeline: AgendaTimeline,
+)
+
+/** 正在进行计时的日程条目 id。自由计时没有日程来源，因此为 null，没有条目可以置顶。 */
+fun AttentionState.timingScheduleEntryId(): String? = activeTimer?.scheduleEntryId
+
+/**
+ * 一个规划日的时间轴。正在计时的那条固定在顶部，其余按开始/结束时间排列；
+ * 没有具体开始时间的日程进入 [AgendaTimeline.unscheduled]。
+ *
+ * 置顶跨过「有没有开始时间」这个划分：「未安排时间」里的日程同样可以起计时，
+ * 它一旦正在计时就出现在时间轴第一位，而不是留在未安排时间区域里。
+ * 没有日程来源的自由计时没有条目可置顶，时间轴保持原样。
+ */
+fun AttentionState.agendaTimeline(planningDate: LocalDate): AgendaTimeline {
+    val entries = agendaEntries(planningDate)
+    val runningId = timingScheduleEntryId()
+    fun ScheduleEntry.onTimeline() = hasStartTime() || id == runningId
+    val timed = entries
+        .filter { it.onTimeline() }
+        .sortedWith(
+            // 置顶先于时间排序：正在计时的条目即使时段在后面，也必须是第一行
+            compareByDescending<ScheduleEntry> { it.id == runningId }
+                .thenBy { it.startMinute }
+                .thenBy { it.endMinute ?: Int.MAX_VALUE }
+                .thenBy { it.id },
+        )
+    return AgendaTimeline(timed = timed, unscheduled = entries.filterNot { it.onTimeline() })
+}
+
+/**
+ * 所有日期视图下按规划日分组的时间轴，每个规划日内部各自把正在计时的条目置顶。
+ *
+ * 分组键取自条目自身的规划日字符串，与 [agendaEntries] 的排序口径一致，因此同一次
+ * 数据读取里日期分组与时间轴顺序不会各说各话。
+ */
+fun AttentionState.agendaDayTimelines(): List<AgendaDayTimeline> = schedules
+    .asSequence()
+    .map { it.planningDate }
+    .distinct()
+    .sorted()
+    .map { date -> AgendaDayTimeline(date, agendaTimeline(LocalDate.parse(date))) }
+    .toList()
+
+/**
+ * 这条日程条目自己的计划时长是否超出这一天的每日容量。
+ *
+ * 口径与 [capacitySummary] 一致：正数预计时长优先，否则回退到完整有效的时间段。
+ * 每日容量只是可解释的提示，因此这个判定不会拦住保存日程或保存实际投入。
+ * 未设置每日容量时没有超载可言。
+ */
+fun AttentionState.exceedsDailyCapacity(entry: ScheduleEntry): Boolean {
+    val capacity = settings.dailyCapacityMinutes ?: return false
+    return (entry.plannedMinutes() ?: 0) > capacity
+}
+
 fun AttentionState.targetChildren(parentId: String?, onDate: LocalDate? = null): List<Target> = targets
     .filter { target ->
         !target.archived && (onDate?.let { parentAt(target.id, it) == parentId } ?: (target.parentId == parentId))

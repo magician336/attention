@@ -3,6 +3,7 @@ package com.attention.app.agenda
 import androidx.activity.compose.setContent
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -30,9 +31,11 @@ import com.attention.workspace.state.AgendaScheduleRow
 import com.attention.workspace.state.AgendaScreenState
 import com.attention.workspace.state.AgendaTargetOption
 import com.attention.workspace.state.AgendaTimeRecord
+import com.attention.workspace.state.AgendaWorkbenchSummary
 import java.time.LocalDate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -211,11 +214,23 @@ class AgendaScreenTest {
     }
 
     @Test
+    fun the_recurring_schedule_block_is_a_secondary_entry_that_is_collapsed_by_default() {
+        // 重复日程不再是首屏主路径：表单与规则行都收在次级入口后面
+        mount(allDatesScreenState())
+
+        composeRule.onNodeWithTag("agenda-recurrence-toggle", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("重复标题", substring = false).assertDoesNotExist()
+        composeRule.onNodeWithTag("recurrence-reminder-input", useUnmergedTree = true).assertDoesNotExist()
+        composeRule.onNodeWithText("每日晨读 · 每日 · 2026-03-05").assertDoesNotExist()
+    }
+
+    @Test
     fun the_recurring_rule_lines_are_shown_with_their_stop_intent() {
         // 重复日程规则行来自注入的 screen state；停止未来生成只发出带 id 的 intent
         val intents = RecordingAgendaActions()
         mount(allDatesScreenState(), intents)
 
+        expandRecurrence()
         node("每日晨读 · 每日 · 2026-03-05").assertIsDisplayed()
         node("每周复盘 · 每周 一,三 · 2026-03-02 至 2026-03-31").assertIsDisplayed()
         node("已停止").assertIsDisplayed()
@@ -230,6 +245,7 @@ class AgendaScreenTest {
         val intents = RecordingAgendaActions()
         mount(allDatesScreenState(), intents)
 
+        expandRecurrence()
         node("重复标题").performScrollTo().performTextReplacement("每周复盘会")
         node("每周").performScrollTo().performClick()
         // 星期由复选框本身切换，标签文字只是它的说明
@@ -249,12 +265,18 @@ class AgendaScreenTest {
         val intents = RecordingAgendaActions()
         mount(allDatesScreenState(), intents)
 
+        expandRecurrence()
         node("重复标题").performScrollTo().performTextReplacement("每周复盘会")
         node("每周").performScrollTo().performClick()
         node("创建并生成未来 30 天").performScrollTo().performClick()
 
         node("每周规则至少选择一个星期").assertIsDisplayed()
         assertEquals(emptyList<AgendaRecurrenceDraft>(), intents.addedRecurrences)
+    }
+
+    /** 展开重复日程这个次级入口：能力没有删除，只是收在一次点击之后。 */
+    private fun expandRecurrence() {
+        composeRule.onNodeWithTag("agenda-recurrence-toggle", useUnmergedTree = true).performScrollTo().performClick()
     }
 
     @Test
@@ -303,6 +325,163 @@ class AgendaScreenTest {
     private fun node(text: String, substring: Boolean = false) =
         composeRule.onNodeWithText(text, substring = substring).performScrollTo()
 
+    @Test
+    fun the_first_screen_shows_its_sections_in_the_fixed_workbench_order() {
+        // 首屏自上而下固定为：规划日与每日容量摘要、时间轴、进行中的计时状态、添加日程入口、事后补记，
+        // 重复日程作为折叠的次级入口排在最后
+        mount(
+            planningDayScreenState(
+                selected = planningDay,
+                activeTimer = runningTimer(),
+                timeRecords = listOf(record()),
+            ),
+        )
+
+        val tops = listOf(
+            "agenda-section-summary",
+            "agenda-section-timeline",
+            "agenda-section-timer",
+            "agenda-section-add",
+            "agenda-section-backfill",
+            "agenda-section-recurrence",
+        ).map { tag -> sectionTop(tag) }
+
+        assertEquals(tops.sorted(), tops)
+    }
+
+    @Test
+    fun the_workbench_summarises_the_planning_day_read_only() {
+        // 工作台只读展示规划日界线、周起始日与每日容量摘要；摘要区里没有任何可编辑输入
+        mount(planningDayScreenState(planningDay))
+
+        node("规划日 2026-03-05").assertIsDisplayed()
+        node("规划日界线 03:00").assertIsDisplayed()
+        node("周起始日 周一").assertIsDisplayed()
+        node("每日容量 120 分钟").assertIsDisplayed()
+        node("已安排 30 / 120 分钟").assertIsDisplayed()
+
+        val summaryBottom = composeRule.onNodeWithTag("agenda-section-summary", useUnmergedTree = true)
+            .fetchSemanticsNode().boundsInRoot.bottom
+        val editableFields = composeRule.onAllNodes(hasSetTextAction()).fetchSemanticsNodes()
+        assertTrue("摘要区里不提供完整设置表单", editableFields.all { it.boundsInRoot.top >= summaryBottom })
+    }
+
+    @Test
+    fun a_timeline_row_shows_planned_investment_actual_investment_and_completion() {
+        // 时间轴行同时展示标题、关联计划、计划投入、实际投入与完成状态
+        mount(
+            planningDayScreenState(
+                selected = planningDay,
+                timelineRows = listOf(
+                    row(
+                        reportEntry,
+                        "2026-03-05 · 60 分钟 · 工作 · 无提醒",
+                        true,
+                        investmentLabel = "计划投入 60 分钟 · 实际投入 0 分钟 · 未完成",
+                        targetLabel = "工作",
+                    ),
+                ),
+            ),
+        )
+
+        node("写周报").assertIsDisplayed()
+        node("关联计划：工作").assertIsDisplayed()
+        node("计划投入 60 分钟 · 实际投入 0 分钟 · 未完成").assertIsDisplayed()
+    }
+
+    @Test
+    fun the_entry_being_timed_is_rendered_at_the_top_of_the_timeline_with_a_text_cue() {
+        // 正在计时的条目固定在时间轴顶部，并用文字标明状态而不只靠颜色
+        mount(
+            planningDayScreenState(
+                selected = planningDay,
+                timelineRows = listOf(
+                    row(
+                        looseEntry.copy(planningDate = "2026-03-05"),
+                        "2026-03-05 · 30 分钟 · 无提醒",
+                        false,
+                        investmentLabel = "计划投入 30 分钟 · 实际投入 12 分钟 · 未完成",
+                        timing = true,
+                    ),
+                    row(
+                        reportEntry,
+                        "2026-03-05 · 60 分钟 · 工作 · 无提醒",
+                        false,
+                        targetLabel = "工作",
+                    ),
+                ),
+            ),
+        )
+
+        assertTrue(
+            "正在计时的条目排在时间轴顶部",
+            sectionTop("schedule-timing-cue") < sectionTop("schedule-edit-e1"),
+        )
+        node("正在计时").assertIsDisplayed()
+    }
+
+    @Test
+    fun an_overloaded_entry_shows_the_capacity_notice_and_keeps_its_actions() {
+        // 容量超载只是提示：编辑与起计时入口都还在
+        mount(
+            planningDayScreenState(
+                selected = planningDay,
+                timelineRows = listOf(
+                    row(
+                        overloadedEntry,
+                        "2026-03-05 · 300 分钟 · 无提醒",
+                        true,
+                        investmentLabel = "计划投入 300 分钟 · 实际投入 0 分钟 · 未完成",
+                        capacityNotice = "已超出容量",
+                    ),
+                ),
+            ),
+        )
+
+        node("已超出容量").assertIsDisplayed()
+        composeRule.onNodeWithTag("schedule-edit-e4", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("schedule-start-timer-e4", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun entries_without_a_time_range_stay_visible_in_the_unscheduled_group() {
+        // 没有具体时间的日程进入独立的「未安排时间」区域，仍然看得见
+        mount(
+            planningDayScreenState(
+                selected = planningDay,
+                timelineRows = listOf(
+                    row(meetingEntry, "2026-03-06 · 30 分钟 · 无提醒 · 已完成", true),
+                ),
+                unscheduledRows = listOf(row(looseEntry, "2026-03-05 · 15 分钟 · 无提醒", true)),
+            ),
+        )
+
+        node("未安排时间").assertIsDisplayed()
+        node("想到再做的").assertIsDisplayed()
+    }
+
+    @Test
+    fun an_empty_planning_day_invites_the_first_schedule_and_reaches_the_add_form() {
+        // 当天没有日程时显示「安排今天第一件事」，并直接提供添加日程入口
+        mount(emptyPlanningDayScreenState())
+
+        node("安排今天第一件事").assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-first-schedule", useUnmergedTree = true).performScrollTo().performClick()
+        // 页面把添加表单滚进视野，等这一段滚动停下来再断言
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+    }
+
+    /**
+     * 一个区块在页面上的纵向位置。
+     *
+     * 刻意不滚动：日程页是一个整体滚动列，滚到某个区块会改变其它区块在窗口里的位置，
+     * 因此比较顺序时必须在同一次布局快照上读取。
+     */
+    private fun sectionTop(tag: String): Float =
+        composeRule.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.top
+
     private val planningDay: LocalDate = LocalDate.of(2026, 3, 5)
 
     private val reportEntry = ScheduleEntry(
@@ -321,8 +500,33 @@ class AgendaScreenTest {
         completed = true,
     )
 
+    /** 没有具体时间的日程：它属于这一天，但落在「未安排时间」区域。 */
+    private val looseEntry = ScheduleEntry(
+        id = "e3",
+        planningDate = "2026-03-05",
+        title = "想到再做的",
+        estimatedMinutes = 15,
+    )
+
+    /** 超出每日容量的日程：提示是可解释的，编辑与计时入口仍然在。 */
+    private val overloadedEntry = ScheduleEntry(
+        id = "e4",
+        planningDate = "2026-03-05",
+        title = "一整天的课",
+        estimatedMinutes = 300,
+    )
+
     /** 手写的行：展示文本由测试自己钉住，条目本身仍带自己的字段供 intent 使用。 */
-    private fun row(entry: ScheduleEntry, detailLabel: String, canStartTimer: Boolean) = AgendaScheduleRow(
+    private fun row(
+        entry: ScheduleEntry,
+        detailLabel: String,
+        canStartTimer: Boolean,
+        investmentLabel: String = "计划投入 ${entry.estimatedMinutes ?: 0} 分钟 · 实际投入 0 分钟 · " +
+            if (entry.completed) "已完成" else "未完成",
+        targetLabel: String? = null,
+        capacityNotice: String? = null,
+        timing: Boolean = false,
+    ) = AgendaScheduleRow(
         entry = entry,
         title = entry.title,
         detailLabel = detailLabel,
@@ -333,6 +537,11 @@ class AgendaScreenTest {
         reminderText = "",
         targetId = entry.targetId,
         canStartTimer = canStartTimer,
+        investmentLabel = investmentLabel,
+        targetLabel = targetLabel,
+        capacityNotice = capacityNotice,
+        timing = timing,
+        completed = entry.completed,
     )
 
     private val availableDates = listOf(
@@ -351,7 +560,16 @@ class AgendaScreenTest {
 
     private val targets = listOf(AgendaTargetOption(targetId = "t1", title = "工作"))
 
-    /** 所有日期特殊视图：条目按规划日分组，每组带这一天的每日容量。 */
+    /** 工作台顶部的只读摘要：规划日、规划日界线、周起始日与每日容量。 */
+    private fun summary(planningDateLabel: String, capacityUsageLabel: String?) = AgendaWorkbenchSummary(
+        planningDateLabel = planningDateLabel,
+        boundaryLabel = "规划日界线 03:00",
+        weekStartLabel = "周起始日 周一",
+        capacitySettingLabel = "每日容量 120 分钟",
+        capacityUsageLabel = capacityUsageLabel,
+    )
+
+    /** 所有日期特殊视图：条目按规划日分组，每组带这一天的每日容量与自己的时间轴。 */
     private fun allDatesScreenState(canStartTimer: Boolean = true): AgendaScreenState = AgendaScreenState(
         planningDate = planningDay,
         selectedDate = null,
@@ -359,21 +577,29 @@ class AgendaScreenTest {
         filterLabel = "筛选：所有日期",
         availableDates = availableDates,
         selectedCapacityLabel = null,
-        selectedRows = emptyList(),
+        workbenchSummary = summary("所有日期", null),
         dateSections = listOf(
             AgendaDateSection(
                 planningDate = "2026-03-05",
                 capacityLabel = "已安排 60 / 120 分钟",
-                rows = listOf(
-                    row(reportEntry, "2026-03-05 · 60 分钟 · 工作 · 无提醒", canStartTimer),
+                timelineRows = listOf(
+                    row(
+                        reportEntry,
+                        "2026-03-05 · 60 分钟 · 工作 · 无提醒",
+                        canStartTimer,
+                        targetLabel = "工作",
+                        timing = true,
+                    ),
                 ),
+                unscheduledRows = listOf(row(looseEntry, "2026-03-05 · 15 分钟 · 无提醒", canStartTimer)),
             ),
             AgendaDateSection(
                 planningDate = "2026-03-06",
                 capacityLabel = "已安排 30 / 120 分钟",
-                rows = listOf(
+                timelineRows = listOf(
                     row(meetingEntry, "2026-03-06 · 30 分钟 · 无提醒 · 已完成", canStartTimer),
                 ),
+                unscheduledRows = emptyList(),
             ),
         ),
         emptyLabel = null,
@@ -387,6 +613,10 @@ class AgendaScreenTest {
         selected: LocalDate,
         activeTimer: AgendaActiveTimer? = null,
         timeRecords: List<AgendaTimeRecord> = emptyList(),
+        timelineRows: List<AgendaScheduleRow> = listOf(
+            row(meetingEntry, "2026-03-06 · 30 分钟 · 无提醒 · 已完成", true),
+        ),
+        unscheduledRows: List<AgendaScheduleRow> = emptyList(),
     ): AgendaScreenState = AgendaScreenState(
         planningDate = planningDay,
         selectedDate = selected,
@@ -394,7 +624,9 @@ class AgendaScreenTest {
         filterLabel = "筛选：规划日 $selected",
         availableDates = availableDates,
         selectedCapacityLabel = "已安排 30 / 120 分钟",
-        selectedRows = listOf(row(meetingEntry, "2026-03-06 · 30 分钟 · 无提醒 · 已完成", true)),
+        workbenchSummary = summary("规划日 $selected", "已安排 30 / 120 分钟"),
+        timelineRows = timelineRows,
+        unscheduledRows = unscheduledRows,
         dateSections = emptyList(),
         emptyLabel = null,
         recurrenceRules = recurrenceRules,
@@ -433,12 +665,22 @@ class AgendaScreenTest {
         filterLabel = "筛选：所有日期",
         availableDates = listOf(AgendaDateOption(planningDay, "规划日 2026-03-05")),
         selectedCapacityLabel = null,
-        selectedRows = emptyList(),
+        workbenchSummary = summary("所有日期", null),
         dateSections = emptyList(),
         emptyLabel = "所有日期暂无日程条目。",
         recurrenceRules = emptyList(),
         targets = emptyList(),
         pendingEditRow = null,
+    )
+
+    /** 选中规划日却一条日程都没有：空态直接给出添加日程入口。 */
+    private fun emptyPlanningDayScreenState(): AgendaScreenState = planningDayScreenState(
+        selected = planningDay,
+        timelineRows = emptyList(),
+    ).copy(
+        workbenchEmptyLabel = "安排今天第一件事",
+        emptyLabel = "规划日 2026-03-05 暂无日程条目。",
+        recurrenceRules = emptyList(),
     )
 
     private fun mount(
