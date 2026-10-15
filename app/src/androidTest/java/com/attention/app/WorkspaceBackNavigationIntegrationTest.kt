@@ -13,6 +13,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.espresso.Espresso
+import androidx.test.espresso.NoActivityResumedException
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.attention.app.data.RoomAttentionStateRepository
@@ -85,14 +86,16 @@ class WorkspaceBackNavigationIntegrationTest {
             .performScrollTo()
             .performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("schedule-edit-estimate-$TODAY_ENTRY_ID").assertIsDisplayed()
+        // 对话框的标题永远在对话框顶部可见；表单字段在可滚动区域里，可能在视口之外
+        composeRule.onNodeWithText("编辑日程").assertIsDisplayed()
 
         Espresso.pressBack()
         composeRule.waitForIdle()
 
         // 日程详情优先被关掉，日程页本身还在，应用没有退出
-        composeRule.onNodeWithTag("schedule-edit-estimate-$TODAY_ENTRY_ID").assertDoesNotExist()
-        composeRule.onNodeWithTag("agenda-filter").assertIsDisplayed()
+        composeRule.onNodeWithText("编辑日程").assertDoesNotExist()
+        // 日程页是一列可滚动内容：断言之前先滚到筛选标题上，而不是假设它在视口里
+        composeRule.onNodeWithTag("agenda-filter").performScrollTo().assertIsDisplayed()
         assertEquals(Lifecycle.State.RESUMED, activityState())
     }
 
@@ -145,12 +148,19 @@ class WorkspaceBackNavigationIntegrationTest {
     private fun activityState(): Lifecycle.State = composeRule.activityRule.scenario.state
 
     /**
-     * 按下返回键并等系统级返回真正发生：应用不再是 RESUMED 之后才算按完。
-     * 系统级返回是异步的（Activity 的销毁在主线程排到后面），因此这里轮询等待。
+     * 按一次返回键并等系统级返回真的发生：应用不再是 RESUMED 之后才算按完。
+     *
+     * 返回键确实把应用退掉时，Espresso 会抛 [NoActivityResumedException]——那正是这几条用例
+     * 要断言的结果，不是失败。这里捕获它，再由调用方断言应用真的退出了：留在上一个标签页的
+     * 实现会消费掉返回键、应用仍然 RESUMED，因此这条断言仍然能区分两种行为。
      */
     private fun pressBackUntilSystemBack() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        Espresso.pressBack()
+        try {
+            Espresso.pressBack()
+        } catch (systemBackKilledTheApp: NoActivityResumedException) {
+            // 预期的系统级返回：应用被退掉了
+        }
         val deadline = SystemClock.uptimeMillis() + TIMEOUT
         while (SystemClock.uptimeMillis() < deadline && activityState() == Lifecycle.State.RESUMED) {
             instrumentation.waitForIdleSync()

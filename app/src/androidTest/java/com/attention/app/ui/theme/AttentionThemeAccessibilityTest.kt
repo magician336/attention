@@ -89,7 +89,8 @@ class AttentionThemeAccessibilityTest {
     fun the_full_screen_guide_controls_meet_the_material3_touch_target_baseline() {
         composeRule.onNodeWithTag("nav-statistics").performClick()
         composeRule.waitForTag("statistics-open-settings")
-        composeRule.onNodeWithTag("statistics-open-settings").performClick()
+        // 统计页很长，「设置与数据」入口在首屏之外：必须先滚到它再点，否则点的是一个屏幕外的节点
+        composeRule.onNodeWithTag("statistics-open-settings").performScrollTo().performClick()
         composeRule.waitForTag("settings-open-onboarding")
         composeRule.onNodeWithTag("settings-open-onboarding").performClick()
 

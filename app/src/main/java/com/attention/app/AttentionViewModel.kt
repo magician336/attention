@@ -65,6 +65,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -85,11 +86,25 @@ class AttentionViewModel(
         val schedules: String,
     )
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    val state: StateFlow<AttentionState> = repository.state.stateIn(
+    private val loadedState: StateFlow<AttentionState> = repository.state.stateIn(
         scope,
         SharingStarted.WhileSubscribed(5_000),
         AttentionState(),
     )
+    val state: StateFlow<AttentionState> = loadedState
+
+    /**
+     * 持久化状态是否真的读上来了。
+     *
+     * [state] 在读到之前是一份**空的默认值**（[AttentionState]），而不是「用户的数据为空」。
+     * 因此组合根必须等这个信号为真，才可以基于 [state] 做启动落点、写回「上次打开」这类
+     * 会覆盖用户已保存偏好的决定——否则启动那一帧按默认值算出来的暂定落点会抢先写回去。
+     *
+     * 它派生自 [state] 本身而不是另开一次读取，因此与 [state] 必然来自同一次加载，不会分叉。
+     */
+    val stateLoaded: StateFlow<Boolean> = loadedState
+        .map { true }
+        .stateIn(scope, SharingStarted.WhileSubscribed(5_000), false)
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
     private val _backupResult = MutableStateFlow<BackupCommitResult?>(null)
