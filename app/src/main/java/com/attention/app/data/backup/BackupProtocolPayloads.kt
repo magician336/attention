@@ -1,9 +1,5 @@
 package com.attention.app.data.backup
 
-import com.attention.domain.GoalCadence
-import com.attention.domain.LaunchDestination
-import com.attention.domain.ScheduleFrequency
-import com.attention.domain.TimeEntrySource
 import kotlinx.serialization.serializer
 
 /** 协议字段是一个对象，还是同一个对象的列表。 */
@@ -13,10 +9,13 @@ enum class BackupPayloadContainer { VALUE, LIST }
  * 清单项的类别。
  *
  * [PROTOCOL_RECORD] 是协议自己的数据模型（`Backup*`，见 [BackupProtocolModels]），
- * [DOMAIN_ENUM] 是协议字段仍然直接承载的领域枚举，[PROTOCOL_SCALAR] 是协议自己定义的标量字段。
+ * [PROTOCOL_ENUM] 是协议自己的按名持久化枚举（见 [BackupProtocolEnums]），
+ * [PROTOCOL_SCALAR] 是协议自己定义的标量字段。
  *
- * [PROTOCOL_ENUM] 目前没有任何载荷占着：五个枚举字段（两个启动入口、三个周期/来源口径）仍直接
- * 承载领域枚举，这是过渡状态，由 #205 换成协议自己的枚举之后，第一条清单项才会落进这一类。
+ * [DOMAIN_ENUM] 目前没有任何载荷占着：备份字段不再直接承载领域枚举。枚举承载点之所以必须是
+ * 协议类型而不是领域类型，是因为线上那些枚举名是备份协议的东西，「名字认不出来时读成什么」
+ * 这条容错规则也随它走（见 `BackupProtocolEnums`）。留下 [DOMAIN_ENUM] 这一类是为了让
+ * 「协议字段又直接引用了领域枚举」这件事在清单里显形，而不是悄悄回到上一轮的过渡状态。
  */
 enum class BackupPayloadKind { PROTOCOL_RECORD, PROTOCOL_ENUM, DOMAIN_ENUM, PROTOCOL_SCALAR }
 
@@ -206,19 +205,22 @@ object BackupProtocolPayloads {
         ),
         BackupPayload(
             field = "launchDestination",
-            serialName = LaunchDestination.serializer().descriptor.serialName,
+            serialName = BackupLaunchDestination.serializer().descriptor.serialName,
             container = BackupPayloadContainer.VALUE,
-            kind = BackupPayloadKind.DOMAIN_ENUM,
+            kind = BackupPayloadKind.PROTOCOL_ENUM,
             wireFields = "",
-            reason = "用户选定的启动入口。它是用户偏好而不是领域事实，因此与目标、日程等领域记录分开列出。",
+            reason = "用户选定的启动入口。它是用户偏好而不是领域事实，因此与目标、日程等领域记录分开列出。" +
+                "它写出去的就是线上名字，所以容错规则由协议自己的枚举承担：名字认不出来时按「日程」读，" +
+                "而不是让整份备份被拒。",
         ),
         BackupPayload(
             field = "lastOpenedDestination",
-            serialName = LaunchDestination.serializer().descriptor.serialName,
+            serialName = BackupLaunchDestination.serializer().descriptor.serialName,
             container = BackupPayloadContainer.VALUE,
-            kind = BackupPayloadKind.DOMAIN_ENUM,
+            kind = BackupPayloadKind.PROTOCOL_ENUM,
             wireFields = "",
-            reason = "上次打开的页面。恢复备份后「上次打开」应当仍指向用户当时离开的地方。",
+            reason = "上次打开的页面。恢复备份后「上次打开」应当仍指向用户当时离开的地方。" +
+                "认不出来的入口名同样按「日程」读；旧入口名（今天页、所有日期）折成日程入口。",
         ),
         BackupPayload(
             field = "notificationsEnabled",
@@ -230,48 +232,50 @@ object BackupProtocolPayloads {
         ),
         // 以下承载点不出现在协议顶层，而是嵌在被承载的协议模型里，
         // 但同样会随父类型被序列化，因此也是协议承载的内容。
-        // 周期口径、来源与频率仍直接承载领域枚举，是过渡状态，见 BackupPayloadKind 与 #205。
         BackupPayload(
             field = "goalStages.cadence",
-            serialName = GoalCadence.serializer().descriptor.serialName,
+            serialName = BackupGoalCadence.serializer().descriptor.serialName,
             container = BackupPayloadContainer.VALUE,
-            kind = BackupPayloadKind.DOMAIN_ENUM,
+            kind = BackupPayloadKind.PROTOCOL_ENUM,
             wireFields = "",
-            reason = "目标阶段的周期口径：每日、每周、每月或一次性。同一个目标量在不同周期下不是一个承诺。",
+            reason = "目标阶段的周期口径：每日、每周、每月或一次性。同一个目标量在不同周期下不是一个承诺。" +
+                "认不出来的口径按「每日」读，宁可多提醒也不要静默漏掉。",
         ),
         BackupPayload(
             field = "futureGoalRules.cadence",
-            serialName = GoalCadence.serializer().descriptor.serialName,
+            serialName = BackupGoalCadence.serializer().descriptor.serialName,
             container = BackupPayloadContainer.VALUE,
-            kind = BackupPayloadKind.DOMAIN_ENUM,
+            kind = BackupPayloadKind.PROTOCOL_ENUM,
             wireFields = "",
             reason = "未来目标规则沿用同一套周期口径。缺了它就无法判断这条未来规则约束的是一天、一周还是一月，" +
                 "规则会被静默读成另一个承诺。",
         ),
         BackupPayload(
             field = "periodSnapshots.cadence",
-            serialName = GoalCadence.serializer().descriptor.serialName,
+            serialName = BackupGoalCadence.serializer().descriptor.serialName,
             container = BackupPayloadContainer.VALUE,
-            kind = BackupPayloadKind.DOMAIN_ENUM,
+            kind = BackupPayloadKind.PROTOCOL_ENUM,
             wireFields = "",
             reason = "周期快照必须记住它是按哪个周期口径留存的历史依据。没有它，快照无法与同口径的历史对齐，" +
                 "缺口与达成判定会对不上。",
         ),
         BackupPayload(
             field = "timeEntries.source",
-            serialName = TimeEntrySource.serializer().descriptor.serialName,
+            serialName = BackupTimeEntrySource.serializer().descriptor.serialName,
             container = BackupPayloadContainer.VALUE,
-            kind = BackupPayloadKind.DOMAIN_ENUM,
+            kind = BackupPayloadKind.PROTOCOL_ENUM,
             wireFields = "",
-            reason = "时间记录的来源。它决定记录是否具备精确计时时刻，也影响回顾与统计的呈现方式。",
+            reason = "时间记录的来源。它决定记录是否具备精确计时时刻，也影响回顾与统计的呈现方式。" +
+                "认不出来的来源按「手动」处理：手动是唯一一个不谎报事实的选项。",
         ),
         BackupPayload(
             field = "recurrenceRules.frequency",
-            serialName = ScheduleFrequency.serializer().descriptor.serialName,
+            serialName = BackupScheduleFrequency.serializer().descriptor.serialName,
             container = BackupPayloadContainer.VALUE,
-            kind = BackupPayloadKind.DOMAIN_ENUM,
+            kind = BackupPayloadKind.PROTOCOL_ENUM,
             wireFields = "",
-            reason = "重复日程的频率。它与 weekdays、dayOfMonth 一起决定规则如何展开成日程条目。",
+            reason = "重复日程的频率。它与 weekdays、dayOfMonth 一起决定规则如何展开成日程条目。" +
+                "认不出来的频率按「每日」处理：不漏掉用户已经答应的那些天，好过静默地少排几天。",
         ),
         BackupPayload(
             field = "activeTimer.completedSegments",

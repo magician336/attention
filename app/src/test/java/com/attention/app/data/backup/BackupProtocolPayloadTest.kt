@@ -1,5 +1,6 @@
 package com.attention.app.data.backup
 
+import kotlinx.serialization.descriptors.SerialKind
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.StructureKind
 import kotlinx.serialization.descriptors.elementNames
@@ -80,6 +81,27 @@ class BackupProtocolPayloadTest {
             )
         }
     }
+
+    /**
+     * 备份字段不再直接承载领域枚举：线上那些枚举名属于备份协议，容错规则也随之归协议所有。
+     *
+     * 前一条测试只保证「清单与协议描述符一致」，而描述符里的类型名恰好就是清单的输入——有人把某个
+     * 枚举字段改回领域类型、同时把清单那一项的类别改回 [BackupPayloadKind.DOMAIN_ENUM]，前一条照样是绿的。
+     * 这条把「协议字段直接引用领域枚举」这件事判成回归。
+     */
+    @Test
+    fun no_protocol_field_carries_a_domain_enum_anymore() {
+        val domainEnums = BackupProtocolPayloads.payloads.filter {
+            it.kind == BackupPayloadKind.DOMAIN_ENUM
+        }
+
+        assertEquals(
+            "备份协议字段又直接承载了领域枚举：${domainEnums.map { it.field }}。" +
+                "线上名字与它的容错规则归备份协议所有，应当用 BackupProtocolEnums 里的协议枚举。",
+            emptyList<BackupPayload>(),
+            domainEnums,
+        )
+    }
 }
 
 /** 从序列化描述符里读出来的协议实际承载点。 */
@@ -100,10 +122,12 @@ internal class ProtocolCarryPoints(
          * 从 [root] 开始遍历：顶层字段全部记下（标量也要记，否则新增标量字段不会被发现），
          * 之后只在遇到「被承载的类型」时继续下钻，记录嵌在它里面的承载点。
          *
-         * 被承载的类型有两种：协议自有的数据模型（`Backup*`），以及仍然直接承载的领域枚举
-         * （过渡状态，见 [BackupPayloadKind]）。嵌在协议模型里的普通标量不算承载点——它们是那个
-         * 类型自己的 `wireFields`，由 `manifest_lists_exactly_the_fields_each_carried_type_serializes`
-         * 覆盖。
+         * 被承载的类型有两种：协议自有的数据模型（`Backup*`），以及按名持久化的枚举。枚举的描述符
+         * 声明为 [kotlinx.serialization.descriptors.SerialKind.ENUM]，所以只靠描述符就能把它和普通
+         * 标量（Int、String、Boolean 都是 PRIMITIVE）分开——否则协议自己的枚举会被当成标量而漏掉
+         * 承载点。领域枚举的描述符是 STRING（`:domain` 那边为数据库列这么声明的），因此仍按包名前缀
+         * 识别。嵌在协议模型里的普通标量不算承载点——它们是那个类型自己的 `wireFields`，由
+         * `manifest_lists_exactly_the_fields_each_carried_type_serializes` 覆盖。
          */
         fun from(root: SerialDescriptor): ProtocolCarryPoints {
             val carryPoints = linkedMapOf<String, CarryPoint>()
@@ -112,7 +136,9 @@ internal class ProtocolCarryPoints(
             val visited = mutableSetOf<String>()
 
             fun isCarried(serialName: String, descriptor: SerialDescriptor): Boolean =
-                descriptor.kind == StructureKind.CLASS || serialName.startsWith(DOMAIN_PREFIX)
+                descriptor.kind == StructureKind.CLASS ||
+                    descriptor.kind == SerialKind.ENUM ||
+                    serialName.startsWith(DOMAIN_PREFIX)
 
             fun visit(path: String, field: SerialDescriptor, isProtocolLevel: Boolean) {
                 val container = if (field.kind == StructureKind.LIST) {
@@ -160,7 +186,7 @@ internal class ProtocolCarryPoints(
         private fun kindOf(serialName: String, descriptor: SerialDescriptor): BackupPayloadKind = when {
             BackupProtocolPayloads.isProtocolType(serialName) ->
                 if (descriptor.kind == StructureKind.CLASS) BackupPayloadKind.PROTOCOL_RECORD else BackupPayloadKind.PROTOCOL_ENUM
-            // 协议字段仍然直接承载领域枚举，是过渡状态（见 BackupPayloadKind 与 #205）。
+            // 协议字段仍然直接承载领域枚举，说明有人退回了过渡状态。
             serialName.startsWith(DOMAIN_PREFIX) -> BackupPayloadKind.DOMAIN_ENUM
             else -> BackupPayloadKind.PROTOCOL_SCALAR
         }

@@ -1,8 +1,5 @@
 package com.attention.app.data.backup
 
-import com.attention.domain.GoalCadence
-import com.attention.domain.ScheduleFrequency
-import com.attention.domain.TimeEntrySource
 import kotlinx.serialization.Serializable
 
 /*
@@ -20,10 +17,9 @@ import kotlinx.serialization.Serializable
  * 2. 这里的默认值是**协议**的默认值，决定缺字段的历史备份读成什么。它们必须与领域类型的
  *    构造默认值一致，同一条测试也断言这一点。
  *
- * 过渡状态：下面这些类型里，`cadence`、`frequency`、`source`、`launchDestination`、
- * `lastOpenedDestination` 五个字段的类型**仍然是领域枚举**。枚举的按名持久化与未知值容错属于
- * #205（见 `:domain` 的 [GoalCadence] 等四个按名持久化的枚举），那一票会把它们换成协议自己的
- * 枚举，并且保留相同的容错行为。本票不碰 `:domain` 的枚举序列化器。
+ * `cadence`、`frequency`、`source`、`launchDestination`、`lastOpenedDestination` 这五个字段由
+ * 协议自己的枚举承载（见 [BackupProtocolEnums]），并由 [BackupDomainMapping] 与领域枚举互转。
+ * 它们在线上就是字符串，所以「名字认不出来时读成什么」这条规则也归协议，不再借道领域类型。
  */
 
 /**
@@ -70,8 +66,8 @@ data class BackupTarget(
 data class BackupGoalStage(
     val id: String,
     val targetId: String,
-    // 过渡状态：字段类型仍是领域枚举，由 #205 换成协议自己的枚举。
-    val cadence: GoalCadence,
+    // 协议自己的枚举：名字认不出来时读成声明过的默认值，见 BackupProtocolEnums。
+    val cadence: BackupGoalCadence,
     val targetMinutes: Int,
     val startDate: String,
     val dueDate: String? = null,
@@ -85,8 +81,8 @@ data class BackupTimeEntry(
     val planningDate: String,
     val durationMinutes: Int,
     val targetId: String? = null,
-    // 过渡状态：字段类型仍是领域枚举，由 #205 换成协议自己的枚举。
-    val source: TimeEntrySource = TimeEntrySource.MANUAL,
+    // 协议自己的枚举：名字认不出来时读成声明过的默认值，见 BackupProtocolEnums。
+    val source: BackupTimeEntrySource = BackupTimeEntrySource.MANUAL,
     val occurredAtEpochMillis: Long? = null,
     val note: String = "",
     val scheduleEntryId: String? = null,
@@ -114,8 +110,8 @@ data class BackupRecurrenceRule(
     val id: String,
     val title: String,
     val startDate: String,
-    // 过渡状态：字段类型仍是领域枚举，由 #205 换成协议自己的枚举。
-    val frequency: ScheduleFrequency,
+    // 协议自己的枚举：名字认不出来时读成声明过的默认值，见 BackupProtocolEnums。
+    val frequency: BackupScheduleFrequency,
     val weekdays: List<Int> = emptyList(),
     val dayOfMonth: Int? = null,
     val untilDate: String? = null,
@@ -144,8 +140,8 @@ data class BackupFutureGoalRule(
     val id: String,
     val targetId: String,
     val stageId: String = "",
-    // 过渡状态：字段类型仍是领域枚举，由 #205 换成协议自己的枚举。
-    val cadence: GoalCadence,
+    // 协议自己的枚举：名字认不出来时读成声明过的默认值，见 BackupProtocolEnums。
+    val cadence: BackupGoalCadence,
     val targetMinutes: Int,
     val effectiveFrom: String,
     val dueDate: String? = null,
@@ -156,8 +152,8 @@ data class BackupFutureGoalRule(
 data class BackupPeriodSnapshot(
     val id: String,
     val targetId: String,
-    // 过渡状态：字段类型仍是领域枚举，由 #205 换成协议自己的枚举。
-    val cadence: GoalCadence,
+    // 协议自己的枚举：名字认不出来时读成声明过的默认值，见 BackupProtocolEnums。
+    val cadence: BackupGoalCadence,
     val periodStart: String,
     val periodEnd: String,
     val targetMinutes: Int,

@@ -26,10 +26,12 @@ fun LaunchDestination.asAgendaEntry(): LaunchDestination = when (this) {
 }
 
 /**
- * 读取持久化的入口名称（DataStore 与备份 JSON 共用同一套枚举名称协议）。
+ * 读取持久化的入口名称（DataStore 的启动入口与「上次打开」用它）。
  *
- * 解析委托给 [LaunchDestinationSerializer]：备份 JSON 里按名序列化的就是同一份协议，
- * 两条路径必须对认不出来的名字给出同一个答案。旧版本的值经 [asAgendaEntry] 等价于日程入口。
+ * 解析委托给 [LaunchDestinationSerializer]：Room 之外这条路径把偏好按 `name` 存进 DataStore，
+ * 认不出来的历史必须回退到日程入口，而不是把已删除的旧名称继续当成有效值。备份 JSON 不走这里，
+ * 它用备份协议自己那一份容错规则（`app` 的 `BackupProtocolEnums`），两侧结论由测试对照。
+ * 旧版本的值经 [asAgendaEntry] 等价于日程入口。
  */
 fun launchDestinationFromPersistedName(name: String?): LaunchDestination =
     LaunchDestinationSerializer.fromPersistedName(name).asAgendaEntry()

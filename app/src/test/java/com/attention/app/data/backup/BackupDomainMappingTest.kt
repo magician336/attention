@@ -4,19 +4,23 @@ import com.attention.domain.ActiveTimer
 import com.attention.domain.AttentionState
 import com.attention.domain.FutureGoalRule
 import com.attention.domain.GoalCadence
+import com.attention.domain.GoalCadenceSerializer
 import com.attention.domain.GoalStage
 import com.attention.domain.LaunchDestination
+import com.attention.domain.LaunchDestinationSerializer
 import com.attention.domain.Migration
 import com.attention.domain.Milestone
 import com.attention.domain.PeriodSnapshot
 import com.attention.domain.RecurrenceRule
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.ScheduleFrequency
+import com.attention.domain.ScheduleFrequencySerializer
 import com.attention.domain.StoredSettings
 import com.attention.domain.Target
 import com.attention.domain.TargetMove
 import com.attention.domain.TimeEntry
 import com.attention.domain.TimeEntrySource
+import com.attention.domain.TimeEntrySourceSerializer
 import com.attention.domain.TimerSegment
 import com.attention.domain.recalculateExperience
 import kotlinx.serialization.KSerializer
@@ -43,9 +47,9 @@ import org.junit.Test
  * - 协议模型相对领域类型唯一的「可选性」差异被钉死，不许悄悄增加
  *   （[the_only_optionality_difference_is_the_row_id_the_protocol_requires]）。
  *
- * 过渡状态：领域类型仍然标着 `@Serializable`（#199 为四个按名持久化的枚举挂了容错序列化器，
- * #205 会接管枚举那一层），所以这张表用序列化描述符来对照字段。它同时也是「领域类型一旦不再
- * 可序列化，这里就会要求换一种对照方式」的信号。
+ * 过渡状态：领域的数据类仍然标着 `@Serializable`，所以这张表用序列化描述符来对照字段；对照时协议枚举
+ * 先按 `protocolEnumToDomainEnum` 翻译成领域枚举——两侧承载的是同名但不同身份的枚举（备份协议那一份
+ * 见 `BackupProtocolEnums`）。领域的数据类哪天不再可序列化，这里就要换一种对照方式。
  */
 class BackupDomainMappingTest {
 
@@ -119,6 +123,31 @@ class BackupDomainMappingTest {
                 mapped.domain.descriptor.serialName.startsWith(DOMAIN_PREFIX),
             )
         }
+    }
+
+    /**
+     * 协议枚举的翻译表必须正好覆盖清单里的全部协议枚举承载类型。
+     *
+     * 少了某个：那个字段的协议类型与领域类型名字对不上，[every_backed_up_field_has_a_protocol_counterpart]
+     * 会变红——但报错说的是「字段对不上」，读的人看不出真正的原因是翻译表没登记这个枚举。
+     * 多了某个：翻译表里有一条清单从不使用、也没有对应领域枚举的规则，它悄悄放宽了对照，属于没人要的宽容。
+     */
+    @Test
+    fun the_enum_translation_table_covers_exactly_the_manifests_protocol_enums() {
+        val declared = BackupProtocolPayloads.payloads
+            .filter { it.kind == BackupPayloadKind.PROTOCOL_ENUM }
+            .map { it.serialName }
+            .toSortedSet()
+
+        assertEquals(
+            "协议枚举翻译表与清单对「备份里有哪些协议枚举」的说法不一致：见 protocolEnumToDomainEnum。",
+            protocolEnumToDomainEnum.keys.toSortedSet(),
+            declared,
+        )
+        assertTrue(
+            "翻译表里有条目没有对应的领域枚举：${protocolEnumToDomainEnum.filterValues { !it.startsWith(DOMAIN_PREFIX) }.keys}",
+            protocolEnumToDomainEnum.values.all { it.startsWith(DOMAIN_PREFIX) },
+        )
     }
 
     /** 每一行清单项的承载路径都必须能在这张对照表里找到对应的领域类型与协议模型。 */
@@ -367,10 +396,28 @@ private data class MappedType(
 
 private const val DOMAIN_PREFIX = "com.attention.domain."
 
+/**
+ * 协议枚举 → 它对应的领域枚举，按序列化标识配对。
+ *
+ * 协议字段承载的是备份协议自己的枚举（[BackupProtocolEnums]），领域字段承载的是领域枚举，两者名字
+ * 一样、身份不同。逐字段对照时要先把协议枚举翻译成领域枚举再比，否则 `cadence`、`source`、
+ * `frequency` 这几列永远对不上，而对不上的原因不是真的缺字段。
+ *
+ * 这张表因此是护栏的一部分而不是装饰：它列出的协议枚举必须正好是清单里 [BackupPayloadKind.PROTOCOL_ENUM]
+ * 的那些承载类型（见 [the_enum_translation_table_covers_exactly_the_manifests_protocol_enums]）。
+ */
+private val protocolEnumToDomainEnum: Map<String, String> = mapOf(
+    BackupLaunchDestination.serializer().descriptor.serialName to LaunchDestinationSerializer.descriptor.serialName,
+    BackupGoalCadence.serializer().descriptor.serialName to GoalCadenceSerializer.descriptor.serialName,
+    BackupTimeEntrySource.serializer().descriptor.serialName to TimeEntrySourceSerializer.descriptor.serialName,
+    BackupScheduleFrequency.serializer().descriptor.serialName to ScheduleFrequencySerializer.descriptor.serialName,
+)
+
 /** `名称:类型` 的有序形状，字段名、字段顺序与字段类型都在里面。 */
 private fun KSerializer<*>.shape(): List<String> {
     val descriptor: SerialDescriptor = descriptor
     return (0 until descriptor.elementsCount).map { index ->
-        "${descriptor.getElementName(index)}:${descriptor.getElementDescriptor(index).serialName}"
+        val type = descriptor.getElementDescriptor(index).serialName
+        "${descriptor.getElementName(index)}:${protocolEnumToDomainEnum[type] ?: type}"
     }
 }

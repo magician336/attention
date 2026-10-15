@@ -3,16 +3,20 @@ package com.attention.app.data.backup
 import com.attention.domain.ActiveTimer
 import com.attention.domain.AttentionState
 import com.attention.domain.FutureGoalRule
+import com.attention.domain.GoalCadence
 import com.attention.domain.GoalStage
+import com.attention.domain.LaunchDestination
 import com.attention.domain.Migration
 import com.attention.domain.Milestone
 import com.attention.domain.PeriodSnapshot
 import com.attention.domain.RecurrenceRule
 import com.attention.domain.ScheduleEntry
+import com.attention.domain.ScheduleFrequency
 import com.attention.domain.StoredSettings
 import com.attention.domain.Target
 import com.attention.domain.TargetMove
 import com.attention.domain.TimeEntry
+import com.attention.domain.TimeEntrySource
 import com.attention.domain.TimerSegment
 import com.attention.domain.recalculateExperience
 
@@ -56,8 +60,8 @@ internal fun AttentionState.toProtocol(deduplicateMilestones: Boolean): Attentio
         experience = canonical.experience,
         activeTimer = canonical.activeTimer?.toProtocol(),
         onboardingCompleted = canonical.onboardingCompleted,
-        launchDestination = canonical.launchDestination,
-        lastOpenedDestination = canonical.lastOpenedDestination,
+        launchDestination = canonical.launchDestination.toProtocol(),
+        lastOpenedDestination = canonical.lastOpenedDestination.toProtocol(),
         notificationsEnabled = canonical.notificationsEnabled,
     )
 }
@@ -80,8 +84,8 @@ fun AttentionBackup.toDomainState(): AttentionState = AttentionState(
     experience = experience,
     activeTimer = activeTimer?.toDomain(),
     onboardingCompleted = onboardingCompleted,
-    launchDestination = launchDestination,
-    lastOpenedDestination = lastOpenedDestination,
+    launchDestination = launchDestination.toDomain(),
+    lastOpenedDestination = lastOpenedDestination.toDomain(),
     notificationsEnabled = notificationsEnabled,
 ).recalculateExperience()
 
@@ -124,7 +128,7 @@ internal fun BackupTarget.toDomain(): Target = Target(
 internal fun GoalStage.toProtocol(): BackupGoalStage = BackupGoalStage(
     id = id,
     targetId = targetId,
-    cadence = cadence,
+    cadence = cadence.toProtocol(),
     targetMinutes = targetMinutes,
     startDate = startDate,
     dueDate = dueDate,
@@ -134,7 +138,7 @@ internal fun GoalStage.toProtocol(): BackupGoalStage = BackupGoalStage(
 internal fun BackupGoalStage.toDomain(): GoalStage = GoalStage(
     id = id,
     targetId = targetId,
-    cadence = cadence,
+    cadence = cadence.toDomain(),
     targetMinutes = targetMinutes,
     startDate = startDate,
     dueDate = dueDate,
@@ -146,7 +150,7 @@ internal fun TimeEntry.toProtocol(): BackupTimeEntry = BackupTimeEntry(
     planningDate = planningDate,
     durationMinutes = durationMinutes,
     targetId = targetId,
-    source = source,
+    source = source.toProtocol(),
     occurredAtEpochMillis = occurredAtEpochMillis,
     note = note,
     scheduleEntryId = scheduleEntryId,
@@ -157,7 +161,7 @@ internal fun BackupTimeEntry.toDomain(): TimeEntry = TimeEntry(
     planningDate = planningDate,
     durationMinutes = durationMinutes,
     targetId = targetId,
-    source = source,
+    source = source.toDomain(),
     occurredAtEpochMillis = occurredAtEpochMillis,
     note = note,
     scheduleEntryId = scheduleEntryId,
@@ -195,7 +199,7 @@ internal fun RecurrenceRule.toProtocol(): BackupRecurrenceRule = BackupRecurrenc
     id = id,
     title = title,
     startDate = startDate,
-    frequency = frequency,
+    frequency = frequency.toProtocol(),
     weekdays = weekdays,
     dayOfMonth = dayOfMonth,
     untilDate = untilDate,
@@ -210,7 +214,7 @@ internal fun BackupRecurrenceRule.toDomain(): RecurrenceRule = RecurrenceRule(
     id = id,
     title = title,
     startDate = startDate,
-    frequency = frequency,
+    frequency = frequency.toDomain(),
     weekdays = weekdays,
     dayOfMonth = dayOfMonth,
     untilDate = untilDate,
@@ -245,7 +249,7 @@ internal fun FutureGoalRule.toProtocol(): BackupFutureGoalRule = BackupFutureGoa
     id = id,
     targetId = targetId,
     stageId = stageId,
-    cadence = cadence,
+    cadence = cadence.toProtocol(),
     targetMinutes = targetMinutes,
     effectiveFrom = effectiveFrom,
     dueDate = dueDate,
@@ -255,7 +259,7 @@ internal fun BackupFutureGoalRule.toDomain(): FutureGoalRule = FutureGoalRule(
     id = id,
     targetId = targetId,
     stageId = stageId,
-    cadence = cadence,
+    cadence = cadence.toDomain(),
     targetMinutes = targetMinutes,
     effectiveFrom = effectiveFrom,
     dueDate = dueDate,
@@ -264,7 +268,7 @@ internal fun BackupFutureGoalRule.toDomain(): FutureGoalRule = FutureGoalRule(
 internal fun PeriodSnapshot.toProtocol(): BackupPeriodSnapshot = BackupPeriodSnapshot(
     id = id,
     targetId = targetId,
-    cadence = cadence,
+    cadence = cadence.toProtocol(),
     periodStart = periodStart,
     periodEnd = periodEnd,
     targetMinutes = targetMinutes,
@@ -278,7 +282,7 @@ internal fun PeriodSnapshot.toProtocol(): BackupPeriodSnapshot = BackupPeriodSna
 internal fun BackupPeriodSnapshot.toDomain(): PeriodSnapshot = PeriodSnapshot(
     id = id,
     targetId = targetId,
-    cadence = cadence,
+    cadence = cadence.toDomain(),
     periodStart = periodStart,
     periodEnd = periodEnd,
     targetMinutes = targetMinutes,
@@ -348,3 +352,76 @@ internal fun BackupTimerSegment.toDomain(): TimerSegment = TimerSegment(
     startedAtEpochMillis = startedAtEpochMillis,
     endedAtEpochMillis = endedAtEpochMillis,
 )
+
+/*
+ * 枚举的转换：协议枚举与领域枚举名字一一对应，写法是穷举 `when` 而不是查表或 `valueOf`。
+ *
+ * 穷举有两个好处：协议或领域新增一个枚举常量，这里**编译不过**，而不是把新常量悄悄读成 null；
+ * 并且两侧常量名的对应关系一眼可见，不会被一张藏在字符串里的表掩盖。
+ *
+ * 注意：这里搬的是**已经被解析成枚举常量**的值，不是线上字符串。线上名字的解析发生在协议解码时
+ * （`BackupProtocolEnums`），领域侧的解析发生在 Room 映射与 DataStore 设置读取时，两边对同一个
+ * 无法识别的名字必须给出同一个常量——这件事由单元测试钉住，不靠这里的转换保证。
+ */
+
+internal fun GoalCadence.toProtocol(): BackupGoalCadence = when (this) {
+    GoalCadence.DAILY -> BackupGoalCadence.DAILY
+    GoalCadence.WEEKLY -> BackupGoalCadence.WEEKLY
+    GoalCadence.MONTHLY -> BackupGoalCadence.MONTHLY
+    GoalCadence.ONE_TIME -> BackupGoalCadence.ONE_TIME
+}
+
+internal fun BackupGoalCadence.toDomain(): GoalCadence = when (this) {
+    BackupGoalCadence.DAILY -> GoalCadence.DAILY
+    BackupGoalCadence.WEEKLY -> GoalCadence.WEEKLY
+    BackupGoalCadence.MONTHLY -> GoalCadence.MONTHLY
+    BackupGoalCadence.ONE_TIME -> GoalCadence.ONE_TIME
+}
+
+internal fun TimeEntrySource.toProtocol(): BackupTimeEntrySource = when (this) {
+    TimeEntrySource.MANUAL -> BackupTimeEntrySource.MANUAL
+    TimeEntrySource.TIMER -> BackupTimeEntrySource.TIMER
+    TimeEntrySource.SCHEDULE_CONFIRMED -> BackupTimeEntrySource.SCHEDULE_CONFIRMED
+    TimeEntrySource.IMPORT -> BackupTimeEntrySource.IMPORT
+}
+
+internal fun BackupTimeEntrySource.toDomain(): TimeEntrySource = when (this) {
+    BackupTimeEntrySource.MANUAL -> TimeEntrySource.MANUAL
+    BackupTimeEntrySource.TIMER -> TimeEntrySource.TIMER
+    BackupTimeEntrySource.SCHEDULE_CONFIRMED -> TimeEntrySource.SCHEDULE_CONFIRMED
+    BackupTimeEntrySource.IMPORT -> TimeEntrySource.IMPORT
+}
+
+internal fun ScheduleFrequency.toProtocol(): BackupScheduleFrequency = when (this) {
+    ScheduleFrequency.DAILY -> BackupScheduleFrequency.DAILY
+    ScheduleFrequency.WEEKLY -> BackupScheduleFrequency.WEEKLY
+    ScheduleFrequency.MONTHLY -> BackupScheduleFrequency.MONTHLY
+}
+
+internal fun BackupScheduleFrequency.toDomain(): ScheduleFrequency = when (this) {
+    BackupScheduleFrequency.DAILY -> ScheduleFrequency.DAILY
+    BackupScheduleFrequency.WEEKLY -> ScheduleFrequency.WEEKLY
+    BackupScheduleFrequency.MONTHLY -> ScheduleFrequency.MONTHLY
+}
+
+/**
+ * 启动入口的转换是纯按名的：协议保留 `TODAY` 与 `ALL_DATES` 这两个旧入口值（它们仍然能被解码出来），
+ * 折成「日程」由 [asAgendaEntry] 在需要顶级工作区时做，两件事仍然分开。
+ */
+internal fun LaunchDestination.toProtocol(): BackupLaunchDestination = when (this) {
+    LaunchDestination.TODAY -> BackupLaunchDestination.TODAY
+    LaunchDestination.TARGETS -> BackupLaunchDestination.TARGETS
+    LaunchDestination.ALL_DATES -> BackupLaunchDestination.ALL_DATES
+    LaunchDestination.STATISTICS -> BackupLaunchDestination.STATISTICS
+    LaunchDestination.LAST_OPENED -> BackupLaunchDestination.LAST_OPENED
+    LaunchDestination.AGENDA -> BackupLaunchDestination.AGENDA
+}
+
+internal fun BackupLaunchDestination.toDomain(): LaunchDestination = when (this) {
+    BackupLaunchDestination.TODAY -> LaunchDestination.TODAY
+    BackupLaunchDestination.TARGETS -> LaunchDestination.TARGETS
+    BackupLaunchDestination.ALL_DATES -> LaunchDestination.ALL_DATES
+    BackupLaunchDestination.STATISTICS -> LaunchDestination.STATISTICS
+    BackupLaunchDestination.LAST_OPENED -> LaunchDestination.LAST_OPENED
+    BackupLaunchDestination.AGENDA -> LaunchDestination.AGENDA
+}
