@@ -736,6 +736,24 @@ fun AttentionState.completeScheduleMetByInvestment(entryId: String?): AttentionS
     })
 }
 
+/**
+ * 用户在停止计时的结果面板上明确决定「这条做完了」时，把日程标记完成。
+ *
+ * 与 [completeScheduleMetByInvestment] 的区别在于判据：那个由已投入分钟数结算，只在达到
+ * 计划时长时改变状态；这个由用户的决定驱动，因此**不足计划时长也能真完成**。
+ *
+ * 它是幂等的，而且只翻完成位、不新增任何时间记录：那一笔投入已经在停止计时时写下，
+ * 再建第二笔会把它算两遍。重复点同一处不会把它翻回未完成——那是 [toggleScheduleCompleted]
+ * 的语义，两条路径在页面上互斥。
+ */
+fun AttentionState.markScheduleCompleted(entryId: String): AttentionState {
+    require(schedules.any { it.id == entryId }) { "日程条目不存在" }
+    if (schedules.first { it.id == entryId }.completed) return this
+    return copy(schedules = schedules.map { entry ->
+        if (entry.id == entryId) entry.copy(completed = true) else entry
+    })
+}
+
 private fun AttentionState.validateScheduleEntry(entry: ScheduleEntry) {
     require(entry.title.isNotBlank()) { "日程标题不能为空" }
     LocalDate.parse(entry.planningDate)

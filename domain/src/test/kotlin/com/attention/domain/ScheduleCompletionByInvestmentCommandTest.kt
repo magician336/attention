@@ -287,4 +287,33 @@ class ScheduleCompletionByInvestmentCommandTest {
         assertFalse(stopped.state.schedules.single().completed)
         assertEquals(90, stopped.state.scheduleInvestedMinutes(entry.id))
     }
+
+    @Test
+    fun the_users_own_decision_completes_an_entry_that_is_short_of_planned_minutes() {
+        // 不足计划时长时结算命令不动状态，但用户在结果面板上说「做完了」就必须看得见变化。
+        val entry = schedule(estimatedMinutes = 30)
+        val stopped = stopTimerFromSchedule(minutes = 20, entry = entry)
+
+        val marked = AttentionCommand.MarkScheduleCompleted(entry.id).execute(stopped, now, utc).state
+
+        assertTrue(marked.schedules.single().completed)
+    }
+
+    @Test
+    fun marking_completed_writes_no_second_investment_and_stays_idempotent() {
+        // 那一笔投入已经在停止计时时写下；再记一笔会把它算两遍。
+        // 重复点同一处也不能翻回未完成——那是 toggle 的语义，两条路径在页面上互斥。
+        val entry = schedule(estimatedMinutes = 30)
+        val stopped = stopTimerFromSchedule(minutes = 20, entry = entry)
+        val minutesAfterStop = stopped.scheduleInvestedMinutes(entry.id)
+        val sourcesAfterStop = stopped.timeEntries.map { it.source }
+
+        val once = AttentionCommand.MarkScheduleCompleted(entry.id).execute(stopped, now, utc).state
+        val twice = AttentionCommand.MarkScheduleCompleted(entry.id).execute(once, now, utc).state
+
+        assertEquals(1, once.timeEntries.size)
+        assertEquals(sourcesAfterStop, once.timeEntries.map { it.source })
+        assertEquals(minutesAfterStop, twice.scheduleInvestedMinutes(entry.id))
+        assertTrue(twice.schedules.single().completed)
+    }
 }

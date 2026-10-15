@@ -141,6 +141,19 @@ sealed interface AttentionCommand {
         }
     }
 
+    /**
+     * Records the user's own decision that one schedule entry is done.
+     *
+     * [SettleScheduleCompletion] answers "has the investment reached the plan?"; this answers
+     * "did the user decide it is done?". Running it on an entry that is already completed
+     * changes nothing, and it never writes a second time entry — the stopped timer already
+     * recorded that investment, so counting it again would double it.
+     */
+    data class MarkScheduleCompleted(val entryId: String) : AttentionCommand {
+        override fun execute(state: AttentionState, now: Instant, zone: ZoneId): AttentionCommandResult =
+            AttentionCommandResult(state.markScheduleCompleted(entryId))
+    }
+
     /** Settles the active timer and evaluates every planning day it touched. */
     data object StopTimer : AttentionCommand {
         override fun execute(state: AttentionState, now: Instant, zone: ZoneId): AttentionCommandResult {

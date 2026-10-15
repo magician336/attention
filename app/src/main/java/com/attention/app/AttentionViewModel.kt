@@ -256,12 +256,13 @@ class AttentionViewModel(
     /**
      * 把用户「标记为完成」的决定落到领域命令上。
      *
-     * 结算仍由 [AttentionCommand.SettleScheduleCompletion] 完成——它是幂等的，
-     * 因此重复点不会二次发放投入经验与里程碑。
+     * 走 [AttentionCommand.MarkScheduleCompleted] 而不是结算命令：结算命令只回答
+     * 「投入是否达到计划」，不足计划时它不动状态，于是用户明明说了「做完了」却看不到变化。
+     * 这里由用户的决定驱动，幂等，且不新建第二笔投入——那一笔在停止计时时已经写过。
      */
     fun markStoppedScheduleCompleted(entryId: String) =
         runTypedCommand(
-            AttentionCommand.SettleScheduleCompletion(entryId),
+            AttentionCommand.MarkScheduleCompleted(entryId),
             errorMessage = "无法标记完成",
         )
     fun addRecurrence(rule: RecurrenceRule) = runCommand { it.addRecurrence(rule) }
