@@ -112,6 +112,11 @@ class AttentionViewModel(
     /** Last typed commit/restore result, including stale and no-backup outcomes. */
     val backupResult: StateFlow<BackupCommitResult?> = _backupResult
     private val _backupError = MutableStateFlow<BackupViewModelError?>(null)
+    /**
+     * 最近一次停止计时产出的记录 id。面板按它从领域状态读回「刚刚那一笔」，
+     * 因此它必须来自命令结果，而不是页面临时记下的一段历史。
+     */
+    private val _stoppedEntryIds = MutableStateFlow<List<String>>(emptyList())
     /** Structured backup errors for callers that do not want to parse [error]. */
     val backupError: StateFlow<BackupViewModelError?> = _backupError
 
@@ -210,6 +215,18 @@ class AttentionViewModel(
                 .onFailure { _error.value = it.message ?: "操作未保存" }
         }
     }
+
+    /**
+     * 把用户「标记为完成」的决定落到领域命令上。
+     *
+     * 结算仍由 [AttentionCommand.SettleScheduleCompletion] 完成——它是幂等的，
+     * 因此重复点不会二次发放投入经验与里程碑。
+     */
+    fun markStoppedScheduleCompleted(entryId: String) =
+        runTypedCommand(
+            AttentionCommand.SettleScheduleCompletion(entryId),
+            errorMessage = "无法标记完成",
+        )
     fun addRecurrence(rule: RecurrenceRule) = runCommand { it.addRecurrence(rule) }
     fun addRecurrenceAndMaterialize(rule: RecurrenceRule, through: LocalDate) = runCommand {
         it.addRecurrenceAndMaterialize(rule, through, zone)
@@ -245,7 +262,29 @@ class AttentionViewModel(
     fun resumeTimer() = runCommand { it.resumeTimer(Instant.now()) }
     fun recoverTimer(onSuccess: () -> Unit = {}) = runCommand(onSuccess = onSuccess) { it.recoverTimer(Instant.now()) }
     fun stopTimer(onSuccess: () -> Unit = {}) =
-        runTypedCommand(AttentionCommand.StopTimer, onSuccess = { onSuccess() }, errorMessage = "无法结束计时")
+        runTypedCommand(
+            AttentionCommand.StopTimer,
+            onSuccess = { result ->
+                // 结果面板只认这一次停止产出的记录 id：面板按 id 从状态读回事实，
+                // 而不是页面自己缓存一段历史。新的停止会覆盖上一次的结果。
+                _stoppedEntryIds.value = result.generatedTimeEntries.map { it.id }
+                onSuccess()
+            },
+            errorMessage = "无法结束计时",
+        )
+
+    /**
+     * 最近一次停止计时产出的记录 id；空列表表示此刻没有待核对的那一笔。
+     *
+     * 它的生命周期只有三段：停止成功时写入、用户消费结果时清空、下一次停止时覆盖。
+     * 它不写入任何持久化，因此重新启动后不会有一块陈旧的结果面板等着被误读。
+     */
+    val stoppedEntryIds: StateFlow<List<String>> = _stoppedEntryIds
+
+    /** 用户已经看过结果面板：清空 id，面板随之消失。 */
+    fun clearStoppedEntryIds() {
+        _stoppedEntryIds.value = emptyList()
+    }
 
     /** Internal repair path for reconciling imported or legacy data. */
     internal fun awardMilestones() = runCommand { it.awardEligibleMilestones(java.time.LocalDate.now(zone)) }

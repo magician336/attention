@@ -39,6 +39,7 @@ class AgendaScreenStateTest {
         selectedDate: LocalDate? = null,
         selectedScope: AgendaRangeScope? = null,
         openScheduleId: String? = null,
+        stoppedEntryIds: List<String>? = null,
     ) = agendaScreenState(
         state = state,
         now = instant,
@@ -46,6 +47,7 @@ class AgendaScreenStateTest {
         selectedDate = selectedDate,
         selectedScope = selectedScope,
         openScheduleId = openScheduleId,
+        stoppedEntryIds = stoppedEntryIds,
     )
 
     private fun stateWith(vararg entries: ScheduleEntry, settings: StoredSettings = StoredSettings()) =
@@ -844,5 +846,161 @@ class AgendaScreenStateTest {
         assertEquals("规划日 2026-03-05", allDates.addScheduleDefaultDateLabel)
         assertEquals("2026-03-06", tomorrow.addScheduleDefaultDate)
         assertEquals("规划日 2026-03-06", tomorrow.addScheduleDefaultDateLabel)
+
+    // ---------------------------------------------------------------- 停止计时的结果面板
+
+    /** 停止计时后落下的那笔记录：领域命令已经把它写进状态，面板按 id 读回它。 */
+    private fun stoppedState(
+        entry: ScheduleEntry,
+        records: List<com.attention.domain.TimeEntry>,
+    ) = stateWith(entry).copy(
+        targets = listOf(Target("t1", title = "工作")),
+        timeEntries = records,
+    )
+
+    private fun timerRecord(
+        id: String,
+        date: String = "2026-03-05",
+        minutes: Int = 20,
+        scheduleEntryId: String? = "e1",
+    ) = com.attention.domain.TimeEntry(
+        id = id,
+        planningDate = date,
+        durationMinutes = minutes,
+        targetId = "t1",
+        source = com.attention.domain.TimeEntrySource.TIMER,
+        scheduleEntryId = scheduleEntryId,
+    )
+
+    @Test
+    fun there_is_no_result_panel_until_a_timer_is_stopped() {
+        // 没有刚停止的那一笔时页面不展示任何结果面板：它不是一段历史
+        assertNull(project(state = stateWith(ScheduleEntry("e1", "2026-03-05", "写周报", estimatedMinutes = 60))).stopResult)
+        assertNull(project(state = stoppedState(ScheduleEntry("e1", "2026-03-05", "写周报", estimatedMinutes = 60), listOf(timerRecord("t1")))).stopResult)
+    }
+
+    @Test
+    fun the_result_panel_reports_actual_planned_completion_and_attribution() {
+        // 面板的四个要素：实际投入、计划时长、完成结果与记录归属，全部来自领域读数
+        val entry = ScheduleEntry("e1", "2026-03-05", "写周报", startMinute = 540, endMinute = 600, estimatedMinutes = 60, targetId = "t1")
+        val state = stoppedState(entry, listOf(timerRecord("t1", minutes = 20)))
+
+        val result = project(state = state, selectedDate = today, stoppedEntryIds = listOf("t1")).stopResult!!
+
+        assertEquals("e1", result.scheduleEntryId)
+        assertEquals(20, result.actualMinutes)
+        assertEquals("实际投入 20 分钟", result.actualLabel)
+        assertEquals(60, result.plannedMinutes)
+        assertEquals("计划时长 60 分钟", result.plannedLabel)
+        // 不足计划：完成状态仍由用户决定，因此既不算完成也不自动跳过决策
+        assertFalse(result.completed)
+        assertEquals("未完成", result.completionLabel)
+        assertTrue("有计划且未达标时把完成决定交给用户", result.needsCompletionDecision)
+        assertEquals("工作", result.attributionLabel)
+    }
+
+    @Test
+    fun an_entry_without_a_planned_duration_reports_no_plan_and_leaves_completion_alone() {
+        // 没有计划时长的日程不自动改变完成状态，也不冒充「未达标」
+        val entry = ScheduleEntry("e1", "2026-03-05", "随手做的", targetId = "t1")
+        val state = stoppedState(entry, listOf(timerRecord("t1", minutes = 90)))
+
+        val result = project(state = state, selectedDate = today, stoppedEntryIds = listOf("t1")).stopResult!!
+
+        assertNull("没有计划就没有计划时长", result.plannedMinutes)
+        assertEquals("未设置计划时长", result.plannedLabel)
+        assertFalse(result.completed)
+        assertEquals("未完成", result.completionLabel)
+        assertFalse("没有计划就不存在「未达标」这回事", result.needsCompletionDecision)
+    }
+
+    @Test
+    fun reaching_the_plan_completes_the_entry_so_the_user_does_not_tick_it_again() {
+        // 实际投入达到计划时日程已由领域结算成完成，面板如实说完成、不再要求用户勾选
+        val entry = ScheduleEntry("e1", "2026-03-05", "写周报", startMinute = 540, endMinute = 600, estimatedMinutes = 30, targetId = "t1")
+        val state = stoppedState(entry, listOf(timerRecord("t1", minutes = 45)))
+
+        val result = project(state = state, selectedDate = today, stoppedEntryIds = listOf("t1")).stopResult!!
+
+        assertTrue("实际投入 45 分钟超过计划 30 分钟", result.completed)
+        assertEquals("已完成", result.completionLabel)
+        assertFalse("已经完成就不需要用户再决定一次", result.needsCompletionDecision)
+    }
+
+    @Test
+    fun a_stop_split_across_planning_days_is_reported_as_several_records() {
+        // 跨规划日界线的那次停止落成多笔，面板如实呈现多笔，不自行合成一笔
+        val entry = ScheduleEntry("e1", "2026-03-05", "夜间长跑", startMinute = 1320, endMinute = 1439, estimatedMinutes = 240, targetId = "t1")
+        val state = stoppedState(
+            entry,
+            listOf(
+                timerRecord("t1", date = "2026-03-05", minutes = 60),
+                timerRecord("t2", date = "2026-03-06", minutes = 30),
+            ),
+        )
+
+        val result = project(state = state, selectedDate = today, stoppedEntryIds = listOf("t1", "t2")).stopResult!!
+
+        assertEquals(2, result.records.size)
+        assertEquals(listOf("2026-03-05", "2026-03-06"), result.records.map { it.planningDate })
+        assertEquals(listOf(60, 30), result.records.map { it.minutes })
+        assertEquals("2026-03-05 · 60 分钟", result.records.first().label)
+        assertEquals("两笔合计才是这次停止的实际投入", 90, result.actualMinutes)
+    }
+
+    @Test
+    fun the_result_panel_disappears_once_its_records_are_consumed() {
+        // 组合根消费掉这次结果（清空 id 列表）后面板不再出现，陈旧数据不会被反复展示
+        val entry = ScheduleEntry("e1", "2026-03-05", "写周报", startMinute = 540, endMinute = 600, estimatedMinutes = 60, targetId = "t1")
+        val state = stoppedState(entry, listOf(timerRecord("t1", minutes = 20)))
+
+        assertNotNull(project(state = state, selectedDate = today, stoppedEntryIds = listOf("t1")).stopResult)
+        assertNull("消费之后不再展示", project(state = state, selectedDate = today, stoppedEntryIds = null).stopResult)
+        assertNull(project(state = state, selectedDate = today, stoppedEntryIds = emptyList()).stopResult)
+    }
+
+    @Test
+    fun stopping_without_a_schedule_still_reports_investment_and_attribution() {
+        // 自由计时没有日程来源：面板仍然如实呈现投入与归属，只是不谎称某条日程完成了
+        val state = AttentionState(
+            targets = listOf(Target("t1", title = "阅读")),
+            timeEntries = listOf(
+                com.attention.domain.TimeEntry(
+                    id = "t1",
+                    planningDate = "2026-03-05",
+                    durationMinutes = 15,
+                    targetId = "t1",
+                    source = com.attention.domain.TimeEntrySource.TIMER,
+                ),
+            ),
+        )
+
+        val result = project(state = state, selectedDate = today, stoppedEntryIds = listOf("t1")).stopResult!!
+
+        assertNull("自由计时没有关联日程", result.scheduleEntryId)
+        assertEquals(15, result.actualMinutes)
+        assertEquals("阅读", result.attributionLabel)
+        assertFalse(result.completed)
+        assertFalse(result.needsCompletionDecision)
+    }
+
+    @Test
+    fun a_stale_result_id_that_no_longer_exists_does_not_resurrect_the_panel() {
+        // 记录已被删除时，面板不凭一个失效的 id 重建已经消失的事实
+        val entry = ScheduleEntry("e1", "2026-03-05", "写周报", estimatedMinutes = 60, targetId = "t1")
+        val state = stoppedState(entry, listOf(timerRecord("t1", minutes = 20)))
+
+        assertNull(project(state = state, selectedDate = today, stoppedEntryIds = listOf("gone")).stopResult)
+    }
+
+    @Test
+    fun every_timeline_row_offers_a_visible_completion_check_and_a_more_menu() {
+        // 完成勾选框与更多菜单是行上并存的可见入口；长按只能作为额外的熟练操作快捷方式
+        val entry = ScheduleEntry("e1", "2026-03-05", "写周报", startMinute = 540, endMinute = 600, estimatedMinutes = 60, targetId = "t1")
+        val row = project(state = stoppedState(entry, listOf(timerRecord("t1", minutes = 20))), selectedDate = today).timelineRows.single()
+
+        assertEquals("e1", row.entry.id)
+        assertTrue("行上给出可见的完成勾选框", row.offersCompletionCheck)
+        assertTrue("行上给出可见的更多菜单", row.offersMoreMenu)
     }
 }

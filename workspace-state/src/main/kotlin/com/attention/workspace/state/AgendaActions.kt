@@ -59,6 +59,22 @@ fun updateSchedule(entry: ScheduleEntry, reminderMinuteOfDay: Int?)
 
     fun toggleScheduleCompleted(entryId: String)
 
+    /**
+     * 在结果面板上选择「标记为完成」。
+     *
+     * 它与时间轴行上的完成走同一条既有路径（完成标记与投入经验、里程碑仍由 `:domain` 计算），
+     * 不新造命令。面板只负责让「不足计划」与「标记为完成」成为两个可以分别决定的动作。
+     */
+    fun markStoppedScheduleCompleted(entryId: String)
+
+    /**
+     * 在结果面板上选择「结束并保留未完成」。
+     *
+     * 它只是关闭这一次结果面板：实际投入已经记下，完成状态保持用户原来的判断，
+     * 不写入任何完成标记。面板因此需要一个独立的「看过了」出口。
+     */
+    fun dismissStopResult()
+
     /** 从日程条目起计时。[targetId] 与条目一起带出，产出的时间记录保留同一来源上下文。 */
     fun startTimerFromEntry(entry: ScheduleEntry)
 
