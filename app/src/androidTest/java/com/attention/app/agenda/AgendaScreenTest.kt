@@ -1090,7 +1090,7 @@ class AgendaScreenTest {
         composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true).assertIsDisplayed()
     }
 
-    /** 通过工作台的 `+` 菜单打开添加日程底部面板。 */
+    /** 通过工作台的操作栈打开添加日程底部面板。 */
     private fun openAddScheduleSheet() {
         composeRule.onNodeWithTag("agenda-operation-add-schedule", useUnmergedTree = true).performScrollTo().performClick()
         composeRule.waitForIdle()
