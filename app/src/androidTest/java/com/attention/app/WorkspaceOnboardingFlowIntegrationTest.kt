@@ -35,11 +35,11 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * #177 首次使用引导的验收：独立、全屏、可跳过的说明式引导。
+ * 首次设置的验收：工作台内嵌、五步、可跳过，并且不遮挡核心入口。
  *
  * 这条用例走真实的 MainActivity 宿主路径，因此验证的是用户看到、点到与最终存下来的东西：
- * 未完成引导时第一次启动看到的是独立全屏引导而不是工作区；说明页固定为日程、目标树、统计；
- * 三种离开方式都落到当前规划日的日程；完成后不再自动出现；设置页可以重新打开它。
+ * 未完成引导时第一次启动看到的是设置卡片和工作区；五步设置按规划日、周起始日、容量、计划、日程排列；
+ * 跳过后回到当前规划日的日程；完成后不再自动出现；设置页可以重新打开它。
  *
  * 最关键的一条是 [completing_the_guide_changes_no_business_data_at_all]：
  * 引导前后目标、日程、设置与时间记录集合必须完全不变——旧引导卡片会创建这些数据，新引导一个都不写。
@@ -62,37 +62,36 @@ class WorkspaceOnboardingFlowIntegrationTest {
     }
 
     @Test
-    fun the_first_start_without_a_finished_guide_shows_the_full_screen_guide() {
+    fun the_first_start_without_a_finished_guide_shows_the_inline_setup_and_workspace() {
         seed(onboardingCompleted = false)
 
         launch()
 
         awaitTag("onboarding-screen")
-        // 独立全屏：底部导航与工作区都不在屏幕上，用户不能绕过它去别的页面
-        composeRule.onNodeWithTag("nav-agenda").assertDoesNotExist()
-        composeRule.onNodeWithTag("nav-targets").assertDoesNotExist()
-        composeRule.onNodeWithTag("nav-statistics").assertDoesNotExist()
-        composeRule.onNodeWithTag("agenda-filter").assertDoesNotExist()
-        // 说明页顺序固定：日程 → 目标树 → 统计
-        composeRule.onNodeWithText("第 1 页，共 3 页").assertIsDisplayed()
+        // 首次设置以内嵌卡片出现，底部导航与核心工作台入口仍然可达。
+        composeRule.onNodeWithTag("nav-agenda").assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-filter").assertIsDisplayed()
+        composeRule.onNodeWithText("第 1 步，共 5 步").assertIsDisplayed()
         composeRule.onNodeWithTag("onboarding-page-title").assertIsDisplayed()
     }
 
     @Test
-    fun the_three_pages_explain_the_three_entries_in_a_stable_order() {
+    fun the_five_setup_steps_are_in_a_stable_order() {
         seed(onboardingCompleted = false)
 
         launch()
 
         awaitTag("onboarding-screen")
-        composeRule.onNodeWithText("日程").assertIsDisplayed()
+        composeRule.onNodeWithText("规划日界线").assertIsDisplayed()
         click("onboarding-skip-page")
-        composeRule.onNodeWithText("第 2 页，共 3 页").assertIsDisplayed()
-        composeRule.onNodeWithText("目标树").assertIsDisplayed()
+        composeRule.onNodeWithText("第 2 步，共 5 步").assertIsDisplayed()
+        composeRule.onNodeWithText("周起始日").assertIsDisplayed()
         click("onboarding-skip-page")
-        composeRule.onNodeWithText("第 3 页，共 3 页").assertIsDisplayed()
-        composeRule.onNodeWithText("统计").assertIsDisplayed()
-        // 走到最后一页也没有被迫创建任何数据：引导仍然在屏幕上
+        composeRule.onNodeWithText("第 3 步，共 5 步").assertIsDisplayed()
+        composeRule.onNodeWithText("每日容量").assertIsDisplayed()
+        click("onboarding-skip-page")
+        click("onboarding-skip-page")
+        composeRule.onNodeWithText("第一条日程").assertIsDisplayed()
         composeRule.onNodeWithTag("onboarding-screen").assertIsDisplayed()
     }
 
@@ -113,14 +112,12 @@ class WorkspaceOnboardingFlowIntegrationTest {
     }
 
     @Test
-    fun starting_beside_after_the_three_pages_lands_on_the_agenda_of_the_current_planning_day() {
+    fun skipping_remaining_setup_lands_on_the_agenda_of_the_current_planning_day() {
         seed(onboardingCompleted = false)
 
         launch()
         awaitTag("onboarding-screen")
-        click("onboarding-skip-page")
-        click("onboarding-skip-page")
-        click("onboarding-start")
+        click("onboarding-skip-remaining")
 
         awaitSettings { it.onboardingCompleted }
         awaitGone("onboarding-screen")
@@ -162,10 +159,10 @@ class WorkspaceOnboardingFlowIntegrationTest {
         awaitTag("settings-open-onboarding")
         click("settings-open-onboarding")
 
-        // 重新打开后仍然是同一套说明页，并且是全屏的独立引导
+        // 重新打开后仍然是同一套五步首次设置
         awaitTag("onboarding-screen")
-        composeRule.onNodeWithText("第 1 页，共 3 页").assertIsDisplayed()
-        click("onboarding-start")
+        composeRule.onNodeWithText("第 1 步，共 5 步").assertIsDisplayed()
+        click("onboarding-skip-remaining")
 
         awaitGone("onboarding-screen")
         composeRule.onNodeWithTag("agenda-filter").assertIsDisplayed()

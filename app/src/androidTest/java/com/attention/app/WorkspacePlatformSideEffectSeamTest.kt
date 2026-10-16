@@ -14,6 +14,7 @@ import com.attention.app.settings.SettingsScreen
 import com.attention.app.ui.theme.AttentionTheme
 import com.attention.domain.LaunchDestination
 import com.attention.domain.ScheduleEntry
+import com.attention.workspace.state.AgendaBackfillDraft
 import com.attention.workspace.state.AgendaActions
 import com.attention.workspace.state.AgendaRecurrenceDraft
 import com.attention.workspace.state.AgendaScheduleDraft
@@ -185,7 +186,9 @@ class WorkspacePlatformSideEffectSeamTest {
         override fun selectAllDates() = Unit
         override fun shiftPlanningDay(days: Long) = Unit
         override fun addSchedule(draft: AgendaScheduleDraft) { addedSchedules += draft }
+        override fun addScheduleWithBackfill(draft: AgendaScheduleDraft, backfill: AgendaBackfillDraft) = Unit
         override fun updateSchedule(entry: ScheduleEntry, reminderMinuteOfDay: Int?) = Unit
+        override fun updateScheduleWithBackfill(entry: ScheduleEntry, reminderMinuteOfDay: Int?, backfill: AgendaBackfillDraft) = Unit
         override fun confirmScheduleCompleted(entryId: String) = Unit
         override fun toggleScheduleCompleted(entryId: String) = Unit
         override fun markStoppedScheduleCompleted(entryId: String) = Unit

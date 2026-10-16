@@ -65,6 +65,7 @@ import com.attention.domain.ScheduleEntry
 import com.attention.domain.ScheduleFrequency
 import com.attention.workspace.state.AgendaActions
 import com.attention.workspace.state.AgendaActiveTimer
+import com.attention.workspace.state.AgendaBackfillDraft
 import com.attention.workspace.state.AgendaFreeTimerOption
 import com.attention.workspace.state.AgendaQuickAction
 import com.attention.workspace.state.AgendaQuickActionOption
@@ -127,6 +128,7 @@ internal fun AgendaScreen(
     var addSheetOpen by remember { mutableStateOf(false) }
     var freeTimerSheetOpen by remember { mutableStateOf(false) }
     var addMoreExpanded by remember { mutableStateOf(false) }
+    var addBackfillExpanded by remember { mutableStateOf(false) }
     var editingRow by remember { mutableStateOf<AgendaScheduleRow?>(null) }
     var editingRecord by remember { mutableStateOf<AgendaTimeRecord?>(null) }
     var pendingDeleteRecordId by remember { mutableStateOf<String?>(null) }
@@ -151,6 +153,7 @@ internal fun AgendaScreen(
     fun closeAddSheet() {
         addSheetOpen = false
         addMoreExpanded = false
+        addBackfillExpanded = false
     }
     Column(
         Modifier.fillMaxSize().verticalScroll(scrollState).padding(tokens.spacing.large),
@@ -161,7 +164,7 @@ internal fun AgendaScreen(
             options = state.quickActions,
             expanded = quickMenuExpanded,
             onExpandedChange = { quickMenuExpanded = it },
-            onAddSchedule = { quickMenuExpanded = false; addMoreExpanded = false; addSheetOpen = true },
+            onAddSchedule = { quickMenuExpanded = false; addMoreExpanded = false; addBackfillExpanded = false; addSheetOpen = true },
             onStartFreeTimer = { quickMenuExpanded = false; addSheetOpen = false; freeTimerSheetOpen = true },
         )
         // 读取本地数据的两件事都是组合根注入的事实，页面只按它们渲染（ADR-0005 第 1 节）：
@@ -192,7 +195,7 @@ internal fun AgendaScreen(
                     actions = actions,
                     onEditRow = { editingRow = it },
                     // 空态直接给出添加日程入口：表单住在底部面板里，这里是把它打开。
-                    onAddFirstSchedule = { addMoreExpanded = false; addSheetOpen = true },
+                    onAddFirstSchedule = { addMoreExpanded = false; addBackfillExpanded = false; addSheetOpen = true },
                 )
 
                 AgendaWorkbenchSection.RUNNING_TIMER -> state.activeTimer?.let { timer ->
@@ -203,7 +206,7 @@ internal fun AgendaScreen(
 
                 AgendaWorkbenchSection.ADD_SCHEDULE -> {
                     Column(Modifier.fillMaxWidth().testTag("agenda-section-add")) {
-                        AgendaAddScheduleSection(state = state, onOpen = { addMoreExpanded = false; addSheetOpen = true })
+                        AgendaAddScheduleSection(state = state, onOpen = { addMoreExpanded = false; addBackfillExpanded = false; addSheetOpen = true })
                     }
                 }
 
@@ -253,9 +256,10 @@ internal fun AgendaScreen(
             row = row,
             targets = state.targets.map { it.targetId to it.title },
             onDismiss = { editingRow = null },
-            onSave = { updated, reminderMinute, reminderRequested ->
+            onSave = { updated, reminderMinute, reminderRequested, backfill ->
                 if (reminderRequested) actions.requestReminderPermission()
-                actions.updateSchedule(updated, reminderMinute)
+                if (backfill == null) actions.updateSchedule(updated, reminderMinute)
+                else actions.updateScheduleWithBackfill(updated, reminderMinute, backfill)
                 editingRow = null
             },
         )
@@ -269,9 +273,12 @@ internal fun AgendaScreen(
         initialPlanningDay = sheetDate,
         moreExpanded = addMoreExpanded,
         onToggleMore = { addMoreExpanded = !addMoreExpanded },
+        backfillExpanded = addBackfillExpanded,
+        onToggleBackfill = { addBackfillExpanded = !addBackfillExpanded },
         onDismiss = ::closeAddSheet,
-        onSubmit = { draft, reminderRequested ->
-            actions.addSchedule(draft)
+        onSubmit = { draft, reminderRequested, backfill ->
+            if (backfill == null) actions.addSchedule(draft)
+            else actions.addScheduleWithBackfill(draft, backfill)
             if (reminderRequested) actions.requestReminderPermission()
             closeAddSheet()
         },
@@ -783,7 +790,7 @@ private fun AgendaAddScheduleSection(
  * 表单状态仍是页面本地状态（[AgendaScheduleForm]），提交只发一个草稿 intent；
  * 提醒时刻的绝对换算由组合根按注入的时区完成，页面因此不读系统时钟与系统时区。
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun AgendaAddScheduleSheet(
     state: AgendaScreenState,
@@ -791,11 +798,18 @@ private fun AgendaAddScheduleSheet(
     visible: Boolean,
     initialPlanningDay: String,
     moreExpanded: Boolean,
+    backfillExpanded: Boolean,
     onToggleMore: () -> Unit,
+    onToggleBackfill: () -> Unit,
     onDismiss: () -> Unit,
-    onSubmit: (AgendaScheduleDraft, Boolean) -> Unit,
+    onSubmit: (AgendaScheduleDraft, Boolean, AgendaBackfillDraft?) -> Unit,
 ) {
     val tokens = attentionTokens()
+    val backfillForm = rememberAgendaBackfillForm()
+    LaunchedEffect(visible, backfillExpanded, form.estimate) {
+        if (visible && backfillExpanded) backfillForm.initialize(form.estimate.trim().toIntOrNull() ?: 15)
+        if (!visible) backfillForm.reset()
+    }
     if (!visible) return
     // 规划日在面板打开时就填好：默认是正在看的那一天，用户仍然可以改成别的日子。
     var planningDay by remember(initialPlanningDay) { mutableStateOf(initialPlanningDay) }
@@ -834,6 +848,11 @@ private fun AgendaAddScheduleSheet(
                 OutlinedTextField(form.endTime, form::changeEndTime, label = { Text("结束时间 HH:mm（可选）") }, modifier = Modifier.weight(1f).testTag("agenda-end-input"), singleLine = true)
             }
             OutlinedTextField(form.estimate, form::changeEstimate, label = { Text("预计分钟") }, modifier = Modifier.fillMaxWidth().testTag("agenda-estimate-input"), singleLine = true)
+            AttentionOutlinedButton(
+                onClick = onToggleBackfill,
+                modifier = Modifier.testTag("agenda-backfill-toggle"),
+            ) { Text(if (backfillExpanded) "收起实际投入" else "记录实际投入（可选）") }
+            if (backfillExpanded) BackfillDurationEditor(form = backfillForm)
             // 低频字段收在「更多设置」后面：展开状态用文字说明，标签本身告诉读屏它是什么。
             AttentionTextButton(onClick = onToggleMore, modifier = Modifier.testTag("agenda-add-more-toggle")) {
                 Text(if (moreExpanded) "收起更多设置" else "更多设置（备注、提醒与关联计划）")
@@ -880,12 +899,55 @@ private fun AgendaAddScheduleSheet(
                 // 校验没过就只显示错误：不发保存意图，也没有任何数据被写入。
                 if (error != null) {
                     form.showError(error)
+                } else if (backfillExpanded && !backfillForm.validateAndShowError()) {
+                    // 补记校验失败时只保留表单错误，不发保存 intent。
                 } else {
-                    onSubmit(form.toDraft(parsedDate!!), parsedReminder != null)
+                    onSubmit(
+                        form.toDraft(parsedDate!!),
+                        parsedReminder != null,
+                        if (backfillExpanded) backfillForm.toDraft(form.targetId, form.note) else null,
+                    )
                     form.reset()
+                    backfillForm.reset()
                 }
             }) { Text("添加日程") }
         }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun BackfillDurationEditor(form: AgendaBackfillForm) {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier.testTag("agenda-backfill-editor"),
+    ) {
+        Text("实际投入")
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(15, 30, 60).forEach { minutes ->
+                AttentionOutlinedButton(
+                    onClick = { form.setPreset(minutes) },
+                    modifier = Modifier.testTag("agenda-backfill-preset-$minutes"),
+                ) { Text("${minutes} 分钟") }
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = form.hours,
+                onValueChange = form::changeHours,
+                label = { Text("小时") },
+                modifier = Modifier.width(120.dp).testTag("agenda-backfill-hours"),
+                singleLine = true,
+            )
+            OutlinedTextField(
+                value = form.minutes,
+                onValueChange = form::changeMinutes,
+                label = { Text("分钟（5 分钟步进）") },
+                modifier = Modifier.width(180.dp).testTag("agenda-backfill-minutes"),
+                singleLine = true,
+            )
+        }
+        form.error?.let { AttentionInlineError(message = it, messageTag = "agenda-backfill-error") }
     }
 }
 
@@ -1154,11 +1216,11 @@ private fun AgendaScheduleRowCard(
                 ) { Text("开始计时") }
                 AttentionTextButton(
                     onClick = {
-                        if (entry.completed) actions.toggleScheduleCompleted(entry.id)
+                        if (row.completed) actions.toggleScheduleCompleted(entry.id)
                         else actions.confirmScheduleCompleted(entry.id)
                     },
                     modifier = Modifier.testTag("schedule-completion-${entry.id}"),
-                ) { Text(if (entry.completed) "取消完成" else "完成并记录") }
+                ) { Text(if (row.completed) "取消完成" else "完成并记录") }
                 // 勾选框是完成这件事的可见主入口：完成状态同时由方框与文字表达，
                 // 不依赖颜色。更多菜单把编辑与计时控制收在同一个可见按钮后面，
                 // 因此长按至多是额外的熟练操作快捷方式，而不是唯一入口。
@@ -1295,7 +1357,7 @@ private fun AgendaScheduleEditDialog(
     row: AgendaScheduleRow,
     targets: List<Pair<String, String>>,
     onDismiss: () -> Unit,
-    onSave: (ScheduleEntry, Int?, Boolean) -> Unit,
+    onSave: (ScheduleEntry, Int?, Boolean, AgendaBackfillDraft?) -> Unit,
 ) {
     val entry = row.entry
     var date by remember(entry.id) { mutableStateOf(entry.planningDate) }
@@ -1307,6 +1369,12 @@ private fun AgendaScheduleEditDialog(
     var reminderTime by remember(entry.id) { mutableStateOf(row.reminderText) }
     var targetId by remember(entry.id) { mutableStateOf(row.targetId) }
     var targetMenuExpanded by remember { mutableStateOf(false) }
+    var backfillExpanded by remember(entry.id) { mutableStateOf(false) }
+    val backfillForm = rememberAgendaBackfillForm()
+    LaunchedEffect(entry.id, backfillExpanded) {
+        if (backfillExpanded) backfillForm.initialize(estimate.trim().toIntOrNull() ?: entry.estimatedMinutes ?: 15)
+        else backfillForm.reset()
+    }
     var error by remember(entry.id) { mutableStateOf<String?>(null) }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1320,6 +1388,11 @@ private fun AgendaScheduleEditDialog(
                     OutlinedTextField(endTime, { endTime = it }, label = { Text("结束 HH:mm") }, modifier = Modifier.weight(1f), singleLine = true)
                 }
                 OutlinedTextField(estimate, { estimate = it }, label = { Text("预计分钟") }, modifier = Modifier.fillMaxWidth().testTag("schedule-edit-estimate-${entry.id}"), singleLine = true)
+                AttentionOutlinedButton(
+                    onClick = { backfillExpanded = !backfillExpanded },
+                    modifier = Modifier.testTag("schedule-edit-backfill-toggle-${entry.id}"),
+                ) { Text(if (backfillExpanded) "收起实际投入" else "记录实际投入（可选）") }
+                if (backfillExpanded) BackfillDurationEditor(form = backfillForm)
                 OutlinedTextField(reminderTime, { reminderTime = it }, label = { Text("提醒 HH:mm（可选）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 OutlinedTextField(note, { note = it }, label = { Text("备注（可选）") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 Box {
@@ -1355,6 +1428,8 @@ private fun AgendaScheduleEditDialog(
                 )
                 if (validationError != null) {
                     error = validationError
+                } else if (backfillExpanded && !backfillForm.validateAndShowError()) {
+                    error = backfillForm.error
                 } else {
                     onSave(
                         entry.copy(
@@ -1368,6 +1443,7 @@ private fun AgendaScheduleEditDialog(
                         ),
                         parsedReminder,
                         parsedReminder != null,
+                        if (backfillExpanded) backfillForm.toDraft(targetId, note) else null,
                     )
                 }
             }) { Text("保存") }

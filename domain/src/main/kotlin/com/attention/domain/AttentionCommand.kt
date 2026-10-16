@@ -19,6 +19,8 @@ data class ScheduleBackfill(
     val targetId: String? = null,
     val note: String = "",
     val requestId: String = newId(),
+    /** 编辑已有日程时按稳定的 scheduleEntryId 去重；新建日程保留多次显式补记语义。 */
+    val dedupeExistingSchedule: Boolean = false,
 )
 
 /**
@@ -51,8 +53,16 @@ sealed interface AttentionCommand {
         val backfill: ScheduleBackfill? = null,
     ) : AttentionCommand {
         override fun execute(state: AttentionState, now: Instant, zone: ZoneId): AttentionCommandResult {
-            val saved = if (state.schedules.any { it.id == entry.id }) state.updateSchedule(entry) else state.addSchedule(entry)
-            if (backfill == null || state.appliedBackfill(backfill.requestId) != null) {
+            val existingSchedule = state.schedules.any { it.id == entry.id }
+            val saved = if (existingSchedule) state.updateSchedule(entry) else state.addSchedule(entry)
+            // 编辑已有日程时，稳定的 scheduleEntryId 是补记的去重边界：
+            // 重复保存同一条日程不能再创建第二笔 MANUAL 记录。新建日程仍由 requestId
+            // 保证同一次提交重放幂等。
+            if (
+                backfill == null ||
+                state.appliedBackfill(backfill.requestId) != null ||
+                (backfill.dedupeExistingSchedule && existingSchedule && state.backfillsForSchedule(entry.id).isNotEmpty())
+            ) {
                 return saved.withMilestonesFor(emptyList(), now.toEpochMilli())
             }
             val recorded = saved.addTimeEntry(

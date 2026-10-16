@@ -21,6 +21,16 @@ data class AgendaScheduleDraft(
 )
 
 /**
+ * 添加或编辑日程时由用户明确确认的一笔事后补记。
+ * 页面只提交分钟、归属和备注，实际投入的来源与日程关联由领域 command 固定为 MANUAL。
+ */
+data class AgendaBackfillDraft(
+    val durationMinutes: Int,
+    val targetId: String?,
+    val note: String = "",
+)
+
+/**
  * 日程页创建重复日程规则时提交的一份表单内容。规则展开仍由 `:domain` 完成。
  */
 data class AgendaRecurrenceDraft(
@@ -49,11 +59,17 @@ interface AgendaActions {
 
     fun addSchedule(draft: AgendaScheduleDraft)
 
+    /** 保存日程并在同一个 typed command 中可选地产生一笔事后补记。 */
+    fun addScheduleWithBackfill(draft: AgendaScheduleDraft, backfill: AgendaBackfillDraft)
+
     /**
  * 日程页保存一条被编辑的日程条目。[reminderMinuteOfDay] 是提醒在规划日当天的分钟数；
  * 它的绝对时刻由组合根 adapter 用领域规则与注入的时区换算，页面因此不需要读系统时区。
  */
 fun updateSchedule(entry: ScheduleEntry, reminderMinuteOfDay: Int?)
+
+    /** 编辑日程并在同一个 typed command 中可选地产生一笔事后补记。 */
+    fun updateScheduleWithBackfill(entry: ScheduleEntry, reminderMinuteOfDay: Int?, backfill: AgendaBackfillDraft)
 
     fun confirmScheduleCompleted(entryId: String)
 

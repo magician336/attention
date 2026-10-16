@@ -29,7 +29,7 @@ date: 2026-10-14
 
 五个页面各自拥有一个小的 interface：不可变的、页面专属的 `*ScreenState`（例如 `SettingsScreenState`、`StatisticsScreenState`），以及页面专属的 `*Actions`。
 
-> 页面的集合本身随信息架构重组变过（今天工作台与所有日期合并为「日程」，新增独立全屏引导），
+> 页面的集合本身随信息架构重组变过（今天工作台与所有日期合并为「日程」，首次设置改为工作台内嵌的渐进流程），
 > 但本节的约束对任何页面都成立。当前五个页面的 seam 字段清单见「seam 字段清单复核（票 179）」。
 
 - 页面不得接收完整的 `AttentionViewModel`。
@@ -63,7 +63,7 @@ SAF 文件读写、权限检查与申请、前台计时服务启动、恢复提�
 - 每一步都必须保持导航与上次打开页面的行为，以及共享的成功、错误、权限与本地数据反馈的文案与可达性（不靠颜色单独传达状态）。
 
 迁移在票 171–178 完成后已经走完上面每一步，今天工作台与所有日期合并为单一「日程」页，
-设置退出主导航挂在统计页底下，旧的说明式引导卡片换成独立全屏引导。当前五个页面是
+设置退出主导航挂在统计页底下，首次设置由工作台内嵌卡片承载并允许逐步跳过。当前五个页面是
 日程、目标树、统计、设置与引导；「最小知识面」一节的字段清单已在
 「seam 字段清单复核（票 179）」按当前代码更新。
 
@@ -102,7 +102,7 @@ SAF 文件读写、权限检查与申请、前台计时服务启动、恢复提�
 
 设置页 SettingsScreenState 字段：options、selectedDestination、resolvedDestination、planningDay、planningDayBoundaryMinutes、weekDayOptions、dailyCapacityMinutes、notificationsEnabled。SettingsActions 动作：selectLaunchDestination、savePlanningDaySettings、selectWeekStartDay、requestNotificationPermission、previewJsonBackup、importJson、exportTimeEntriesCsv、previewCsv、exportSchedulesCsv、exportCsvBundle、restoreLastImportBackup、openOnboarding、close。
 
-引导页 OnboardingScreenState 字段：pages（派生 pageCount）。OnboardingActions 动作：completeOnboarding。引导是全屏独立层，完成后回到当前规划日的日程；它不持有任何业务数据入口，因此 seam 只有一个完成动作。
+引导页 OnboardingScreenState 字段：pages、planningDate、initialSettings（pageCount 为派生字段）。OnboardingActions 动作：savePlanningDaySettings、selectWeekStartDay、addFirstTarget、addFirstSchedule、completeOnboarding。首次设置以内嵌卡片显示，页面可跳过任意步骤；页面只在用户确认输入后发出对应写入 intent，完成后留在当前规划日的日程工作台。
 
 ### 复核结论
 

@@ -30,6 +30,7 @@ import com.attention.domain.ScheduleFrequency
 import com.attention.domain.TimeEntrySource
 import com.attention.workspace.state.AgendaActions
 import com.attention.workspace.state.AgendaActiveTimer
+import com.attention.workspace.state.AgendaBackfillDraft
 import com.attention.workspace.state.AgendaDateOption
 import com.attention.workspace.state.AgendaDateSection
 import com.attention.workspace.state.AgendaFreeTimerOption
@@ -147,6 +148,23 @@ class AgendaScreenTest {
         assertEquals(45, draft.estimatedMinutes)
         assertNull(draft.startMinute)
         assertEquals("没有填提醒就不请求提醒权限", 0, intents.permissionRequests)
+    }
+
+    @Test
+    fun submitting_the_add_form_with_backfill_emits_one_combined_intent() {
+        val intents = RecordingAgendaActions()
+        mount(allDatesScreenState(), intents)
+        openAddScheduleSheet()
+
+        composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true).performScrollTo()
+            .performTextReplacement("补记并安排")
+        composeRule.onNodeWithTag("agenda-backfill-toggle", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-backfill-preset-30", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-add-submit", useUnmergedTree = true).performScrollTo().performClick()
+
+        assertEquals(0, intents.addedSchedules.size)
+        assertEquals(1, intents.addedSchedulesWithBackfill.size)
+        assertEquals(30, intents.addedSchedulesWithBackfill.single().second.durationMinutes)
     }
 
     @Test
@@ -700,6 +718,31 @@ class AgendaScreenTest {
         assertEquals(listOf("e1", "e1"), intents.confirmedCompletions)
     }
 
+    @Test
+    fun an_investment_completed_row_toggles_instead_of_confirming_a_second_investment() {
+        val intents = RecordingAgendaActions()
+        mount(
+            planningDayScreenState(
+                planningDay,
+                timelineRows = listOf(
+                    row(
+                        reportEntry,
+                        "2026-03-05 · 60 分钟 · 无提醒",
+                        true,
+                        investmentLabel = "计划投入 60 分钟 · 实际投入 60 分钟 · 已完成",
+                        completed = true,
+                    ),
+                ),
+            ),
+            intents,
+        )
+
+        composeRule.onNodeWithTag("schedule-completion-e1", useUnmergedTree = true).performScrollTo().performClick()
+
+        assertEquals(listOf("e1"), intents.toggledCompletions)
+        assertEquals(emptyList<String>(), intents.confirmedCompletions)
+    }
+
     /** 一次停止后待核对的结果：投入不足计划，完成与否仍由用户决定。 */
     private fun shortStopResult() = AgendaStopResult(
         scheduleEntryId = "e1",
@@ -979,6 +1022,7 @@ class AgendaScreenTest {
         targetLabel: String? = null,
         capacityNotice: String? = null,
         timing: Boolean = false,
+        completed: Boolean = entry.completed,
     ) = AgendaScheduleRow(
         entry = entry,
         title = entry.title,
@@ -994,7 +1038,7 @@ class AgendaScreenTest {
         targetLabel = targetLabel,
         capacityNotice = capacityNotice,
         timing = timing,
-        completed = entry.completed,
+        completed = completed,
     )
 
     private val availableDates = listOf(
@@ -1246,6 +1290,7 @@ class AgendaScreenTest {
     private class RecordingAgendaActions : AgendaActions {
         val selectedDates = mutableListOf<LocalDate?>()
         val addedSchedules = mutableListOf<AgendaScheduleDraft>()
+        val addedSchedulesWithBackfill = mutableListOf<Pair<AgendaScheduleDraft, AgendaBackfillDraft>>()
         val updatedEntries = mutableListOf<Pair<ScheduleEntry, Int?>>()
         val confirmedCompletions = mutableListOf<String>()
         val toggledCompletions = mutableListOf<String>()
@@ -1280,6 +1325,16 @@ class AgendaScreenTest {
         override fun addSchedule(draft: AgendaScheduleDraft) {
             addedSchedules += draft
         }
+
+        override fun addScheduleWithBackfill(draft: AgendaScheduleDraft, backfill: AgendaBackfillDraft) {
+            addedSchedulesWithBackfill += draft to backfill
+        }
+
+        override fun updateScheduleWithBackfill(
+            entry: ScheduleEntry,
+            reminderMinuteOfDay: Int?,
+            backfill: AgendaBackfillDraft,
+        ) = Unit
 
         override fun updateSchedule(entry: ScheduleEntry, reminderMinuteOfDay: Int?) {
             updatedEntries += entry to reminderMinuteOfDay

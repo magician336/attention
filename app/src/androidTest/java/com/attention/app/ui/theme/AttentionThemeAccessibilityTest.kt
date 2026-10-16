@@ -106,7 +106,7 @@ class AttentionThemeAccessibilityTest {
         composeRule.onNodeWithTag("settings-open-onboarding").performClick()
 
         composeRule.waitForTag("onboarding-screen")
-        composeRule.onNodeWithTag("onboarding-start").assertHeightIsAtLeast(48.dp)
+        composeRule.onNodeWithTag("onboarding-save-step").assertHeightIsAtLeast(48.dp)
         composeRule.onNodeWithTag("onboarding-skip-page").assertHeightIsAtLeast(48.dp)
     }
 
