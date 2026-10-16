@@ -1,6 +1,7 @@
 package com.attention.app.data.backup
 
 import kotlinx.serialization.Serializable
+import java.util.UUID
 
 /*
  * version 1 备份协议**自己的**数据模型。
@@ -21,6 +22,15 @@ import kotlinx.serialization.Serializable
  * 协议自己的枚举承载（见 [BackupProtocolEnums]），并由 [BackupDomainMapping] 与领域枚举互转。
  * 它们在线上就是字符串，所以「名字认不出来时读成什么」这条规则也归协议，不再借道领域类型。
  */
+
+/**
+ * 备份里缺失行 ID 时生成一个，协议因此不必反向依赖领域。
+ *
+ * 这份实现必须与领域侧的 `newId()` 产出同样的值域（UUID 字符串）：「缺 ID 就生成一个」是
+ * 迁移前就有的既有导入行为，本次不改变它——只是把它从「调用领域的 `newId()`」换成协议自带
+ * 一份。直接调用领域那份会让备份格式反向依赖 `:domain`，而那正是本轮要拆掉的东西。
+ */
+internal fun newBackupRowId(): String = UUID.randomUUID().toString()
 
 /**
  * 备份文档里的设置段：规划日界线、周起始日与每日容量。
@@ -45,12 +55,11 @@ data class BackupStoredSettings(
 /**
  * 目标树的一个节点。层级由 `parentId` 表达，归档由 `archived` 表达。
  *
- * `id` 没有默认值：备份文档里一行目标必须带着自己的 ID，缺失它是结构损坏，应当整份被拒，
- * 而不是导入时凭空生成一个新 ID 把用户的归属关系接到一个它从没出现过的节点上。
+ * `id` 缺省时由 [newBackupRowId] 生成，与迁移前的导入行为一致。
  */
 @Serializable
 data class BackupTarget(
-    val id: String,
+    val id: String = newBackupRowId(),
     val parentId: String? = null,
     val title: String,
     val note: String = "",
@@ -64,7 +73,7 @@ data class BackupTarget(
 /** 目标阶段：一段独立的目标量、周期与达成状态。 */
 @Serializable
 data class BackupGoalStage(
-    val id: String,
+    val id: String = newBackupRowId(),
     val targetId: String,
     // 协议自己的枚举：名字认不出来时读成声明过的默认值，见 BackupProtocolEnums。
     val cadence: BackupGoalCadence,
@@ -77,7 +86,7 @@ data class BackupGoalStage(
 /** 时间记录：一笔实际投入。 */
 @Serializable
 data class BackupTimeEntry(
-    val id: String,
+    val id: String = newBackupRowId(),
     val planningDate: String,
     val durationMinutes: Int,
     val targetId: String? = null,
@@ -91,7 +100,7 @@ data class BackupTimeEntry(
 /** 日程条目：用户安排在某个规划日要做的事。与时间记录不是一回事。 */
 @Serializable
 data class BackupScheduleEntry(
-    val id: String,
+    val id: String = newBackupRowId(),
     val planningDate: String,
     val title: String,
     val startMinute: Int? = null,
@@ -107,7 +116,7 @@ data class BackupScheduleEntry(
 /** 重复日程的规则本身，决定未来还会生成哪些日程条目。 */
 @Serializable
 data class BackupRecurrenceRule(
-    val id: String,
+    val id: String = newBackupRowId(),
     val title: String,
     val startDate: String,
     // 协议自己的枚举：名字认不出来时读成声明过的默认值，见 BackupProtocolEnums。
@@ -125,7 +134,7 @@ data class BackupRecurrenceRule(
 /** 目标迁移：把当前周期的剩余目标安排到未来周期或日期范围。 */
 @Serializable
 data class BackupMigration(
-    val id: String,
+    val id: String = newBackupRowId(),
     val targetId: String,
     val sourceStageId: String,
     val minutes: Int,
@@ -137,7 +146,7 @@ data class BackupMigration(
 /** 未来目标规则：从指定日期或周期起生效的新目标量，不回写已经开始的周期。 */
 @Serializable
 data class BackupFutureGoalRule(
-    val id: String,
+    val id: String = newBackupRowId(),
     val targetId: String,
     val stageId: String = "",
     // 协议自己的枚举：名字认不出来时读成声明过的默认值，见 BackupProtocolEnums。
@@ -150,7 +159,7 @@ data class BackupFutureGoalRule(
 /** 周期快照：一个目标周期当时适用的目标值与结果，作为历史计算依据保留。 */
 @Serializable
 data class BackupPeriodSnapshot(
-    val id: String,
+    val id: String = newBackupRowId(),
     val targetId: String,
     // 协议自己的枚举：名字认不出来时读成声明过的默认值，见 BackupProtocolEnums。
     val cadence: BackupGoalCadence,
@@ -167,7 +176,7 @@ data class BackupPeriodSnapshot(
 /** 目标移动：从指定未来日期起改变目标树里的父子关系。 */
 @Serializable
 data class BackupTargetMove(
-    val id: String,
+    val id: String = newBackupRowId(),
     val targetId: String,
     val parentId: String?,
     val effectiveFrom: String,
@@ -176,7 +185,7 @@ data class BackupTargetMove(
 /** 达成里程碑：一次性反馈，按 `instanceKey` 去重，属于用户的历史。 */
 @Serializable
 data class BackupMilestone(
-    val id: String,
+    val id: String = newBackupRowId(),
     val kind: String,
     val instanceKey: String,
     val reward: Long,

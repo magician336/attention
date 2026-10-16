@@ -86,12 +86,6 @@ class BackupDomainMappingTest {
         ),
     )
 
-    /** 协议模型必须要求每一行带着自己的 ID；领域类型因为 `newId()` 默认值而把 ID 视为可选。 */
-    private val intentionallyRequiredInProtocol = listOf(
-        "targets", "goalStages", "timeEntries", "schedules", "recurrenceRules", "migrations",
-        "futureGoalRules", "periodSnapshots", "targetMoves", "milestones",
-    ).map { "$it.id" }
-
     @Test
     fun every_backed_up_field_has_a_protocol_counterpart_in_both_directions() {
         assertEquals(
@@ -190,13 +184,18 @@ class BackupDomainMappingTest {
     }
 
     /**
-     * 协议模型相对领域类型的可选性差异，只允许是「行 ID 必须自带」这一条。
+     * 协议模型相对领域类型的可选性差异：一处都不允许。
      *
      * 可选性决定缺字段的历史备份读成什么：协议模型一旦在某处悄悄放宽或收紧，缺这一段的历史备份
      * 就会被读成另一个值，而字段名与类型全都对得上，前两条测试看不出来。
+     *
+     * 这里特别在意行 ID：迁移前协议字段由领域类型承载，`id` 带着 `newId()` 默认值，缺 ID 的行会
+     * 被安上一个随机 ID 导入。当时有人提议趁这次迁移把它收紧成「缺 ID 即结构损坏」，被否决了
+     * ——那是用户可见的行为变更，超出这次重构的范围，记在 #207 待裁决。协议侧因此自带
+     * [newBackupRowId]，行为与迁移前一致，但不再反向依赖领域。
      */
     @Test
-    fun the_only_optionality_difference_is_the_row_id_the_protocol_requires() {
+    fun the_protocol_is_exactly_as_optional_as_the_domain_on_every_field() {
         val differences = mutableListOf<String>()
         mappedTypes.forEach { mapped ->
             val requiredByProtocol = mapped.protocol.requiredFieldNames()
@@ -206,9 +205,9 @@ class BackupDomainMappingTest {
         }
 
         assertEquals(
-            "协议模型相对领域类型多出来的「必填字段」不止行 ID 一处；" +
-                "新增之前先确认它不会改变任何缺字段历史备份的读法。",
-            intentionallyRequiredInProtocol.toSortedSet(),
+            "协议模型相对领域类型多出了「必填字段」：这会改变缺字段历史备份的读法。" +
+                "确需收紧某处时先确认它不超出本次范围，并同步更新这里的说明。",
+            emptySet<String>(),
             differences.toSortedSet(),
         )
     }
@@ -231,23 +230,32 @@ class BackupDomainMappingTest {
     }
 
     /**
-     * 缺 ID 的行是结构损坏，应当整份被拒，而不是导入时凭空生成一个新 ID。
+     * 缺 ID 的行仍然被导入，并拿到一个非空 ID——与迁移前的行为一致。
      *
-     * 这是本票刻意收紧的一处：以前承载协议字段的是领域类型，`id` 带着 `newId()` 默认值，于是
-     * 一行没有 ID 的目标会被安上一个随机 ID 悄悄进来，把用户的归属关系接到一个从没出现过的节点上。
+     * 这里本来是「缺 ID 视为结构损坏、整份拒收」，那是一处用户可见的行为变更，被否决了（见
+     * [the_protocol_is_exactly_as_optional_as_the_domain_on_every_field] 与 #207）。迁移前协议
+     * 字段由领域类型承载，缺 ID 的行由领域的 `newId()` 兜底；现在协议自带 [newBackupRowId]，
+     * 行为不变，只是不再反向依赖领域。
+     *
+     * 顺带钉住它生成的确实是 ID 而不是空串——一个空的 ID 会让后续的归属校验以「ID 为空」
+     * 的形式失败，那样报错信息会指向错误的理由。
      */
     @Test
-    fun a_row_without_an_id_is_rejected_instead_of_getting_a_fresh_one() {
+    fun a_row_without_an_id_is_imported_with_a_generated_one() {
         val withoutId = """{"version":1,"settings":{},"targets":[{"title":"学习"}],"goalStages":[],""" +
             """"timeEntries":[],"schedules":[],"recurrenceRules":[],"migrations":[],""" +
             """"futureGoalRules":[],"periodSnapshots":[],"targetMoves":[],"milestones":[],""" +
             """"experience":0,"activeTimer":null,"onboardingCompleted":false,""" +
             """"launchDestination":"AGENDA","lastOpenedDestination":"AGENDA","notificationsEnabled":true}"""
 
-        // kotlinx 的 SerialException 本身就是 IllegalArgumentException，坏文档因此被清楚拒收。
-        assertThrows(IllegalArgumentException::class.java) {
-            AttentionBackupCodec.decode(withoutId)
-        }
+        val restored = AttentionBackupCodec.decode(withoutId)
+
+        assertEquals(1, restored.targets.size)
+        assertEquals("学习", restored.targets.single().title)
+        assertTrue(
+            "缺 ID 的行应当被生成一个非空 ID，而不是空串",
+            restored.targets.single().id.isNotBlank(),
+        )
     }
 
     /** 每个字段都取非默认值：默认值不能证明字段真的被搬了过去。 */
