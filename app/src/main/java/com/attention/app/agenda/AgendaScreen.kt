@@ -33,6 +33,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.OutlinedTextField
@@ -483,23 +484,72 @@ private fun AgendaSummarySection(
                 .testTag("agenda-open-settings"),
             shape = RoundedCornerShape(tokens.radius.medium),
         ) {
-            Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                // 摘要不复述筛选器的标题：正在查看哪一天已经由页首标题与筛选按钮给出，
-                // 这里只讲事实读数——容量怎么算、这一范围已经用掉多少。
-                Text("容量与设置读数", style = tokens.typography.body)
-                Text(summary.boundaryLabel, modifier = Modifier.testTag("agenda-planning-day-boundary"))
-                Text(summary.weekStartLabel, modifier = Modifier.testTag("agenda-week-start"))
-                Text(summary.capacitySettingLabel, modifier = Modifier.testTag("agenda-capacity-setting"))
-                summary.capacityUsageLabel?.let { capacityLabel ->
-                    Text(capacityLabel, modifier = Modifier.testTag("agenda-capacity-summary"))
-                } ?: Text(
-                    // 所有日期不是一个范围，不存在可加总的单日读数；按天读数在时间轴各分区内。
-                    "按天读数见下方时间轴各规划日分区。",
-                )
+            Column(
+                Modifier
+                    .padding(tokens.spacing.medium)
+                    .testTag("agenda-capacity-summary"),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // 三项读数直接消费 workspace-state 的结构化事实：页面不从行列表重新求和。
+                Column(Modifier.testTag("agenda-workbench-summary")) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(tokens.spacing.medium),
+                    ) {
+                        AgendaSummaryMetric(
+                            label = "每日容量",
+                            value = summary.capacityMinutes?.let { "$it 分钟" } ?: "未设置",
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("agenda-summary-capacity"),
+                        )
+                        AgendaSummaryMetric(
+                            label = "已排时间",
+                            value = summary.plannedMinutes?.let { "$it 分钟" } ?: "按天查看",
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("agenda-summary-planned"),
+                        )
+                        AgendaSummaryMetric(
+                            label = "实际投入",
+                            value = summary.actualMinutes?.let { "$it 分钟" } ?: "按天查看",
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("agenda-summary-actual"),
+                        )
+                    }
+                    Text(
+                        summary.capacityStatusLabel
+                            ?: if (state.selectedDate == null) "按天查看各规划日" else "每日容量未设置",
+                        modifier = Modifier.testTag("agenda-summary-capacity-status"),
+                        style = tokens.typography.caption,
+                    )
+                    summary.capacityProgress?.let { progress ->
+                        LinearProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("agenda-capacity-progress"),
+                        )
+                    }
+                }
                 // 完整设置在统计页底部的「设置与数据」；这里只给出路，不复制一份表单。
                 Text("打开设置与数据", style = tokens.typography.caption)
             }
         }
+    }
+}
+
+@Composable
+private fun AgendaSummaryMetric(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+) {
+    val tokens = attentionTokens()
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(label, style = tokens.typography.caption)
+        Text(value, style = tokens.typography.body)
     }
 }
 
