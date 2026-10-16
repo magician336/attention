@@ -9,6 +9,7 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
@@ -227,6 +228,36 @@ class AgendaScreenTest {
 
         composeRule.onNodeWithTag("agenda-quick-add-schedule", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithTag("agenda-quick-add-free-timer", useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun the_operation_stack_keeps_three_primary_actions_in_accessible_order() {
+        // Prototype A 的三个主要动作在窄屏共用一列；顺序和名称是页面的稳定公共 seam。
+        mount(planningDayScreenState(planningDay))
+
+        composeRule.onNodeWithTag("agenda-operation-stack", useUnmergedTree = true)
+            .performScrollTo().assertIsDisplayed()
+
+        val tags = orderedTestTags()
+        val actionTags = listOf(
+            "agenda-operation-add-schedule",
+            "agenda-operation-free-timer",
+            "agenda-operation-backfill",
+        )
+        val indices = actionTags.map { tag ->
+            tags.indexOf(tag).also {
+                assertTrue("操作栈按钮必须渲染：$tag，实际顺序：$tags", it >= 0)
+            }
+        }
+        assertEquals("操作栈固定为添加日程、开始自由计时、事后补记：$tags", indices.sorted(), indices)
+
+        val labels = listOf("添加日程", "开始自由计时", "事后补记")
+        actionTags.zip(labels).forEach { (tag, label) ->
+            composeRule.onNodeWithTag(tag, useUnmergedTree = true)
+                .assertIsDisplayed()
+                .assert(hasClickAction())
+                .assert(hasAnyDescendant(hasText(label)))
+        }
     }
 
     @Test
