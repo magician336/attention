@@ -486,6 +486,12 @@ private fun AgendaSummarySection(
     val tokens = attentionTokens()
     val summary = state.workbenchSummary
     Column(Modifier.fillMaxWidth().testTag("agenda-section-summary"), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // 保留紧凑规划日语义锚点；原来的大号 hero 标题与解释文案已移除。
+        Text(
+            state.headingLabel,
+            style = tokens.typography.caption,
+            modifier = Modifier.testTag("agenda-filter"),
+        )
         // 日期范围切换：今天、明天与所有日期是同一页上的三个范围，不是三个顶级入口。
         // 选中态用填充色之外的图标与语义表达，不依赖颜色单独传达。
         if (state.ranges.isNotEmpty()) {
@@ -518,10 +524,7 @@ private fun AgendaSummarySection(
         Box {
             AttentionOutlinedButton(
                 onClick = { onDateMenuChange(true) },
-                modifier = Modifier
-                    .testTag("agenda-date-menu")
-                    // Keep the stable filter seam on the compact date control after removing the hero.
-                    .testTag("agenda-filter"),
+                modifier = Modifier.testTag("agenda-date-menu"),
             ) {
                 Text(state.filterLabel)
             }
