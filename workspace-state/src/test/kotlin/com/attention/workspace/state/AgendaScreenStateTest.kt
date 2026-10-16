@@ -833,22 +833,22 @@ class AgendaScreenStateTest {
     }
 
     @Test
-    fun the_compact_summary_does_not_fabricate_capacity_or_actual_facts_without_a_selected_day() {
+    fun the_compact_summary_aggregates_capacity_and_actual_facts_without_a_selected_day() {
         val summary = project(
             state = stateWith(ScheduleEntry("a", "2026-03-05", "晨读", estimatedMinutes = 45)),
         ).workbenchSummary
 
-        assertNull(summary.capacityMinutes)
-        assertNull(summary.plannedMinutes)
-        assertNull(summary.actualMinutes)
+        assertNull("没有每日容量时不伪造容量总和", summary.capacityMinutes)
+        assertEquals(45, summary.plannedMinutes)
+        assertEquals(0, summary.actualMinutes)
         assertNull(summary.remainingMinutes)
-        assertNull(summary.capacityStatusLabel)
+        assertEquals("已排 45 分钟（每日容量未设置）", summary.capacityStatusLabel)
         assertNull(summary.capacityProgress)
     }
 
     @Test
-    fun the_all_dates_view_summarises_the_day_without_a_single_day_capacity_readout() {
-        // 所有日期是特殊视图：容量按天在各自的时间轴分组里给出，顶层摘要不冒充某一天
+    fun the_all_dates_view_summarises_capacity_planned_and_actual_minutes() {
+        // 所有日期摘要显示跨规划日合计，时间轴仍保留每一天自己的容量分组
         val state = stateWith(
             ScheduleEntry("a", "2026-03-05", "晨读", estimatedMinutes = 45),
             ScheduleEntry("b", "2026-03-06", "上课", estimatedMinutes = 90),
@@ -857,7 +857,13 @@ class AgendaScreenStateTest {
         val screenState = project(state = state, selectedScope = AgendaRangeScope.ALL_DATES)
 
         assertEquals("所有日期", screenState.workbenchSummary.planningDateLabel)
-        assertNull(screenState.workbenchSummary.capacityUsageLabel)
+        assertEquals("已安排 135 / 240 分钟", screenState.workbenchSummary.capacityUsageLabel)
+        assertEquals(240, screenState.workbenchSummary.capacityMinutes)
+        assertEquals(135, screenState.workbenchSummary.plannedMinutes)
+        assertEquals(0, screenState.workbenchSummary.actualMinutes)
+        assertEquals(105, screenState.workbenchSummary.remainingMinutes)
+        assertEquals("剩余 105 分钟", screenState.workbenchSummary.capacityStatusLabel)
+        assertEquals(0.5625f, screenState.workbenchSummary.capacityProgress)
         assertEquals(
             listOf("已安排 45 / 120 分钟", "已安排 90 / 120 分钟"),
             screenState.dateSections.map { it.capacityLabel },
@@ -882,21 +888,6 @@ class AgendaScreenStateTest {
         assertEquals("安排今天第一件事", tomorrowEmpty.workbenchEmptyLabel)
         assertNull("已经有安排时不显示空态引导", withEntries.workbenchEmptyLabel)
         assertTrue("所有日期视图的空态仍走所有日期的文案", project(state = stateWith()).workbenchEmptyLabel == null)
-    }
-
-    @Test
-    fun the_quick_add_menu_offers_add_schedule_and_start_a_free_timer() {
-        // 「+」菜单只有两个主要动作：安排一件事，和为已经发生的事开始计时。
-        // 顺序与标签都由投影给出，页面因此没有自己的动作副本。
-        val menu = project(state = stateWith()).quickActions
-
-        assertEquals(
-            listOf(
-                AgendaQuickActionOption(AgendaQuickAction.ADD_SCHEDULE, "添加日程"),
-                AgendaQuickActionOption(AgendaQuickAction.START_FREE_TIMER, "开始自由计时"),
-            ),
-            menu,
-        )
     }
 
     @Test

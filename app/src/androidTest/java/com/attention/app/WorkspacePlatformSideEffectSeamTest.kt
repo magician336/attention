@@ -62,10 +62,10 @@ class WorkspacePlatformSideEffectSeamTest {
         }
 
         // 提醒权限：页面只发出申请意图，权限对话框由组合根 adapter 负责
-        // 添加日程的表单住在底部面板里：先通过工作台的 `+` 菜单把它打开，
+        // 添加日程的表单住在底部面板里：从 Prototype A 的操作栈打开，
         // 提醒属于低频字段，因此还要展开「更多设置」。
-        composeRule.onNodeWithTag("agenda-quick-add", useUnmergedTree = true).performScrollTo().performClick()
-        composeRule.onNodeWithTag("agenda-quick-add-schedule", useUnmergedTree = true).performClick()
+        composeRule.onNodeWithTag("agenda-operation-add-schedule", useUnmergedTree = true)
+            .performScrollTo().performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true).performScrollTo()
             .performTextReplacement("带提醒的日程")

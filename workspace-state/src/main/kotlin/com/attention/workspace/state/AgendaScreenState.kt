@@ -148,17 +148,17 @@ data class AgendaWorkbenchSummary(
     val boundaryLabel: String,
     val weekStartLabel: String,
     val capacitySettingLabel: String,
-    /** 所选规划日的已安排与容量读数；所有日期视图为 null。 */
+    /** 所选规划日或所有日期合计的已安排与容量读数。 */
     val capacityUsageLabel: String?,
-    /** 所选规划日的每日容量；所有日期视图为 null。 */
+    /** 所选规划日的每日容量，或所有日期中每日容量的合计。 */
     val capacityMinutes: Int? = null,
-    /** 所选规划日的计划/预计投入；所有日期视图为 null。 */
+    /** 所选规划日或所有日期的计划/预计投入。 */
     val plannedMinutes: Int? = null,
-    /** 所选规划日已经落账的实际投入；所有日期视图为 null。 */
+    /** 所选规划日或所有日期已经落账的实际投入。 */
     val actualMinutes: Int? = null,
     /** 未超载时的剩余容量；无容量或已超载时为 null。 */
     val remainingMinutes: Int? = null,
-    /** 所选规划日是否已经超过每日容量；所有日期视图为 false。 */
+    /** 所选规划日或所有日期合计是否已经超过容量。 */
     val capacityOverloaded: Boolean = false,
     /** 容量的辅助状态文案，由状态投影给出而不是页面重新计算。 */
     val capacityStatusLabel: String? = null,
@@ -236,29 +236,6 @@ data class AgendaTargetOption(
 )
 
 /**
- * 工作台统一 `+` 菜单里的一个主要动作。
- *
- * 两个动作都是「用户想做点什么的」入口：安排一件未来的事，或为正在发生的事开始计时。
- * 它们是一个集合而不是两个各自散落的按钮，因此新增动作只需在这里加一项。
- */
-enum class AgendaQuickAction {
-    /** 打开添加日程的底部表单面板。 */
-    ADD_SCHEDULE,
-
-    /** 就地挑一个未归属活动或未归档计划，开始一次自由计时。 */
-    START_FREE_TIMER,
-}
-
-/**
- * `+` 菜单里的一个动作。[label] 是可见文案与读屏读到的名字，
- * 页面按 [action] 决定打开哪一块面板，因此页面不需要自己翻译动作语义。
- */
-data class AgendaQuickActionOption(
-    val action: AgendaQuickAction,
-    val label: String,
-)
-
-/**
  * 「开始自由计时」里一个可以选的计时目标。
  *
  * [targetId] 为 null 表示未归属活动——自由计时不必先有日程，也不必先有计划，
@@ -315,8 +292,6 @@ data class AgendaScreenState(
     val addScheduleDefaultDate: String = "",
     /** 同一条默认规划日的可读标签，用作面板上的字段说明。 */
     val addScheduleDefaultDateLabel: String = "",
-    /** 工作台 `+` 菜单里的主要动作，顺序与标签都由投影给出。 */
-    val quickActions: List<AgendaQuickActionOption> = quickActionOptions(),
     /**
      * 「开始自由计时」可以选的目标：未归属活动加未归档计划。
      * 自由计时不要求先建日程，因此这里不是日程条目。
@@ -413,6 +388,43 @@ fun agendaScreenState(
     val selectedCapacityProgress = selectedCapacitySummary?.capacityMinutes?.let { capacity ->
         (selectedCapacitySummary.usedMinutes.toFloat() / capacity).coerceIn(0f, 1f)
     }
+    // 所有日期视图展示跨规划日合计：它是摘要的明确读数，不把某一天的容量冒充成总览。
+    val allDateKeys = if (selectedDate == null) {
+        (state.schedules.map { it.planningDate } + state.timeEntries.map { it.planningDate })
+            .distinct()
+            .sorted()
+    } else {
+        emptyList()
+    }
+    val allDateCapacitySummaries = allDateKeys.map(state::capacitySummary)
+    val allDatePlannedMinutes = allDateCapacitySummaries.sumOf(CapacitySummary::usedMinutes)
+    val allDateActualMinutes = state.timeEntries
+        .filter { it.planningDate in allDateKeys }
+        .sumOf { it.durationMinutes }
+    val allDateCapacity = allDateCapacitySummaries
+        .takeIf { summaries -> summaries.isNotEmpty() && summaries.all { it.capacityMinutes != null } }
+        ?.sumOf { it.capacityMinutes!! }
+    val allDateOverloadedMinutes = allDateCapacitySummaries.sumOf { summary ->
+        val capacity = summary.capacityMinutes ?: return@sumOf 0
+        (summary.usedMinutes - capacity).coerceAtLeast(0)
+    }
+    val allDateRemainingMinutes = allDateCapacity
+        ?.takeIf { allDateOverloadedMinutes == 0 }
+        ?.minus(allDatePlannedMinutes)
+    val allDateCapacityStatusLabel = when {
+        allDateKeys.isEmpty() -> "暂无多日数据"
+        allDateCapacity == null -> "已排 $allDatePlannedMinutes 分钟（每日容量未设置）"
+        allDateOverloadedMinutes > 0 -> "超载 $allDateOverloadedMinutes 分钟"
+        else -> "剩余 ${allDateCapacity - allDatePlannedMinutes} 分钟"
+    }
+    val allDateCapacityProgress = allDateCapacity
+        ?.takeIf { it > 0 }
+        ?.let { capacity -> (allDatePlannedMinutes.toFloat() / capacity).coerceIn(0f, 1f) }
+    val allDateCapacityUsageLabel = when {
+        allDateKeys.isEmpty() -> null
+        allDateCapacity == null -> "已安排 $allDatePlannedMinutes 分钟（每日容量未设置）"
+        else -> "已安排 $allDatePlannedMinutes / $allDateCapacity 分钟"
+    }
     return AgendaScreenState(
         planningDate = planningDay,
         selectedDate = selectedDate,
@@ -429,14 +441,14 @@ fun agendaScreenState(
             capacitySettingLabel = state.settings.dailyCapacityMinutes
                 ?.let { "每日容量 $it 分钟" }
                 ?: "每日容量未设置",
-            capacityUsageLabel = selectedCapacitySummary?.let(::capacitySummaryLabel),
-            capacityMinutes = selectedCapacity,
-            plannedMinutes = selectedPlannedMinutes,
-            actualMinutes = selectedActualMinutes,
-            remainingMinutes = selectedRemainingMinutes,
-            capacityOverloaded = selectedCapacitySummary?.overloaded == true,
-            capacityStatusLabel = selectedCapacityStatusLabel,
-            capacityProgress = selectedCapacityProgress,
+            capacityUsageLabel = selectedCapacitySummary?.let(::capacitySummaryLabel) ?: allDateCapacityUsageLabel,
+            capacityMinutes = selectedCapacity ?: allDateCapacity,
+            plannedMinutes = selectedPlannedMinutes ?: allDatePlannedMinutes,
+            actualMinutes = selectedActualMinutes ?: allDateActualMinutes,
+            remainingMinutes = selectedRemainingMinutes ?: allDateRemainingMinutes,
+            capacityOverloaded = selectedCapacitySummary?.overloaded == true || allDateOverloadedMinutes > 0,
+            capacityStatusLabel = selectedCapacityStatusLabel ?: allDateCapacityStatusLabel,
+            capacityProgress = selectedCapacityProgress ?: allDateCapacityProgress,
         ),
         workbenchEmptyLabel = if (selectedTimeline != null && selectedTimeline.timed.isEmpty() && selectedTimeline.unscheduled.isEmpty()) {
             "安排今天第一件事"
@@ -484,7 +496,6 @@ fun agendaScreenState(
         },
         addScheduleDefaultDate = (selectedDate ?: planningDay).toString(),
         addScheduleDefaultDateLabel = "规划日 ${selectedDate ?: planningDay}",
-        quickActions = quickActionOptions(),
         freeTimerOptions = freeTimerOptions(
             targets = state.targets.filterNot { it.archived }.map { it.id to it.title },
             hasRunningTimer = state.activeTimer != null,
@@ -640,15 +651,6 @@ private fun recurrenceDetailLabel(rule: RecurrenceRule): String = when (rule.fre
     ScheduleFrequency.WEEKLY -> "每周 ${rule.weekdays.joinToString(",") { agendaWeekdayLabel(it) }}"
     ScheduleFrequency.MONTHLY -> "每月 ${rule.dayOfMonth} 日"
 }
-
-/**
- * 工作台 `+` 菜单的两个主要动作。它们是投影的一部分，因此页面上的菜单项、顺序与
- * 文案都由 [AgendaScreenState] 给出，页面没有自己的副本。
- */
-fun quickActionOptions(): List<AgendaQuickActionOption> = listOf(
-    AgendaQuickActionOption(AgendaQuickAction.ADD_SCHEDULE, "添加日程"),
-    AgendaQuickActionOption(AgendaQuickAction.START_FREE_TIMER, "开始自由计时"),
-)
 
 /**
  * 自由计时的可选项：未归属活动排在最前，后面是未归档计划。

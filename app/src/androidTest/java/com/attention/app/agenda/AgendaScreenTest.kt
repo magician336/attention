@@ -77,6 +77,9 @@ class AgendaScreenTest {
         mount(allDatesScreenState())
 
         node("筛选：所有日期").assertIsDisplayed()
+        node("容量合计").assertIsDisplayed()
+        node("240 分钟").assertIsDisplayed()
+        node("90 分钟").assertIsDisplayed()
         node("规划日 2026-03-05").assertIsDisplayed()
         node("已安排 60 / 120 分钟").assertIsDisplayed()
         node("写周报").assertIsDisplayed()
@@ -106,7 +109,8 @@ class AgendaScreenTest {
             ),
         )
 
-        composeRule.onNodeWithText("规划日 2026-03-05", useUnmergedTree = true).assertDoesNotExist()
+        composeRule.onNodeWithTag("agenda-filter", useUnmergedTree = true)
+            .assert(hasText("规划日 2026-03-05"))
         composeRule.onNodeWithText(
             "日程条目可带预计时长；它不会自动变成实际投入。",
             useUnmergedTree = true,
@@ -237,18 +241,6 @@ class AgendaScreenTest {
 
         assertEquals(540, intents.addedSchedules.single().reminderMinuteOfDay)
         assertEquals(1, intents.permissionRequests)
-    }
-
-    @Test
-    fun the_quick_add_menu_offers_add_schedule_and_start_a_free_timer() {
-        // 「+」菜单把「安排一件事」与「为正在做的事开始计时」收在同一个入口下
-        mount(allDatesScreenState())
-
-        node("＋").assertIsDisplayed()
-        composeRule.onNodeWithTag("agenda-quick-add", useUnmergedTree = true).performScrollTo().performClick()
-
-        composeRule.onNodeWithTag("agenda-quick-add-schedule", useUnmergedTree = true).assertIsDisplayed()
-        composeRule.onNodeWithTag("agenda-quick-add-free-timer", useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test
@@ -1233,6 +1225,20 @@ class AgendaScreenTest {
         capacityProgress = capacityUsageLabel?.let { 0.25f },
     )
 
+    private val allDatesSummary = AgendaWorkbenchSummary(
+        planningDateLabel = "所有日期",
+        boundaryLabel = "规划日界线 03:00",
+        weekStartLabel = "周起始日 周一",
+        capacitySettingLabel = "每日容量 120 分钟",
+        capacityUsageLabel = "已安排 90 / 240 分钟",
+        capacityMinutes = 240,
+        plannedMinutes = 90,
+        actualMinutes = 0,
+        remainingMinutes = 150,
+        capacityStatusLabel = "剩余 150 分钟",
+        capacityProgress = 0.375f,
+    )
+
     /** 所有日期特殊视图：条目按规划日分组，每组带这一天的每日容量与自己的时间轴。 */
     private fun allDatesScreenState(canStartTimer: Boolean = true): AgendaScreenState = AgendaScreenState(
         planningDate = planningDay,
@@ -1241,7 +1247,7 @@ class AgendaScreenTest {
         filterLabel = "筛选：所有日期",
         availableDates = availableDates,
         selectedCapacityLabel = null,
-        workbenchSummary = summary("所有日期", null),
+        workbenchSummary = allDatesSummary,
         dateSections = listOf(
             AgendaDateSection(
                 planningDate = "2026-03-05",

@@ -1141,6 +1141,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                     state = agendaState,
                     actions = agendaActions,
                     openScheduleId = openScheduleId,
+                    onboardingVisible = onboardingVisible,
                 )
             }
             jsonPreview?.let { Text("JSON 预览：\n$it", modifier = Modifier.padding(16.dp)) }

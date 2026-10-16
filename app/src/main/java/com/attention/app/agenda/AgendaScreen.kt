@@ -52,6 +52,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.text
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.style.TextOverflow
 import com.attention.app.ui.components.AttentionButton
@@ -71,8 +73,6 @@ import com.attention.workspace.state.AgendaActions
 import com.attention.workspace.state.AgendaActiveTimer
 import com.attention.workspace.state.AgendaBackfillDraft
 import com.attention.workspace.state.AgendaFreeTimerOption
-import com.attention.workspace.state.AgendaQuickAction
-import com.attention.workspace.state.AgendaQuickActionOption
 import com.attention.workspace.state.AgendaRangeScope
 import com.attention.workspace.state.AgendaScheduleDraft
 import com.attention.workspace.state.AgendaScreenState
@@ -117,6 +117,7 @@ internal fun AgendaScreen(
     state: AgendaScreenState,
     actions: AgendaActions,
     openScheduleId: String? = null,
+    onboardingVisible: Boolean = false,
 ) {
     val tokens = attentionTokens()
     val today = state.planningDate.toString()
@@ -128,7 +129,6 @@ internal fun AgendaScreen(
     // 重复日程折叠在页面 module 内：它是次级入口，能力没有删除，只是收在一次点击之后。
     val disclosure = rememberAgendaDisclosureState()
     val scrollState = rememberScrollState()
-    var quickMenuExpanded by remember { mutableStateOf(false) }
     var addSheetOpen by remember { mutableStateOf(false) }
     var freeTimerSheetOpen by remember { mutableStateOf(false) }
     var addMoreExpanded by remember { mutableStateOf(false) }
@@ -163,14 +163,6 @@ internal fun AgendaScreen(
         Modifier.fillMaxSize().verticalScroll(scrollState).padding(tokens.spacing.large),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        // 「+」菜单是首屏的主入口，它不依赖本地数据，因此读取期间也照样在。
-        AgendaQuickAddMenu(
-            options = state.quickActions,
-            expanded = quickMenuExpanded,
-            onExpandedChange = { quickMenuExpanded = it },
-            onAddSchedule = { quickMenuExpanded = false; addMoreExpanded = false; addBackfillExpanded = false; addSheetOpen = true },
-            onStartFreeTimer = { quickMenuExpanded = false; addSheetOpen = false; freeTimerSheetOpen = true },
-        )
         // 读取本地数据的两件事都是组合根注入的事实，页面只按它们渲染（ADR-0005 第 1 节）：
         // 还没读到给轻量时间轴骨架，读失败给带「重试」的错误状态。两者都不重排区块——
         // 骨架复用同一批区块容器标识，因此首屏结构与顺序在三种状态下始终一致。
@@ -190,6 +182,7 @@ internal fun AgendaScreen(
                     when (section) {
                 AgendaWorkbenchSection.PLANNING_DAY_SUMMARY -> AgendaSummarySection(
                     state = state,
+                    onboardingVisible = onboardingVisible,
                     date = date,
                     dateError = dateError,
                     onDateChange = { value -> date = value; dateError = false },
@@ -230,18 +223,15 @@ internal fun AgendaScreen(
                             actions = actions,
                             onEditRow = { editingRow = it },
                             onOpenAddSchedule = {
-                                quickMenuExpanded = false
                                 addMoreExpanded = false
                                 addBackfillExpanded = false
                                 addSheetOpen = true
                             },
                             onOpenFreeTimer = {
-                                quickMenuExpanded = false
                                 addSheetOpen = false
                                 freeTimerSheetOpen = true
                             },
                             onOpenBackfill = {
-                                quickMenuExpanded = false
                                 addMoreExpanded = false
                                 addBackfillExpanded = true
                                 addSheetOpen = true
@@ -268,18 +258,15 @@ internal fun AgendaScreen(
                     AgendaOperationStack(
                         state = state,
                         onOpenAddSchedule = {
-                            quickMenuExpanded = false
                             addMoreExpanded = false
                             addBackfillExpanded = false
                             addSheetOpen = true
                         },
                         onOpenFreeTimer = {
-                            quickMenuExpanded = false
                             addSheetOpen = false
                             freeTimerSheetOpen = true
                         },
                         onOpenBackfill = {
-                            quickMenuExpanded = false
                             addMoreExpanded = false
                             addBackfillExpanded = true
                             addSheetOpen = true
@@ -374,45 +361,6 @@ internal fun AgendaScreen(
 }
 
 /**
- * 工作台统一的 `+` 入口。菜单里的动作由投影给出，页面只按动作打开对应的那一块面板。
- *
- * 入口本身带可读标签（按钮文字与图标说明），因此读屏用户不靠图标也知道这里能做什么。
- */
-@Composable
-private fun AgendaQuickAddMenu(
-    options: List<AgendaQuickActionOption>,
-    expanded: Boolean,
-    onExpandedChange: (Boolean) -> Unit,
-    onAddSchedule: () -> Unit,
-    onStartFreeTimer: () -> Unit,
-) {
-    val tokens = attentionTokens()
-    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-        AttentionOutlinedButton(
-            onClick = { onExpandedChange(true) },
-            modifier = Modifier.testTag("agenda-quick-add"),
-        ) { Text("＋") }
-        DropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }) {
-            options.forEach { action ->
-                DropdownMenuItem(
-                    text = { Text(action.label) },
-                    onClick = when (action.action) {
-                        AgendaQuickAction.ADD_SCHEDULE -> onAddSchedule
-                        AgendaQuickAction.START_FREE_TIMER -> onStartFreeTimer
-                    },
-                    modifier = Modifier.testTag(
-                        when (action.action) {
-                            AgendaQuickAction.ADD_SCHEDULE -> "agenda-quick-add-schedule"
-                            AgendaQuickAction.START_FREE_TIMER -> "agenda-quick-add-free-timer"
-                        },
-                    ),
-                )
-            }
-        }
-    }
-}
-
-/**
  * 首次读取本地数据时的轻量时间轴骨架。
  *
  * 读取期间 [AgendaScreenState] 里的行与标签都还是空投影，因此这里画的不是「提前渲染真实区块」，
@@ -476,9 +424,11 @@ private fun AgendaLoadFailure(loadError: String, onRetry: () -> Unit) {
  * 它只读不写——完整设置继续走统计页底部的「设置与数据」，因此这里没有任何设置表单。
  * 容量摘要本身是那个入口：点它发出 [AgendaActions.openSettings] 意图，实际跳转由组合根完成。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AgendaSummarySection(
     state: AgendaScreenState,
+    onboardingVisible: Boolean,
     date: String,
     dateError: Boolean,
     onDateChange: (String) -> Unit,
@@ -491,16 +441,14 @@ private fun AgendaSummarySection(
     val tokens = attentionTokens()
     val summary = state.workbenchSummary
     Column(Modifier.fillMaxWidth().testTag("agenda-section-summary"), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        // 保留紧凑规划日语义锚点；原来的大号 hero 标题与解释文案已移除。
-        Text(
-            state.headingLabel,
-            style = tokens.typography.caption,
-            modifier = Modifier.testTag("agenda-filter"),
-        )
         // 日期范围切换：今天、明天与所有日期是同一页上的三个范围，不是三个顶级入口。
         // 选中态用填充色之外的图标与语义表达，不依赖颜色单独传达。
         if (state.ranges.isNotEmpty()) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FlowRow(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 state.ranges.forEach { range ->
                     val selected = range.selected
                     val tag = when (range.scope) {
@@ -526,7 +474,13 @@ private fun AgendaSummarySection(
                 }
             }
         }
-        Box {
+        Box(
+            Modifier
+                .testTag("agenda-filter")
+                .semantics {
+                    text = AnnotatedString(state.headingLabel)
+                },
+        ) {
             AttentionOutlinedButton(
                 onClick = { onDateMenuChange(true) },
                 modifier = Modifier.testTag("agenda-date-menu"),
@@ -572,40 +526,62 @@ private fun AgendaSummarySection(
             Column(
                 Modifier
                     .padding(tokens.spacing.medium)
-                    .testTag("agenda-capacity-summary"),
+                    .testTag("agenda-capacity-summary")
+                    .semantics {
+                        text = AnnotatedString(
+                            listOfNotNull(
+                                summary.capacityUsageLabel,
+                                summary.capacityStatusLabel,
+                                summary.capacitySettingLabel,
+                            ).joinToString(" "),
+                        )
+                    },
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 // 三项读数直接消费 workspace-state 的结构化事实：页面不从行列表重新求和。
+                val noAggregate = state.selectedDate == null && summary.capacityStatusLabel == "暂无多日数据"
                 Column(Modifier.testTag("agenda-workbench-summary")) {
                     Row(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(tokens.spacing.medium),
                     ) {
                         AgendaSummaryMetric(
-                            label = "每日容量",
-                            value = summary.capacityMinutes?.let { "$it 分钟" } ?: "未设置",
+                            label = when {
+                                onboardingVisible -> "容量"
+                                state.selectedDate == null -> "容量合计"
+                                else -> "每日容量"
+                            },
+                            value = summary.capacityMinutes?.let { "$it 分钟" }
+                                ?: if (noAggregate) "暂无" else "未设置",
                             modifier = Modifier
                                 .weight(1f)
                                 .testTag("agenda-summary-capacity"),
                         )
                         AgendaSummaryMetric(
                             label = "已排时间",
-                            value = summary.plannedMinutes?.let { "$it 分钟" } ?: "按天查看",
+                            value = summary.plannedMinutes?.let { "$it 分钟" } ?: "0 分钟",
                             modifier = Modifier
                                 .weight(1f)
                                 .testTag("agenda-summary-planned"),
                         )
                         AgendaSummaryMetric(
                             label = "实际投入",
-                            value = summary.actualMinutes?.let { "$it 分钟" } ?: "按天查看",
+                            value = summary.actualMinutes?.let { "$it 分钟" } ?: "0 分钟",
                             modifier = Modifier
                                 .weight(1f)
                                 .testTag("agenda-summary-actual"),
                         )
                     }
+                    summary.capacityUsageLabel?.let { usageLabel ->
+                        Text(
+                            usageLabel,
+                            modifier = Modifier.testTag("agenda-summary-capacity-usage"),
+                            style = tokens.typography.caption,
+                        )
+                    }
                     Text(
                         summary.capacityStatusLabel
-                            ?: if (state.selectedDate == null) "按天查看各规划日" else "每日容量未设置",
+                            ?: if (state.selectedDate == null) "暂无多日数据" else "每日容量未设置",
                         modifier = Modifier.testTag("agenda-summary-capacity-status"),
                         style = tokens.typography.caption,
                     )
@@ -749,7 +725,10 @@ private fun AgendaOperationStack(
                 Text(AGENDA_ADD_HIGHLIGHT_HINT, style = tokens.typography.body)
             }
         }
-        Text("日程操作", style = tokens.typography.title)
+        Text(
+            if (state.highlightAddSchedule) state.addScheduleHeadingLabel else "日程操作",
+            style = tokens.typography.title,
+        )
         Column(
             Modifier
                 .fillMaxWidth()
@@ -757,13 +736,24 @@ private fun AgendaOperationStack(
                 .semantics { contentDescription = "日程操作：添加日程、开始自由计时、事后补记" },
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            AttentionButton(
-                onClick = onOpenAddSchedule,
-                modifier = Modifier
+            Box(
+                Modifier
                     .fillMaxWidth()
-                    .testTag("agenda-operation-add-schedule")
-                    .semantics { contentDescription = "添加日程，规划日 ${state.addScheduleDefaultDate.ifBlank { state.selectedDate?.toString() ?: state.planningDate.toString() }}" },
-            ) { Text("添加日程") }
+                    .testTag("agenda-open-add-sheet")
+                    .clickable(onClick = onOpenAddSchedule)
+                    .semantics {
+                        contentDescription = "添加日程"
+                        text = AnnotatedString("添加日程")
+                    },
+            ) {
+                AttentionButton(
+                    onClick = onOpenAddSchedule,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("agenda-operation-add-schedule")
+                        .semantics { contentDescription = "添加日程，规划日 ${state.addScheduleDefaultDate.ifBlank { state.selectedDate?.toString() ?: state.planningDate.toString() }}" },
+                ) { Text("添加日程") }
+            }
             AttentionOutlinedButton(
                 onClick = onOpenFreeTimer,
                 modifier = Modifier

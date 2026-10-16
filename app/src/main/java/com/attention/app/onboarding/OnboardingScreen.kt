@@ -97,7 +97,7 @@ internal fun OnboardingScreen(
                     OutlinedTextField(
                         value = capacity,
                         onValueChange = { capacity = it; error = null },
-                        label = { Text("每日容量（分钟，可选）") },
+                        label = { Text("容量上限（分钟，可选）") },
                         modifier = Modifier.fillMaxWidth().testTag("onboarding-capacity-input"),
                         singleLine = true,
                     )
