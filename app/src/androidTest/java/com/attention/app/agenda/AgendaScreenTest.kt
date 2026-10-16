@@ -9,6 +9,7 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
@@ -230,6 +231,61 @@ class AgendaScreenTest {
     }
 
     @Test
+    fun the_operation_stack_keeps_three_primary_actions_in_accessible_order() {
+        // Prototype A 的三个主要动作在窄屏共用一列；顺序和名称是页面的稳定公共 seam。
+        mount(planningDayScreenState(planningDay))
+
+        composeRule.onNodeWithTag("agenda-operation-stack", useUnmergedTree = true)
+            .performScrollTo().assertIsDisplayed()
+
+        val tags = orderedTestTags()
+        val actionTags = listOf(
+            "agenda-operation-add-schedule",
+            "agenda-operation-free-timer",
+            "agenda-operation-backfill",
+        )
+        val indices = actionTags.map { tag ->
+            tags.indexOf(tag).also {
+                assertTrue("操作栈按钮必须渲染：$tag，实际顺序：$tags", it >= 0)
+            }
+        }
+        assertEquals("操作栈固定为添加日程、开始自由计时、事后补记：$tags", indices.sorted(), indices)
+
+        val labels = listOf("添加日程", "开始自由计时", "事后补记")
+        actionTags.zip(labels).forEach { (tag, label) ->
+            composeRule.onNodeWithTag(tag, useUnmergedTree = true)
+                .assertIsDisplayed()
+                .assert(hasClickAction())
+                .assert(hasAnyDescendant(hasText(label)))
+        }
+    }
+
+    @Test
+    fun the_backfill_operation_reuses_the_existing_combined_save_action_and_planning_day() {
+        // 「事后补记」沿用现有的保存日程并补记 intent，只是从操作栈直接打开实际投入编辑器。
+        val intents = RecordingAgendaActions()
+        mount(planningDayScreenState(selected = planningDay), intents)
+
+        composeRule.onNodeWithTag("agenda-operation-backfill", useUnmergedTree = true)
+            .performScrollTo().performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("agenda-add-sheet", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-backfill-editor", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-add-planning-day", useUnmergedTree = true)
+            .assert(hasText("2026-03-05"))
+        composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true)
+            .performScrollTo().performTextReplacement("补记并安排")
+        composeRule.onNodeWithTag("agenda-backfill-preset-30", useUnmergedTree = true)
+            .performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-add-submit", useUnmergedTree = true)
+            .performScrollTo().performClick()
+
+        assertEquals("2026-03-05", intents.addedSchedulesWithBackfill.single().first.planningDate)
+        assertEquals(30, intents.addedSchedulesWithBackfill.single().second.durationMinutes)
+    }
+
+    @Test
     fun the_add_schedule_sheet_opens_on_the_planning_day_in_view() {
         // 底部面板打开时规划日已经填好：用户不必先输一遍日期，提交出去的就是这一天
         val intents = RecordingAgendaActions()
@@ -289,8 +345,7 @@ class AgendaScreenTest {
             intents,
         )
 
-        composeRule.onNodeWithTag("agenda-quick-add", useUnmergedTree = true).performScrollTo().performClick()
-        composeRule.onNodeWithTag("agenda-quick-add-free-timer", useUnmergedTree = true).performClick()
+        composeRule.onNodeWithTag("agenda-operation-free-timer", useUnmergedTree = true).performScrollTo().performClick()
         composeRule.waitForIdle()
 
         composeRule.onNodeWithTag("agenda-free-timer-target-t1", useUnmergedTree = true).performScrollTo().performClick()
@@ -311,8 +366,7 @@ class AgendaScreenTest {
             ),
         )
 
-        composeRule.onNodeWithTag("agenda-quick-add", useUnmergedTree = true).performScrollTo().performClick()
-        composeRule.onNodeWithTag("agenda-quick-add-free-timer", useUnmergedTree = true).performClick()
+        composeRule.onNodeWithTag("agenda-operation-free-timer", useUnmergedTree = true).performScrollTo().performClick()
         composeRule.waitForIdle()
 
         composeRule.onNodeWithTag("agenda-free-timer-unowned", useUnmergedTree = true).assertIsDisplayed()
@@ -1038,8 +1092,7 @@ class AgendaScreenTest {
 
     /** 通过工作台的 `+` 菜单打开添加日程底部面板。 */
     private fun openAddScheduleSheet() {
-        composeRule.onNodeWithTag("agenda-quick-add", useUnmergedTree = true).performScrollTo().performClick()
-        composeRule.onNodeWithTag("agenda-quick-add-schedule", useUnmergedTree = true).performClick()
+        composeRule.onNodeWithTag("agenda-operation-add-schedule", useUnmergedTree = true).performScrollTo().performClick()
         composeRule.waitForIdle()
     }
 

@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -178,6 +180,8 @@ internal fun AgendaScreen(
         } else if (state.loading) {
             AgendaLoadingSkeleton()
         } else {
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val wideLayout = maxWidth >= 600.dp
             state.workbenchSections.forEach { section ->
                 when (section) {
                 AgendaWorkbenchSection.PLANNING_DAY_SUMMARY -> AgendaSummarySection(
@@ -192,24 +196,91 @@ internal fun AgendaScreen(
                     actions = actions,
                 )
 
-                AgendaWorkbenchSection.TIMELINE -> AgendaTimelineSection(
-                    state = state,
-                    actions = actions,
-                    onEditRow = { editingRow = it },
-                    // 空态直接给出添加日程入口：表单住在底部面板里，这里是把它打开。
-                    onAddFirstSchedule = { addMoreExpanded = false; addBackfillExpanded = false; addSheetOpen = true },
-                )
+                AgendaWorkbenchSection.TIMELINE -> if (wideLayout) {
+                    // 宽屏把时间轴与辅助操作栈并排；左列仍保留时间轴与运行计时的先序，
+                    // 这样读屏与窄屏都沿着「今天发生什么 → 下一步做什么」的顺序走。
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(tokens.spacing.medium),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            AgendaTimelineSection(
+                                state = state,
+                                actions = actions,
+                                onEditRow = { editingRow = it },
+                                includeUnscheduled = false,
+                                // 空态直接给出添加日程入口：表单住在底部面板里，这里是把它打开。
+                                onAddFirstSchedule = { addMoreExpanded = false; addBackfillExpanded = false; addSheetOpen = true },
+                            )
+                            if (AgendaWorkbenchSection.RUNNING_TIMER in state.workbenchSections) {
+                                state.activeTimer?.let { timer ->
+                                    Column(Modifier.fillMaxWidth().testTag("agenda-section-timer")) {
+                                        AgendaRunningTimerSection(timer = timer, targets = state.targets, actions = actions)
+                                    }
+                                }
+                            }
+                        }
+                        AgendaAuxiliaryStack(
+                            state = state,
+                            actions = actions,
+                            onEditRow = { editingRow = it },
+                            onOpenAddSchedule = {
+                                quickMenuExpanded = false
+                                addMoreExpanded = false
+                                addBackfillExpanded = false
+                                addSheetOpen = true
+                            },
+                            onOpenFreeTimer = {
+                                quickMenuExpanded = false
+                                addSheetOpen = false
+                                freeTimerSheetOpen = true
+                            },
+                            onOpenBackfill = {
+                                quickMenuExpanded = false
+                                addMoreExpanded = false
+                                addBackfillExpanded = true
+                                addSheetOpen = true
+                            },
+                        )
+                    }
+                } else {
+                    AgendaTimelineSection(
+                        state = state,
+                        actions = actions,
+                        onEditRow = { editingRow = it },
+                        // 空态直接给出添加日程入口：表单住在底部面板里，这里是把它打开。
+                        onAddFirstSchedule = { addMoreExpanded = false; addBackfillExpanded = false; addSheetOpen = true },
+                    )
+                }
 
-                AgendaWorkbenchSection.RUNNING_TIMER -> state.activeTimer?.let { timer ->
+                AgendaWorkbenchSection.RUNNING_TIMER -> if (!wideLayout) state.activeTimer?.let { timer ->
                     Column(Modifier.fillMaxWidth().testTag("agenda-section-timer")) {
                         AgendaRunningTimerSection(timer = timer, targets = state.targets, actions = actions)
                     }
                 }
 
-                AgendaWorkbenchSection.ADD_SCHEDULE -> {
-                    Column(Modifier.fillMaxWidth().testTag("agenda-section-add")) {
-                        AgendaAddScheduleSection(state = state, onOpen = { addMoreExpanded = false; addBackfillExpanded = false; addSheetOpen = true })
-                    }
+                AgendaWorkbenchSection.ADD_SCHEDULE -> if (!wideLayout) {
+                    AgendaOperationStack(
+                        state = state,
+                        onOpenAddSchedule = {
+                            quickMenuExpanded = false
+                            addMoreExpanded = false
+                            addBackfillExpanded = false
+                            addSheetOpen = true
+                        },
+                        onOpenFreeTimer = {
+                            quickMenuExpanded = false
+                            addSheetOpen = false
+                            freeTimerSheetOpen = true
+                        },
+                        onOpenBackfill = {
+                            quickMenuExpanded = false
+                            addMoreExpanded = false
+                            addBackfillExpanded = true
+                            addSheetOpen = true
+                        },
+                    )
                 }
 
                 AgendaWorkbenchSection.BACKFILL -> AgendaBackfillSection(
@@ -231,6 +302,7 @@ internal fun AgendaScreen(
                 )
                 }
             }
+        }
         }
         // 停止计时的结果面板：只在刚刚停止之后出现，四个要素与两个决定都来自投影。
         state.stopResult?.let { result ->
@@ -559,6 +631,150 @@ private fun AgendaSummaryMetric(
 }
 
 /**
+ * 宽屏时间轴右侧的辅助操作栈。它只消费投影里的下一步与未安排事实，
+ * 不在页面里重新排序日程，也不把动作藏进第二层菜单。
+ */
+@Composable
+private fun AgendaAuxiliaryStack(
+    state: AgendaScreenState,
+    actions: AgendaActions,
+    onEditRow: (AgendaScheduleRow) -> Unit,
+    onOpenAddSchedule: () -> Unit,
+    onOpenFreeTimer: () -> Unit,
+    onOpenBackfill: () -> Unit,
+) {
+    val unscheduledRows = state.unscheduledRows.ifEmpty {
+        state.dateSections.flatMap { it.unscheduledRows }
+    }
+    Column(
+        Modifier
+            .widthIn(min = 240.dp, max = 300.dp)
+            .testTag("agenda-side-stack"),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        AgendaNextStepCard(state)
+        Card(
+            Modifier.fillMaxWidth().testTag("agenda-side-unscheduled"),
+            shape = RoundedCornerShape(attentionTokens().radius.medium),
+        ) {
+            Column(
+                Modifier.padding(attentionTokens().spacing.medium),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("未安排", style = attentionTokens().typography.title)
+                if (unscheduledRows.isEmpty()) {
+                    Text("暂无未安排日程", modifier = Modifier.testTag("agenda-side-unscheduled-empty"))
+                } else {
+                    unscheduledRows.forEach { row ->
+                        AgendaScheduleRowCard(
+                            row = row,
+                            actions = actions,
+                            onEdit = { onEditRow(row) },
+                            secondary = true,
+                        )
+                    }
+                }
+            }
+        }
+        AgendaOperationStack(
+            state = state,
+            onOpenAddSchedule = onOpenAddSchedule,
+            onOpenFreeTimer = onOpenFreeTimer,
+            onOpenBackfill = onOpenBackfill,
+        )
+    }
+}
+
+/** 下一步由当前时间轴投影驱动；没有可执行条目时也保留稳定空态。 */
+@Composable
+private fun AgendaNextStepCard(state: AgendaScreenState) {
+    val tokens = attentionTokens()
+    val timelineRows = state.timelineRows.ifEmpty { state.dateSections.flatMap { it.timelineRows } }
+    val next = timelineRows.firstOrNull { !it.timing && !it.completed }
+    Card(
+        Modifier.fillMaxWidth().testTag("agenda-next-step"),
+        shape = RoundedCornerShape(tokens.radius.medium),
+    ) {
+        Column(
+            Modifier.padding(tokens.spacing.medium),
+            verticalArrangement = Arrangement.spacedBy(tokens.spacing.small),
+        ) {
+            Text("下一步", style = tokens.typography.title)
+            if (next == null) {
+                Text("暂无下一步", modifier = Modifier.testTag("agenda-next-step-empty"))
+            } else {
+                Text(next.title, modifier = Modifier.testTag("agenda-next-step-title"))
+                Text(next.detailLabel, style = tokens.typography.caption)
+            }
+        }
+    }
+}
+
+/**
+ * 三个主要动作的统一入口。窄屏只渲染这一列；宽屏由辅助栈复用同一件组件，
+ * 因而回调、日期上下文和触控尺寸不会因布局切换而分叉。
+ */
+@Composable
+private fun AgendaOperationStack(
+    state: AgendaScreenState,
+    onOpenAddSchedule: () -> Unit,
+    onOpenFreeTimer: () -> Unit,
+    onOpenBackfill: () -> Unit,
+) {
+    val tokens = attentionTokens()
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .testTag("agenda-section-add"),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (state.highlightAddSchedule) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.testTag("agenda-add-highlight"),
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.EventNote,
+                    contentDescription = "为明天安排日程",
+                    modifier = Modifier.size(tokens.spacing.medium),
+                )
+                Text(AGENDA_ADD_HIGHLIGHT_HINT, style = tokens.typography.body)
+            }
+        }
+        Text("日程操作", style = tokens.typography.title)
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .testTag("agenda-operation-stack")
+                .semantics { contentDescription = "日程操作：添加日程、开始自由计时、事后补记" },
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            AttentionButton(
+                onClick = onOpenAddSchedule,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("agenda-operation-add-schedule")
+                    .semantics { contentDescription = "添加日程，规划日 ${state.addScheduleDefaultDate.ifBlank { state.selectedDate?.toString() ?: state.planningDate.toString() }}" },
+            ) { Text("添加日程") }
+            AttentionOutlinedButton(
+                onClick = onOpenFreeTimer,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("agenda-operation-free-timer")
+                    .semantics { contentDescription = "开始自由计时" },
+            ) { Text("开始自由计时") }
+            AttentionOutlinedButton(
+                onClick = onOpenBackfill,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("agenda-operation-backfill")
+                    .semantics { contentDescription = "事后补记，规划日 ${state.addScheduleDefaultDate.ifBlank { state.selectedDate?.toString() ?: state.planningDate.toString() }}" },
+            ) { Text("事后补记") }
+        }
+    }
+}
+
+/**
  * 首屏第二块：时间轴。有具体时间的日程按开始/结束时间排列，正在计时的固定在最前；
  * 没有具体时间的日程进入独立的「未安排时间」区域。当天没有日程时给出「安排今天第一件事」。
  *
@@ -569,6 +785,7 @@ private fun AgendaTimelineSection(
     state: AgendaScreenState,
     actions: AgendaActions,
     onEditRow: (AgendaScheduleRow) -> Unit,
+    includeUnscheduled: Boolean = true,
     onAddFirstSchedule: () -> Unit,
 ) {
     val tokens = attentionTokens()
@@ -588,13 +805,13 @@ private fun AgendaTimelineSection(
                 }
             }
             AgendaTimelineRows(state.timelineRows, actions, onEditRow)
-            AgendaUnscheduledGroup(state.unscheduledRows, actions, onEditRow)
+            if (includeUnscheduled) AgendaUnscheduledGroup(state.unscheduledRows, actions, onEditRow)
         } else {
             state.dateSections.forEach { section ->
                 Text("规划日 ${section.planningDate}", style = tokens.typography.title)
                 Text(section.capacityLabel, modifier = Modifier.testTag("agenda-capacity-summary-${section.planningDate}"))
                 AgendaTimelineRows(section.timelineRows, actions, onEditRow)
-                AgendaUnscheduledGroup(section.unscheduledRows, actions, onEditRow)
+                if (includeUnscheduled) AgendaUnscheduledGroup(section.unscheduledRows, actions, onEditRow)
             }
         }
     }
