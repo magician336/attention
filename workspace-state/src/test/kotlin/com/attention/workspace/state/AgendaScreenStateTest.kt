@@ -779,6 +779,74 @@ class AgendaScreenStateTest {
     }
 
     @Test
+    fun the_compact_summary_projects_capacity_planned_actual_and_remaining_minutes() {
+        val state = AttentionState(
+            schedules = listOf(
+                ScheduleEntry("a", "2026-03-05", "晨读", estimatedMinutes = 45),
+                ScheduleEntry("b", "2026-03-05", "复盘", startMinute = 600, endMinute = 630),
+            ),
+            timeEntries = listOf(
+                com.attention.domain.TimeEntry(
+                    id = "actual-a",
+                    planningDate = "2026-03-05",
+                    durationMinutes = 20,
+                ),
+            ),
+            settings = StoredSettings(dailyCapacityMinutes = 120),
+        )
+
+        val summary = project(state = state, selectedDate = today).workbenchSummary
+
+        assertEquals(120, summary.capacityMinutes)
+        assertEquals(75, summary.plannedMinutes)
+        assertEquals(20, summary.actualMinutes)
+        assertEquals(45, summary.remainingMinutes)
+        assertFalse(summary.capacityOverloaded)
+        assertEquals("剩余 45 分钟", summary.capacityStatusLabel)
+        assertEquals(0.625f, summary.capacityProgress)
+    }
+
+    @Test
+    fun the_compact_summary_projects_overload_without_clamping_the_planned_fact() {
+        val state = stateWith(
+            ScheduleEntry("a", "2026-03-05", "长任务", estimatedMinutes = 150),
+            settings = StoredSettings(dailyCapacityMinutes = 120),
+        ).copy(
+            timeEntries = listOf(
+                com.attention.domain.TimeEntry(
+                    id = "actual-a",
+                    planningDate = "2026-03-05",
+                    durationMinutes = 30,
+                ),
+            ),
+        )
+
+        val summary = project(state = state, selectedDate = today).workbenchSummary
+
+        assertEquals(120, summary.capacityMinutes)
+        assertEquals(150, summary.plannedMinutes)
+        assertEquals(30, summary.actualMinutes)
+        assertNull(summary.remainingMinutes)
+        assertTrue(summary.capacityOverloaded)
+        assertEquals("超载 30 分钟", summary.capacityStatusLabel)
+        assertEquals(1f, summary.capacityProgress)
+    }
+
+    @Test
+    fun the_compact_summary_does_not_fabricate_capacity_or_actual_facts_without_a_selected_day() {
+        val summary = project(
+            state = stateWith(ScheduleEntry("a", "2026-03-05", "晨读", estimatedMinutes = 45)),
+        ).workbenchSummary
+
+        assertNull(summary.capacityMinutes)
+        assertNull(summary.plannedMinutes)
+        assertNull(summary.actualMinutes)
+        assertNull(summary.remainingMinutes)
+        assertNull(summary.capacityStatusLabel)
+        assertNull(summary.capacityProgress)
+    }
+
+    @Test
     fun the_all_dates_view_summarises_the_day_without_a_single_day_capacity_readout() {
         // 所有日期是特殊视图：容量按天在各自的时间轴分组里给出，顶层摘要不冒充某一天
         val state = stateWith(

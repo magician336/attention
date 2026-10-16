@@ -150,6 +150,20 @@ data class AgendaWorkbenchSummary(
     val capacitySettingLabel: String,
     /** 所选规划日的已安排与容量读数；所有日期视图为 null。 */
     val capacityUsageLabel: String?,
+    /** 所选规划日的每日容量；所有日期视图为 null。 */
+    val capacityMinutes: Int? = null,
+    /** 所选规划日的计划/预计投入；所有日期视图为 null。 */
+    val plannedMinutes: Int? = null,
+    /** 所选规划日已经落账的实际投入；所有日期视图为 null。 */
+    val actualMinutes: Int? = null,
+    /** 未超载时的剩余容量；无容量或已超载时为 null。 */
+    val remainingMinutes: Int? = null,
+    /** 所选规划日是否已经超过每日容量；所有日期视图为 false。 */
+    val capacityOverloaded: Boolean = false,
+    /** 容量的辅助状态文案，由状态投影给出而不是页面重新计算。 */
+    val capacityStatusLabel: String? = null,
+    /** 用于紧凑摘要进度条的 0..1 值；无容量时为 null。 */
+    val capacityProgress: Float? = null,
 )
 
 /**
@@ -380,6 +394,25 @@ fun agendaScreenState(
     val selectedTimeEntries = selectedDate
         ?.let { date -> state.timeEntries.filter { it.planningDate == date.toString() } }
         .orEmpty()
+    val selectedCapacitySummary = selectedDate?.let { date -> state.capacitySummary(date.toString()) }
+    val selectedCapacity = selectedCapacitySummary?.capacityMinutes
+    val selectedPlannedMinutes = selectedCapacitySummary?.usedMinutes
+    val selectedActualMinutes = selectedDate?.let { selectedTimeEntries.sumOf { entry -> entry.durationMinutes } }
+    val selectedRemainingMinutes = selectedCapacitySummary
+        ?.takeUnless(CapacitySummary::overloaded)
+        ?.capacityMinutes
+        ?.minus(selectedCapacitySummary.usedMinutes)
+    val selectedCapacityStatusLabel = selectedCapacitySummary?.let { summary ->
+        val capacity = summary.capacityMinutes
+        when {
+            capacity == null -> "每日容量未设置"
+            summary.overloaded -> "超载 ${summary.usedMinutes - capacity} 分钟"
+            else -> "剩余 ${capacity - summary.usedMinutes} 分钟"
+        }
+    }
+    val selectedCapacityProgress = selectedCapacitySummary?.capacityMinutes?.let { capacity ->
+        (selectedCapacitySummary.usedMinutes.toFloat() / capacity).coerceIn(0f, 1f)
+    }
     return AgendaScreenState(
         planningDate = planningDay,
         selectedDate = selectedDate,
@@ -396,9 +429,14 @@ fun agendaScreenState(
             capacitySettingLabel = state.settings.dailyCapacityMinutes
                 ?.let { "每日容量 $it 分钟" }
                 ?: "每日容量未设置",
-            capacityUsageLabel = selectedDate?.let { date ->
-                capacitySummaryLabel(state.capacitySummary(date.toString()))
-            },
+            capacityUsageLabel = selectedCapacitySummary?.let(::capacitySummaryLabel),
+            capacityMinutes = selectedCapacity,
+            plannedMinutes = selectedPlannedMinutes,
+            actualMinutes = selectedActualMinutes,
+            remainingMinutes = selectedRemainingMinutes,
+            capacityOverloaded = selectedCapacitySummary?.overloaded == true,
+            capacityStatusLabel = selectedCapacityStatusLabel,
+            capacityProgress = selectedCapacityProgress,
         ),
         workbenchEmptyLabel = if (selectedTimeline != null && selectedTimeline.timed.isEmpty() && selectedTimeline.unscheduled.isEmpty()) {
             "安排今天第一件事"

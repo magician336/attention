@@ -812,20 +812,29 @@ class AgendaScreenTest {
 
     @Test
     fun the_workbench_summarises_the_planning_day_read_only() {
-        // 工作台只读展示规划日界线、周起始日与每日容量摘要；完整设置表单不在工作台，
+        // 工作台只读展示规划日与三项紧凑投入读数；完整设置表单不在工作台，
         // 只由容量摘要卡指向统计页底部的「设置与数据」。
         mount(planningDayScreenState(planningDay))
 
         node("规划日 2026-03-05").assertIsDisplayed()
-        node("规划日界线 03:00").assertIsDisplayed()
-        node("周起始日 周一").assertIsDisplayed()
-        node("每日容量 120 分钟").assertIsDisplayed()
-        node("已安排 30 / 120 分钟").assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-summary-capacity", useUnmergedTree = true)
+            .assert(hasAnyDescendant(hasText("每日容量")))
+            .assert(hasAnyDescendant(hasText("120 分钟")))
+        composeRule.onNodeWithTag("agenda-summary-planned", useUnmergedTree = true)
+            .assert(hasAnyDescendant(hasText("已排时间")))
+            .assert(hasAnyDescendant(hasText("30 分钟")))
+        composeRule.onNodeWithTag("agenda-summary-actual", useUnmergedTree = true)
+            .assert(hasAnyDescendant(hasText("实际投入")))
+            .assert(hasAnyDescendant(hasText("0 分钟")))
+        composeRule.onNodeWithTag("agenda-summary-capacity-status", useUnmergedTree = true)
+            .assert(hasText("剩余 90 分钟"))
+        composeRule.onNodeWithTag("agenda-capacity-progress", useUnmergedTree = true).assertExists()
 
-        // #180 约束的是**设置读数**只读：规划日界线、周起始日与每日容量以只读文字给出，
-        // 完整表单住在统计页底部的「设置与数据」。摘要区里仍然住着日期范围与任意规划日的
-        // 视图控件（#180 story 38 要求在日程页切换到任意规划日），它们是筛选而不是设置表单，
-        // 因此只读性断在设置读数这一块，而不是整块摘要区都不能有输入。
+        // 详细边界与周起始设置不占紧凑摘要主内容，仍由现有设置入口负责。
+        composeRule.onNodeWithText("规划日界线 03:00").assertDoesNotExist()
+        composeRule.onNodeWithText("周起始日 周一").assertDoesNotExist()
+
+        // 容量摘要只读，完整表单住在统计页底部的「设置与数据」。
         assertTrue(
             "容量与设置读数区里不提供任何可编辑输入",
             composeRule.onAllNodes(
@@ -833,6 +842,66 @@ class AgendaScreenTest {
                 useUnmergedTree = true,
             ).fetchSemanticsNodes().isEmpty(),
         )
+    }
+
+    @Test
+    fun the_compact_summary_shows_unset_capacity_without_a_fake_progress() {
+        mount(
+            planningDayScreenState(planningDay).copy(
+                workbenchSummary = AgendaWorkbenchSummary(
+                    planningDateLabel = "规划日 $planningDay",
+                    boundaryLabel = "规划日界线 03:00",
+                    weekStartLabel = "周起始日 周一",
+                    capacitySettingLabel = "每日容量未设置",
+                    capacityUsageLabel = "已安排 45 分钟（每日容量未设置）",
+                    plannedMinutes = 45,
+                    actualMinutes = 0,
+                    capacityStatusLabel = "每日容量未设置",
+                ),
+            ),
+        )
+
+        composeRule.onNodeWithTag("agenda-summary-capacity", useUnmergedTree = true)
+            .assert(hasAnyDescendant(hasText("每日容量")))
+            .assert(hasAnyDescendant(hasText("未设置")))
+        composeRule.onNodeWithTag("agenda-summary-planned", useUnmergedTree = true)
+            .assert(hasAnyDescendant(hasText("45 分钟")))
+        composeRule.onNodeWithTag("agenda-summary-actual", useUnmergedTree = true)
+            .assert(hasAnyDescendant(hasText("0 分钟")))
+        composeRule.onNodeWithTag("agenda-summary-capacity-status", useUnmergedTree = true)
+            .assert(hasText("每日容量未设置"))
+        composeRule.onNodeWithTag("agenda-capacity-progress", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun the_compact_summary_shows_overload_status_and_keeps_the_progress_capped() {
+        mount(
+            planningDayScreenState(planningDay).copy(
+                workbenchSummary = AgendaWorkbenchSummary(
+                    planningDateLabel = "规划日 $planningDay",
+                    boundaryLabel = "规划日界线 03:00",
+                    weekStartLabel = "周起始日 周一",
+                    capacitySettingLabel = "每日容量 120 分钟",
+                    capacityUsageLabel = "已安排 150 / 120 分钟",
+                    capacityMinutes = 120,
+                    plannedMinutes = 150,
+                    actualMinutes = 30,
+                    capacityOverloaded = true,
+                    capacityStatusLabel = "超载 30 分钟",
+                    capacityProgress = 1f,
+                ),
+            ),
+        )
+
+        composeRule.onNodeWithTag("agenda-summary-capacity", useUnmergedTree = true)
+            .assert(hasAnyDescendant(hasText("120 分钟")))
+        composeRule.onNodeWithTag("agenda-summary-planned", useUnmergedTree = true)
+            .assert(hasAnyDescendant(hasText("150 分钟")))
+        composeRule.onNodeWithTag("agenda-summary-actual", useUnmergedTree = true)
+            .assert(hasAnyDescendant(hasText("30 分钟")))
+        composeRule.onNodeWithTag("agenda-summary-capacity-status", useUnmergedTree = true)
+            .assert(hasText("超载 30 分钟"))
+        composeRule.onNodeWithTag("agenda-capacity-progress", useUnmergedTree = true).assertExists()
     }
 
     @Test
@@ -1057,13 +1126,19 @@ class AgendaScreenTest {
 
     private val targets = listOf(AgendaTargetOption(targetId = "t1", title = "工作"))
 
-    /** 工作台顶部的只读摘要：规划日、规划日界线、周起始日与每日容量。 */
+    /** 工作台顶部的只读摘要：规划日与容量/计划/实际投入事实。 */
     private fun summary(planningDateLabel: String, capacityUsageLabel: String?) = AgendaWorkbenchSummary(
         planningDateLabel = planningDateLabel,
         boundaryLabel = "规划日界线 03:00",
         weekStartLabel = "周起始日 周一",
         capacitySettingLabel = "每日容量 120 分钟",
         capacityUsageLabel = capacityUsageLabel,
+        capacityMinutes = capacityUsageLabel?.let { 120 },
+        plannedMinutes = capacityUsageLabel?.let { 30 },
+        actualMinutes = capacityUsageLabel?.let { 0 },
+        remainingMinutes = capacityUsageLabel?.let { 90 },
+        capacityStatusLabel = capacityUsageLabel?.let { "剩余 90 分钟" },
+        capacityProgress = capacityUsageLabel?.let { 0.25f },
     )
 
     /** 所有日期特殊视图：条目按规划日分组，每组带这一天的每日容量与自己的时间轴。 */
