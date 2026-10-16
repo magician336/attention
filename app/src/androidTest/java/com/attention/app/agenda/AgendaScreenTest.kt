@@ -116,6 +116,27 @@ class AgendaScreenTest {
     }
 
     @Test
+    fun workbench_sections_are_stacked_without_vertical_overlap() {
+        mount(planningDayScreenState(planningDay))
+
+        val summary = composeRule.onNodeWithTag("agenda-section-summary", useUnmergedTree = true)
+            .fetchSemanticsNode().boundsInRoot
+        val timeline = composeRule.onNodeWithTag("agenda-section-timeline", useUnmergedTree = true)
+            .fetchSemanticsNode().boundsInRoot
+        val operations = composeRule.onNodeWithTag("agenda-section-add", useUnmergedTree = true)
+            .fetchSemanticsNode().boundsInRoot
+
+        assertTrue(
+            "摘要与时间轴不能重叠：summary=$summary timeline=$timeline",
+            summary.bottom <= timeline.top,
+        )
+        assertTrue(
+            "时间轴与操作栈不能重叠：timeline=$timeline operations=$operations",
+            timeline.bottom <= operations.top,
+        )
+    }
+
+    @Test
     fun the_empty_view_explains_what_is_missing() {
         // 没有条目时按当前视图给出空态文案
         mount(emptyScreenState())

@@ -182,8 +182,12 @@ internal fun AgendaScreen(
         } else {
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             val wideLayout = maxWidth >= 600.dp
-            state.workbenchSections.forEach { section ->
-                when (section) {
+            Column(
+                Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                state.workbenchSections.forEach { section ->
+                    when (section) {
                 AgendaWorkbenchSection.PLANNING_DAY_SUMMARY -> AgendaSummarySection(
                     state = state,
                     date = date,
@@ -300,6 +304,7 @@ internal fun AgendaScreen(
                     date = date,
                     actions = actions,
                 )
+                    }
                 }
             }
         }
