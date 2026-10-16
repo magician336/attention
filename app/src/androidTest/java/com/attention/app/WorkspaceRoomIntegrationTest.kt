@@ -74,7 +74,10 @@ class WorkspaceRoomIntegrationTest {
     @Test
     fun agenda_screen_is_available_from_room_backed_workspace() {
         composeRule.onNodeWithTag("nav-agenda", useUnmergedTree = true).performClick()
-        composeRule.onNodeWithText("日程条目可带预计时长；它不会自动变成实际投入。").assertExists()
+        // Prototype A keeps the compact date filter as the agenda entry point;
+        // the former hero explanation is intentionally absent.
+        composeRule.onNodeWithTag("agenda-filter", useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithText("日程条目可带预计时长；它不会自动变成实际投入。").assertDoesNotExist()
     }
 
     @Test

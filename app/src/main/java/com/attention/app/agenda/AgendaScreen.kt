@@ -51,6 +51,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextOverflow
 import com.attention.app.ui.components.AttentionButton
 import com.attention.app.ui.components.AttentionConfirmDialog
 import com.attention.app.ui.components.AttentionErrorState
@@ -413,8 +414,6 @@ private fun AgendaSummarySection(
     val tokens = attentionTokens()
     val summary = state.workbenchSummary
     Column(Modifier.fillMaxWidth().testTag("agenda-section-summary"), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(state.headingLabel, style = tokens.typography.display, modifier = Modifier.testTag("agenda-filter"))
-        Text("日程条目可带预计时长；它不会自动变成实际投入。")
         // 日期范围切换：今天、明天与所有日期是同一页上的三个范围，不是三个顶级入口。
         // 选中态用填充色之外的图标与语义表达，不依赖颜色单独传达。
         if (state.ranges.isNotEmpty()) {
@@ -445,7 +444,13 @@ private fun AgendaSummarySection(
             }
         }
         Box {
-            AttentionOutlinedButton(onClick = { onDateMenuChange(true) }, modifier = Modifier.testTag("agenda-date-menu")) {
+            AttentionOutlinedButton(
+                onClick = { onDateMenuChange(true) },
+                modifier = Modifier
+                    .testTag("agenda-date-menu")
+                    // Keep the stable filter seam on the compact date control after removing the hero.
+                    .testTag("agenda-filter"),
+            ) {
                 Text(state.filterLabel)
             }
             DropdownMenu(expanded = dateMenuExpanded, onDismissRequest = { onDateMenuChange(false) }) {
@@ -568,7 +573,6 @@ private fun AgendaTimelineSection(
 ) {
     val tokens = attentionTokens()
     Column(Modifier.fillMaxWidth().testTag("agenda-section-timeline"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("时间轴", style = tokens.typography.title, modifier = Modifier.testTag("agenda-timeline"))
         state.emptyLabel?.let { emptyLabel ->
             Text(emptyLabel, modifier = Modifier.testTag("agenda-empty"))
         }
@@ -619,7 +623,7 @@ private fun AgendaUnscheduledGroup(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.testTag("agenda-unscheduled")) {
         Text("未安排时间", style = tokens.typography.title, modifier = Modifier.testTag("agenda-unscheduled-heading"))
         rows.forEach { row ->
-            AgendaScheduleRowCard(row, actions = actions, onEdit = { onEditRow(row) })
+            AgendaScheduleRowCard(row, actions = actions, onEdit = { onEditRow(row) }, secondary = true)
         }
     }
 }
@@ -1218,19 +1222,37 @@ private fun AgendaRecurrenceSection(
  * 因此预计时长永远不会被当成实际投入展示。正在计时的那条用文字与图标说明状态，
  * 锈橙色只是补充语义。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AgendaScheduleRowCard(
     row: AgendaScheduleRow,
     actions: AgendaActions,
     onEdit: () -> Unit,
+    secondary: Boolean = false,
 ) {
     val tokens = attentionTokens()
     val entry: ScheduleEntry = row.entry
+    val statusSemantic = when {
+        row.timing -> tokens.brand.timingInProgress
+        row.completed -> tokens.brand.completed
+        else -> tokens.brand.scheduled
+    }
+    val cardColor = when {
+        row.timing -> tokens.brand.timingInProgress.container
+        secondary -> tokens.colorScheme.surfaceContainerLow
+        else -> tokens.colorScheme.surface
+    }
     Card(
         Modifier.fillMaxWidth().testTag("agenda-schedule-row-${entry.id}"),
         shape = RoundedCornerShape(tokens.radius.medium),
+        colors = CardDefaults.cardColors(containerColor = cardColor),
     ) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(tokens.spacing.medium),
+            verticalArrangement = Arrangement.spacedBy(tokens.spacing.small),
+        ) {
             if (row.timing) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("schedule-timing-cue")) {
                     Icon(
@@ -1247,17 +1269,80 @@ private fun AgendaScheduleRowCard(
                     )
                 }
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(row.title, style = tokens.typography.body)
-                    Text(row.detailLabel)
-                    row.targetLabel?.let { Text("关联计划：$it") }
-                    if (row.investmentLabel.isNotBlank()) Text(row.investmentLabel)
-                    row.capacityNotice?.let { notice ->
-                        Text(notice, color = tokens.brand.error.accent, modifier = Modifier.testTag("schedule-capacity-notice-${entry.id}"))
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(tokens.spacing.small),
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(tokens.spacing.small)) {
+                    Text(
+                        row.title,
+                        style = tokens.typography.body,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        row.detailLabel,
+                        style = tokens.typography.caption,
+                        color = tokens.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    row.targetLabel?.let {
+                        Text(
+                            "关联计划：$it",
+                            style = tokens.typography.caption,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
-                    if (row.note.isNotBlank()) Text(row.note)
+                    if (row.investmentLabel.isNotBlank()) {
+                        Text(
+                            row.investmentLabel,
+                            style = tokens.typography.caption,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    row.capacityNotice?.let { notice ->
+                        Text(
+                            notice,
+                            style = tokens.typography.caption,
+                            color = tokens.brand.error.accent,
+                            modifier = Modifier.testTag("schedule-capacity-notice-${entry.id}"),
+                        )
+                    }
+                    if (row.note.isNotBlank()) {
+                        Text(
+                            row.note,
+                            style = tokens.typography.caption,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
+                Text(
+                    text = when {
+                        row.timing -> "计时中"
+                        // The investment line already says「已完成」; keep this chip short so
+                        // accessibility queries do not hear the same completion state twice.
+                        row.completed -> "完成"
+                        else -> "已安排"
+                    },
+                    style = tokens.typography.caption,
+                    color = statusSemantic.onContainer,
+                    modifier = Modifier
+                        .background(statusSemantic.container, RoundedCornerShape(tokens.radius.small))
+                        .padding(tokens.spacing.small)
+                        .testTag("schedule-status-${entry.id}"),
+                )
+            }
+            // 操作控件按可用宽度换行，窄屏上不会把长标题或按钮挤出卡片边界。
+            FlowRow(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(tokens.spacing.small),
+                verticalArrangement = Arrangement.spacedBy(tokens.spacing.small),
+            ) {
                 AttentionTextButton(onClick = onEdit, modifier = Modifier.testTag("schedule-edit-${entry.id}")) { Text("编辑") }
                 AttentionTextButton(
                     onClick = { actions.startTimerFromEntry(entry) },
