@@ -643,6 +643,9 @@ private fun AgendaAuxiliaryStack(
     onOpenFreeTimer: () -> Unit,
     onOpenBackfill: () -> Unit,
 ) {
+    val unscheduledRows = state.unscheduledRows.ifEmpty {
+        state.dateSections.flatMap { it.unscheduledRows }
+    }
     Column(
         Modifier
             .widthIn(min = 240.dp, max = 300.dp)
@@ -659,10 +662,10 @@ private fun AgendaAuxiliaryStack(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text("未安排", style = attentionTokens().typography.title)
-                if (state.unscheduledRows.isEmpty()) {
+                if (unscheduledRows.isEmpty()) {
                     Text("暂无未安排日程", modifier = Modifier.testTag("agenda-side-unscheduled-empty"))
                 } else {
-                    state.unscheduledRows.forEach { row ->
+                    unscheduledRows.forEach { row ->
                         AgendaScheduleRowCard(
                             row = row,
                             actions = actions,
@@ -686,7 +689,8 @@ private fun AgendaAuxiliaryStack(
 @Composable
 private fun AgendaNextStepCard(state: AgendaScreenState) {
     val tokens = attentionTokens()
-    val next = state.timelineRows.firstOrNull { !it.timing && !it.completed }
+    val timelineRows = state.timelineRows.ifEmpty { state.dateSections.flatMap { it.timelineRows } }
+    val next = timelineRows.firstOrNull { !it.timing && !it.completed }
     Card(
         Modifier.fillMaxWidth().testTag("agenda-next-step"),
         shape = RoundedCornerShape(tokens.radius.medium),
@@ -724,6 +728,19 @@ private fun AgendaOperationStack(
             .testTag("agenda-section-add"),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
+        if (state.highlightAddSchedule) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.testTag("agenda-add-highlight"),
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.EventNote,
+                    contentDescription = "为明天安排日程",
+                    modifier = Modifier.size(tokens.spacing.medium),
+                )
+                Text(AGENDA_ADD_HIGHLIGHT_HINT, style = tokens.typography.body)
+            }
+        }
         Text("日程操作", style = tokens.typography.title)
         Column(
             Modifier
