@@ -7,7 +7,13 @@ import java.time.ZoneId
 import java.util.UUID
 import kotlinx.serialization.Serializable
 
-@Serializable
+/*
+ * 这个文件里的数据类一律不再标 `@Serializable`：备份格式由备份协议自己的模型承载（见 ADR 0005
+ * 「备份协议的边界」），领域加一个字段不应该自动改变用户手上的备份文件。以前标注在这里的作用只剩
+ * 「给字段对照测试读描述符」，那是测试自己的需求，不该反过来成为领域的义务——今天对照测试已经改用
+ * 反射读构造参数，标注也就没有留下的理由。
+ */
+
 data class StoredSettings(
     val planningDayBoundaryMinutes: Int = PlannerSettings.DEFAULT_BOUNDARY_MINUTES,
     val weekStartDay: Int = DayOfWeek.MONDAY.value,
@@ -20,26 +26,26 @@ data class StoredSettings(
     )
 }
 
-@Serializable(with = GoalCadenceSerializer::class)
+/*
+ * 下面四个枚举是**按名持久化**的枚举，但领域类型本身不再标 `@Serializable`：
+ * 按名解析与「名字认不出来时读成什么」是持久化层的知识，规则写在 [PersistedEnumSerializer]
+ * （Room 的枚举列与 DataStore 的启动入口偏好用它），备份 JSON 用的是备份协议自己那一份
+ * （`app` 的 `BackupProtocolEnums`）。两侧对同一个名字必须给出同一个值，由单元测试对照。
+ * 标 `@Serializable(with = ...)` 会让「为什么领域枚举身上挂着一个只对存储有意义的序列化器」
+ * 变成一个看不出理由的既成事实。
+ */
 enum class GoalCadence { DAILY, WEEKLY, MONTHLY, ONE_TIME }
 
-@Serializable(with = TimeEntrySourceSerializer::class)
 enum class TimeEntrySource { MANUAL, TIMER, SCHEDULE_CONFIRMED, IMPORT }
 
-@Serializable(with = ScheduleFrequencySerializer::class)
 enum class ScheduleFrequency { DAILY, WEEKLY, MONTHLY }
 
-@Serializable(with = LaunchDestinationSerializer::class)
 /**
  * 启动入口。[AGENDA] 是「日程」的正式语义；[TODAY] 与 [ALL_DATES] 是旧版本持久化的入口值，
  * 它们仍然存在并按旧页面打开，删除它们属于后续的收缩工作。
- *
- * 四个按名持久化的枚举都走 [PersistedEnumSerializer]：名字认不出来时读成声明过的默认值，
- * 而不是让整份备份被拒。
  */
 enum class LaunchDestination { TODAY, TARGETS, ALL_DATES, STATISTICS, LAST_OPENED, AGENDA }
 
-@Serializable
 data class Target(
     val id: String = newId(),
     val parentId: String? = null,
@@ -52,7 +58,6 @@ data class Target(
     val expanded: Boolean = true,
 )
 
-@Serializable
 data class GoalStage(
     val id: String = newId(),
     val targetId: String,
@@ -63,7 +68,6 @@ data class GoalStage(
     val completed: Boolean = false,
 )
 
-@Serializable
 data class TimeEntry(
     val id: String = newId(),
     val planningDate: String,
@@ -75,7 +79,6 @@ data class TimeEntry(
     val scheduleEntryId: String? = null,
 )
 
-@Serializable
 data class ScheduleEntry(
     val id: String = newId(),
     val planningDate: String,
@@ -90,7 +93,6 @@ data class ScheduleEntry(
     val recurrenceRuleId: String? = null,
 )
 
-@Serializable
 data class RecurrenceRule(
     val id: String = newId(),
     val title: String,
@@ -106,7 +108,6 @@ data class RecurrenceRule(
     val reminderMinuteOfDay: Int? = null,
 )
 
-@Serializable
 data class Migration(
     val id: String = newId(),
     val targetId: String,
@@ -117,7 +118,6 @@ data class Migration(
     val cancelled: Boolean = false,
 )
 
-@Serializable
 data class FutureGoalRule(
     val id: String = newId(),
     val targetId: String,
@@ -128,7 +128,6 @@ data class FutureGoalRule(
     val dueDate: String? = null,
 )
 
-@Serializable
 data class PeriodSnapshot(
     val id: String = newId(),
     val targetId: String,
@@ -143,7 +142,6 @@ data class PeriodSnapshot(
     val stageId: String = "",
 )
 
-@Serializable
 data class TargetMove(
     val id: String = newId(),
     val targetId: String,
@@ -151,7 +149,6 @@ data class TargetMove(
     val effectiveFrom: String,
 )
 
-@Serializable
 data class ActiveTimer(
     val targetId: String?,
     val startedAtEpochMillis: Long,
@@ -162,10 +159,15 @@ data class ActiveTimer(
     val scheduleEntryId: String? = null,
 )
 
+/**
+ * 计时器里已经完成的一段计时。
+ *
+ * 这个类型仍然可序列化，而且不是为备份：Room 的 `ActiveTimerEntity` 把计时片段整列存成 JSON，
+ * 经 `BusinessMappers` 的 `roomJson` 编解码（生产路径）。摘掉标注会让运行时计时现场读不回来。
+ */
 @Serializable
 data class TimerSegment(val startedAtEpochMillis: Long, val endedAtEpochMillis: Long)
 
-@Serializable
 data class Milestone(
     val id: String = newId(),
     val kind: String,
@@ -174,7 +176,6 @@ data class Milestone(
     val achievedAtEpochMillis: Long,
 )
 
-@Serializable
 data class AttentionState(
     val settings: StoredSettings = StoredSettings(),
     val targets: List<Target> = emptyList(),
