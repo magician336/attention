@@ -6,6 +6,7 @@ import android.content.Intent
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -86,6 +87,9 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
         replace("agenda-estimate-input", "1")
         click("agenda-add-submit")
         waitForText("已安排 61 / 60 分钟（超载）")
+        // 保存后的短时提示浮在页面底部，会把紧接着的「编辑」入口整块盖住并吞掉这次点击；
+        // 同一条提示在停表用例里也盖住过「结束并保存」。提示走之前不点下一次。
+        waitForFeedbackToLeave()
         composeRule.onNodeWithText("UI-新增超载").assertExists()
 
         // Editing remains available while overloaded, and the summary follows the edit.
@@ -182,6 +186,13 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
             node.performClick()
         } else {
             node.performScrollTo().performClick()
+        }
+    }
+
+    /** 页面底部的短时提示离开之后再继续：它浮在内容之上，会吞掉落在它上面的点击。 */
+    private fun waitForFeedbackToLeave() {
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            composeRule.onAllNodesWithTag("attention.feedback.snackbar").fetchSemanticsNodes().isEmpty()
         }
     }
 

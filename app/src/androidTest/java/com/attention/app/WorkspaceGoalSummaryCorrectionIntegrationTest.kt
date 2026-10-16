@@ -102,6 +102,10 @@ class WorkspaceGoalSummaryCorrectionIntegrationTest {
 
         composeRule.onNodeWithTag("nav-agenda", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
+        // 刚保存过时间记录，那条短时提示还浮在页面底部；它会盖住删除入口并吞掉这次点击。
+        composeRule.waitUntil(TIMEOUT) {
+            composeRule.onAllNodesWithTag("attention.feedback.snackbar").fetchSemanticsNodes().isEmpty()
+        }
         composeRule.onNodeWithTag("delete-time-$OWNED_ENTRY_ID").performScrollTo().performClick()
         composeRule.waitForIdle()
         // Deleting a time record is destructive, so it is confirmed before anything changes.

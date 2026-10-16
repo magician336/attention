@@ -101,7 +101,7 @@ class WorkspaceAgendaNavigationIntegrationTest {
         composeRule.onNodeWithTag("agenda-filter").assert(hasText("规划日 $TOMORROW"))
         // 突出添加日程：颜色之外还有图标与文案
         composeRule.onNodeWithTag("agenda-add-highlight", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText("为明天（$TOMORROW）添加日程").assertIsDisplayed()
+        composeRule.onNodeWithText("为明天（$TOMORROW）添加日程").performScrollTo().assertIsDisplayed()
         // 今天的日程没有被复制到明天
         composeRule.onNodeWithText("UI-今日条目").assertDoesNotExist()
     }
