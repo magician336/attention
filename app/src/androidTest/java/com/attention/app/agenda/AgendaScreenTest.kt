@@ -75,7 +75,7 @@ class AgendaScreenTest {
         // 所有日期是特殊视图：条目按规划日分组，每天各有自己的每日容量
         mount(allDatesScreenState())
 
-        node("所有日期").assertIsDisplayed()
+        node("筛选：所有日期").assertIsDisplayed()
         node("规划日 2026-03-05").assertIsDisplayed()
         node("已安排 60 / 120 分钟").assertIsDisplayed()
         node("写周报").assertIsDisplayed()
@@ -90,10 +90,28 @@ class AgendaScreenTest {
         // 选中规划日：标题、筛选文案与容量卡片都跟着这一天
         mount(planningDayScreenState(LocalDate.of(2026, 3, 6)))
 
-        node("规划日 2026-03-06").assertIsDisplayed()
         node("筛选：规划日 2026-03-06").assertIsDisplayed()
         node("开组会").assertIsDisplayed()
         composeRule.onNodeWithTag("agenda-capacity-summary", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun compact_timeline_omits_the_hero_and_redundant_timeline_headers() {
+        // Prototype A keeps the date controls and summary, but the timeline itself is the page's heading.
+        mount(
+            planningDayScreenState(
+                selected = planningDay,
+                timelineRows = listOf(row(reportEntry, "2026-03-05 · 60 分钟 · 工作 · 无提醒", true)),
+            ),
+        )
+
+        composeRule.onNodeWithText("规划日 2026-03-05", useUnmergedTree = true).assertDoesNotExist()
+        composeRule.onNodeWithText(
+            "日程条目可带预计时长；它不会自动变成实际投入。",
+            useUnmergedTree = true,
+        ).assertDoesNotExist()
+        composeRule.onNodeWithTag("agenda-timeline", useUnmergedTree = true).assertDoesNotExist()
+        composeRule.onNodeWithText("3 项", useUnmergedTree = true).assertDoesNotExist()
     }
 
     @Test
@@ -816,7 +834,7 @@ class AgendaScreenTest {
         // 只由容量摘要卡指向统计页底部的「设置与数据」。
         mount(planningDayScreenState(planningDay))
 
-        node("规划日 2026-03-05").assertIsDisplayed()
+        node("筛选：规划日 2026-03-05").assertIsDisplayed()
         composeRule.onNodeWithTag("agenda-summary-capacity", useUnmergedTree = true)
             .assert(hasAnyDescendant(hasText("每日容量")))
             .assert(hasAnyDescendant(hasText("120 分钟")))
