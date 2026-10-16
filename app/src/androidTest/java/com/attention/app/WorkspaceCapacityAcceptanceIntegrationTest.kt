@@ -30,6 +30,7 @@ import com.attention.domain.RecurrenceRule
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.ScheduleFrequency
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
 import org.hamcrest.Matchers.allOf
 import org.junit.After
 import org.junit.Before
@@ -87,14 +88,15 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
         replace("agenda-estimate-input", "1")
         click("agenda-add-submit")
         waitForText("已安排 61 / 60 分钟（超载）")
-        // 保存后的短时提示浮在页面底部，会把紧接着的「编辑」入口整块盖住并吞掉这次点击；
-        // 同一条提示在停表用例里也盖住过「结束并保存」。提示走之前不点下一次。
-        waitForFeedbackToLeave()
         composeRule.onNodeWithText("UI-新增超载").assertExists()
 
         // Editing remains available while overloaded, and the summary follows the edit.
         click("schedule-edit-$ESTIMATED_ID")
-        replace("schedule-edit-estimate-$ESTIMATED_ID", "31")
+        // 编辑对话框在点击之后的下一帧才组合出来（面板要动画进场）：先等它出现再填，
+        // 否则紧接着的查询落在对话框还不存在的时刻。等待的是同一个节点，不是更弱的断言。
+        // 编辑对话框在点击之后的一帧才组合出来（面板要动画进场），而且它出现之后紧接着的
+        // 查询偶尔还会落空：先等它出现，再重试整次填写。重试的不是断言——写不进去照样失败。
+        writeWhenReady("schedule-edit-estimate-$ESTIMATED_ID", "31")
         click("schedule-edit-save-$ESTIMATED_ID")
         waitForText("已安排 62 / 60 分钟（超载）")
 
@@ -104,8 +106,11 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
         waitForText("已安排 62 / 60 分钟（超载）")
 
         // Reducing the edited entry removes the overload notice without touching its date.
+        // 上一条动作（完成日程）的短时提示浮在页面底部，会盖住编辑入口并吞掉这次点击：
+        // 表现是点击静默无效、对话框始终不出现。提示走之前不点下一次。
+        waitForFeedbackToLeave()
         click("schedule-edit-$ESTIMATED_ID")
-        replace("schedule-edit-estimate-$ESTIMATED_ID", "29")
+        writeWhenReady("schedule-edit-estimate-$ESTIMATED_ID", "29")
         click("schedule-edit-save-$ESTIMATED_ID")
         waitForText("已安排 60 / 60 分钟")
 
@@ -152,8 +157,14 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
     private fun openSettingsFromStatistics() {
         composeRule.onNode(hasText("统计") and hasClickAction()).performClick()
         composeRule.waitForIdle()
+        // 上一步的短时提示还浮在统计页底部，会盖住这个入口并吞掉点击：表现是设置页根本没打开。
+        waitForFeedbackToLeave()
         composeRule.onNodeWithTag("statistics-open-settings").performScrollTo().performClick()
         composeRule.waitForIdle()
+        // 设置页是重组之后才出现的，等它真的在树上再继续。
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            composeRule.onAllNodesWithTag("statistics-open-settings").fetchSemanticsNodes().isEmpty()
+        }
     }
 
     private fun openAgenda() {
@@ -193,6 +204,20 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
     private fun waitForFeedbackToLeave() {
         composeRule.waitUntil(timeoutMillis = 10_000) {
             composeRule.onAllNodesWithTag("attention.feedback.snackbar").fetchSemanticsNodes().isEmpty()
+        }
+    }
+
+    /**
+     * 等带 [tag] 的输入框真正可写，再把 [value] 填进去。
+     *
+     * 编辑对话框与添加面板都在点击之后的一帧才组合出来（要动画进场），因此紧接着的查询会落空。
+     * 这里重试的是整次填写：写不进去在超时之后照样失败，断言没有被放宽。
+     */
+    private fun writeWhenReady(tag: String, value: String) {
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            runCatching {
+                composeRule.onNodeWithTag(tag, useUnmergedTree = true).performScrollTo().performTextReplacement(value)
+            }.isSuccess
         }
     }
 

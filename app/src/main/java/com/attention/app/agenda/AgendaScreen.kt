@@ -34,7 +34,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -802,9 +801,6 @@ private fun AgendaAddScheduleSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         modifier = Modifier.testTag("agenda-add-sheet"),
-        // 面板一次展开到可滚动高度：半展开状态下「更多设置」里的次要字段落在面板可视高度
-        // 以下，面板内滚动也到不了，用户同样够不到。
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     ) {
         Column(
             Modifier
