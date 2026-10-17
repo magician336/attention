@@ -55,6 +55,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.text
 import androidx.compose.ui.text.AnnotatedString
@@ -583,16 +584,6 @@ private fun AgendaSummarySection(
                                 .testTag("agenda-summary-actual"),
                         )
                     }
-                    // When a capacity exists this compact secondary line is useful for
-                    // comparing planned time with the limit.  With no capacity it only
-                    // repeats the status below ("每日容量未设置"), so leave it out.
-                    summary.capacityUsageLabel?.takeIf { "/" in it }?.let { usageLabel ->
-                        Text(
-                            usageLabel,
-                            modifier = Modifier.testTag("agenda-summary-capacity-usage"),
-                            style = tokens.typography.caption,
-                        )
-                    }
                     Text(
                         summary.capacityStatusLabel
                             ?: if (state.selectedDate == null) "暂无多日数据" else "每日容量未设置",
@@ -722,6 +713,9 @@ private fun AgendaOperationStack(
     onOpenBackfill: () -> Unit,
 ) {
     val tokens = attentionTokens()
+    val hasAgendaRows = state.timelineRows.isNotEmpty() ||
+        state.unscheduledRows.isNotEmpty() ||
+        state.dateSections.any { it.timelineRows.isNotEmpty() || it.unscheduledRows.isNotEmpty() }
     Column(
         Modifier
             .fillMaxWidth()
@@ -749,28 +743,39 @@ private fun AgendaOperationStack(
             Modifier
                 .fillMaxWidth()
                 .testTag("agenda-operation-stack")
-                .semantics { contentDescription = "日程操作：添加日程、开始自由计时、事后补记" },
+                .semantics {
+                    contentDescription = if (hasAgendaRows) {
+                        "日程操作：添加日程、开始自由计时、事后补记"
+                    } else {
+                        "日程操作：开始自由计时、事后补记"
+                    }
+                },
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .testTag("agenda-open-add-sheet")
-                    // Keep the compatibility seam used by existing integrations. The
-                    // visible button below remains the primary accessible action.
-                    .clickable(onClick = onOpenAddSchedule)
-                    .semantics {
-                        contentDescription = "添加日程"
-                        text = AnnotatedString("添加日程")
-                    },
-            ) {
-                AttentionButton(
-                    onClick = onOpenAddSchedule,
-                    modifier = Modifier
+            if (hasAgendaRows) {
+                Box(
+                    Modifier
                         .fillMaxWidth()
-                        .testTag("agenda-operation-add-schedule")
-                        .semantics { contentDescription = "添加日程，规划日 ${state.addScheduleDefaultDate.ifBlank { state.selectedDate?.toString() ?: state.planningDate.toString() }}" },
-                ) { Text("添加日程") }
+                        .testTag("agenda-open-add-sheet")
+                        // Keep the compatibility tag used by existing integrations while
+                        // exposing one merged actionable node to accessibility services.
+                        .semantics(mergeDescendants = true) {
+                            contentDescription = "添加日程"
+                            text = AnnotatedString("添加日程")
+                            onClick {
+                                onOpenAddSchedule()
+                                true
+                            }
+                        },
+                ) {
+                    AttentionButton(
+                        onClick = onOpenAddSchedule,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("agenda-operation-add-schedule")
+                            .semantics { contentDescription = "添加日程，规划日 ${state.addScheduleDefaultDate.ifBlank { state.selectedDate?.toString() ?: state.planningDate.toString() }}" },
+                    ) { Text("添加日程") }
+                }
             }
             AttentionOutlinedButton(
                 onClick = onOpenFreeTimer,
