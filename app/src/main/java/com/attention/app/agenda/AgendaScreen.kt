@@ -819,8 +819,26 @@ private fun AgendaTimelineSection(
                 state.workbenchEmptyLabel?.let { emptyLabel ->
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.testTag("agenda-workbench-empty")) {
                         Text(emptyLabel)
-                        AttentionButton(onClick = onAddFirstSchedule, modifier = Modifier.testTag("agenda-first-schedule")) {
-                            Text("添加日程")
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .testTag("agenda-open-add-sheet")
+                                // The empty state already has the sole visible add action;
+                                // expose the legacy page-level tag on this same node so the
+                                // accessibility baseline does not require a duplicate button.
+                                .semantics(mergeDescendants = true) {
+                                    contentDescription = "添加日程"
+                                    text = AnnotatedString("添加日程")
+                                    onClick {
+                                        onAddFirstSchedule()
+                                        true
+                                    }
+                                },
+                        ) {
+                            AttentionButton(
+                                onClick = onAddFirstSchedule,
+                                modifier = Modifier.testTag("agenda-first-schedule"),
+                            ) { Text("添加日程") }
                         }
                     }
                 }
