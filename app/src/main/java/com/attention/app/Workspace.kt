@@ -34,7 +34,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -1066,7 +1065,8 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Attention") }) },
+        // Prototype A uses the compact workbench itself as the page header. The generic
+        // Material top bar added a large empty brand band above the date controls.
         bottomBar = {
             // 主工作区收敛为日程、目标树、统计三个入口：今天/明天/所有日期是日程页里的范围，
             // 设置不再是顶级入口——它从统计页底部的「设置与数据」进入，返回时回到统计页。

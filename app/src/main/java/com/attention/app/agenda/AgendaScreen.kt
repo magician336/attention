@@ -1,6 +1,7 @@
 package com.attention.app.agenda
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.EventNote
@@ -49,6 +51,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -481,11 +485,11 @@ private fun AgendaSummarySection(
                     text = AnnotatedString(state.headingLabel)
                 },
         ) {
-            AttentionOutlinedButton(
+            AttentionTextButton(
                 onClick = { onDateMenuChange(true) },
                 modifier = Modifier.testTag("agenda-date-menu"),
             ) {
-                Text(state.filterLabel)
+                Text(state.filterLabel, style = tokens.typography.caption)
             }
             DropdownMenu(expanded = dateMenuExpanded, onDismissRequest = { onDateMenuChange(false) }) {
                 DropdownMenuItem(
@@ -525,16 +529,19 @@ private fun AgendaSummarySection(
         ) {
             Column(
                 Modifier
-                    .padding(tokens.spacing.medium)
+                    .padding(horizontal = tokens.spacing.medium, vertical = tokens.spacing.small)
                     .testTag("agenda-capacity-summary")
                     .semantics {
                         text = AnnotatedString(
-                            listOfNotNull(
-                                summary.capacityUsageLabel,
-                                summary.capacityStatusLabel,
-                                summary.capacitySettingLabel,
-                            ).joinToString(" "),
+                            listOfNotNull(summary.capacityUsageLabel, summary.capacityStatusLabel)
+                                .joinToString(" "),
                         )
+                        contentDescription = listOfNotNull(
+                            summary.capacityMinutes?.let { "每日容量 $it 分钟" } ?: "每日容量未设置",
+                            summary.plannedMinutes?.let { "已排时间 $it 分钟" } ?: "已排时间 0 分钟",
+                            summary.actualMinutes?.let { "实际投入 $it 分钟" } ?: "实际投入 0 分钟",
+                            summary.capacityStatusLabel,
+                        ).joinToString("，")
                     },
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -546,6 +553,10 @@ private fun AgendaSummarySection(
                         horizontalArrangement = Arrangement.spacedBy(tokens.spacing.medium),
                     ) {
                         AgendaSummaryMetric(
+                            // During first setup the agenda remains visible underneath the
+                            // inline wizard. Use its shorter label there to avoid two
+                            // identical "每日容量" nodes in one accessibility query; the
+                            // settled workbench keeps the prototype's stable terminology.
                             label = when {
                                 onboardingVisible -> "容量"
                                 state.selectedDate == null -> "容量合计"
@@ -572,7 +583,10 @@ private fun AgendaSummarySection(
                                 .testTag("agenda-summary-actual"),
                         )
                     }
-                    summary.capacityUsageLabel?.let { usageLabel ->
+                    // When a capacity exists this compact secondary line is useful for
+                    // comparing planned time with the limit.  With no capacity it only
+                    // repeats the status below ("每日容量未设置"), so leave it out.
+                    summary.capacityUsageLabel?.takeIf { "/" in it }?.let { usageLabel ->
                         Text(
                             usageLabel,
                             modifier = Modifier.testTag("agenda-summary-capacity-usage"),
@@ -637,6 +651,14 @@ private fun AgendaAuxiliaryStack(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         AgendaNextStepCard(state)
+        // Prototype A keeps the three primary actions next to the next-step card.
+        // Unscheduled entries are a secondary review surface and follow the actions.
+        AgendaOperationStack(
+            state = state,
+            onOpenAddSchedule = onOpenAddSchedule,
+            onOpenFreeTimer = onOpenFreeTimer,
+            onOpenBackfill = onOpenBackfill,
+        )
         Card(
             Modifier.fillMaxWidth().testTag("agenda-side-unscheduled"),
             shape = RoundedCornerShape(attentionTokens().radius.medium),
@@ -660,12 +682,6 @@ private fun AgendaAuxiliaryStack(
                 }
             }
         }
-        AgendaOperationStack(
-            state = state,
-            onOpenAddSchedule = onOpenAddSchedule,
-            onOpenFreeTimer = onOpenFreeTimer,
-            onOpenBackfill = onOpenBackfill,
-        )
     }
 }
 
@@ -740,6 +756,8 @@ private fun AgendaOperationStack(
                 Modifier
                     .fillMaxWidth()
                     .testTag("agenda-open-add-sheet")
+                    // Keep the compatibility seam used by existing integrations. The
+                    // visible button below remains the primary accessible action.
                     .clickable(onClick = onOpenAddSchedule)
                     .semantics {
                         contentDescription = "添加日程"
@@ -821,8 +839,58 @@ private fun AgendaTimelineRows(
     actions: AgendaActions,
     onEditRow: (AgendaScheduleRow) -> Unit,
 ) {
-    rows.forEach { row ->
-        AgendaScheduleRowCard(row, actions = actions, onEdit = { onEditRow(row) })
+    if (rows.isEmpty()) return
+    val tokens = attentionTokens()
+    // Prototype A's timeline is a tree: time gutter, continuous axis and a node for
+    // each schedule card. Keep the existing row card as the interaction surface so
+    // edit/start/complete semantics remain unchanged while the list gains the missing
+    // temporal structure.
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .testTag("agenda-timeline-tree")
+            .drawBehind {
+                val axisX = 48.dp.toPx() + 10.dp.toPx() + 5.dp.toPx()
+                drawLine(
+                    color = tokens.colorScheme.outlineVariant,
+                    start = Offset(axisX, 0f),
+                    end = Offset(axisX, size.height),
+                    strokeWidth = 1.dp.toPx(),
+                )
+            },
+        verticalArrangement = Arrangement.spacedBy(tokens.spacing.small),
+    ) {
+        rows.forEach { row ->
+            val nodeColor = when {
+                row.timing -> tokens.brand.timingInProgress.accent
+                row.completed -> tokens.brand.completed.accent
+                else -> tokens.brand.scheduled.accent
+            }
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = tokens.spacing.small),
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    text = if (row.timing) "现在" else row.startText.ifBlank { "—" },
+                    style = tokens.typography.caption,
+                    color = tokens.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(48.dp).padding(top = 4.dp),
+                )
+                Box(
+                    Modifier
+                        .padding(top = 8.dp)
+                        .size(10.dp)
+                        .background(nodeColor, CircleShape)
+                        .border(2.dp, tokens.colorScheme.background, CircleShape),
+                )
+                Box(Modifier.weight(1f)) {
+                    AgendaScheduleRowCard(row, actions = actions, onEdit = { onEditRow(row) })
+                }
+            }
+        }
     }
 }
 
@@ -1018,36 +1086,6 @@ private fun AgendaStopResultSection(
                     modifier = Modifier.testTag("agenda-stop-dismiss"),
                 ) { Text("知道了") }
             }
-        }
-    }
-}
-
-/**
- * 首屏第四块：添加日程的入口。表单本身在底部面板里（[AgendaAddScheduleSheet]），
- * 这一块只负责告诉用户「新增日程」在哪里，并把它打开。
- *
- * 选中明天时入口被突出：颜色之外还有图标与文案，说明在为哪一天安排。
- */
-@Composable
-private fun AgendaAddScheduleSection(
-    state: AgendaScreenState,
-    onOpen: () -> Unit,
-) {
-    val tokens = attentionTokens()
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        // 说明行只在突出时出现，它回答的是「为什么突出」；为哪一天安排由下面按钮的标题说出。
-        // 两者不再逐字重复，否则同一句话会在这一块里出现两次，页面与读屏都是。
-        if (state.highlightAddSchedule) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.testTag("agenda-add-highlight"),
-            ) {
-                Icon(Icons.AutoMirrored.Filled.EventNote, contentDescription = "为明天安排日程", modifier = Modifier.size(tokens.spacing.medium))
-                Text(AGENDA_ADD_HIGHLIGHT_HINT, style = tokens.typography.body)
-            }
-        }
-        AttentionButton(onClick = onOpen, modifier = Modifier.testTag("agenda-open-add-sheet")) {
-            Text(state.addScheduleHeadingLabel)
         }
     }
 }
