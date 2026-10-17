@@ -846,6 +846,9 @@ private fun AgendaTimelineRows(
 ) {
     if (rows.isEmpty()) return
     val tokens = attentionTokens()
+    val timelineGutterWidth = 48.dp
+    val timelineNodeGap = 10.dp
+    val timelineNodeSize = 10.dp
     // Prototype A's timeline is a tree: time gutter, continuous axis and a node for
     // each schedule card. Keep the existing row card as the interaction surface so
     // edit/start/complete semantics remain unchanged while the list gains the missing
@@ -855,7 +858,7 @@ private fun AgendaTimelineRows(
             .fillMaxWidth()
             .testTag("agenda-timeline-tree")
             .drawBehind {
-                val axisX = 48.dp.toPx() + 10.dp.toPx() + 5.dp.toPx()
+                val axisX = timelineGutterWidth.toPx() + timelineNodeGap.toPx() + timelineNodeSize.toPx() / 2
                 drawLine(
                     color = tokens.colorScheme.outlineVariant,
                     start = Offset(axisX, 0f),
@@ -876,18 +879,18 @@ private fun AgendaTimelineRows(
                     .fillMaxWidth()
                     .padding(vertical = tokens.spacing.small),
                 verticalAlignment = Alignment.Top,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(timelineNodeGap),
             ) {
                 Text(
                     text = if (row.timing) "现在" else row.startText.ifBlank { "—" },
                     style = tokens.typography.caption,
                     color = tokens.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.width(48.dp).padding(top = 4.dp),
+                    modifier = Modifier.width(timelineGutterWidth).padding(top = 4.dp),
                 )
                 Box(
                     Modifier
                         .padding(top = 8.dp)
-                        .size(10.dp)
+                        .size(timelineNodeSize)
                         .background(nodeColor, CircleShape)
                         .border(2.dp, tokens.colorScheme.background, CircleShape),
                 )
