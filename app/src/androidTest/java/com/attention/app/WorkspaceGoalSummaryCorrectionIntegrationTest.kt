@@ -96,11 +96,12 @@ class WorkspaceGoalSummaryCorrectionIntegrationTest {
         composeRule.onNodeWithTag("edit-time-$OWNED_ENTRY_ID").performScrollTo().performClick()
         composeRule.onNodeWithTag("edit-time-minutes-$OWNED_ENTRY_ID", useUnmergedTree = true).performScrollTo().performTextReplacement("20")
         composeRule.onNodeWithTag("save-time-$OWNED_ENTRY_ID").performClick()
-        // 保存先关闭对话框、再异步写库；等保存入口真的消失之后再切换页面，
-        // 否则慢设备上目标树可能读到保存前的汇总。
+        // 保存先关闭对话框、再异步写库；对话框关闭不等于写入已经落地，
+        // 慢设备上直接切页会让目标树读到保存前的汇总。等库里的分钟数真的变了再走。
         composeRule.waitUntil(TIMEOUT) {
             composeRule.onAllNodesWithTag("save-time-$OWNED_ENTRY_ID").fetchSemanticsNodes().isEmpty()
         }
+        awaitOwnedMinutes(20)
         openTargetDetails()
         assertSummary(25)
 
@@ -151,5 +152,32 @@ class WorkspaceGoalSummaryCorrectionIntegrationTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithText("添加子计划").performClick()
         composeRule.waitForIdle()
+        // 「添加子计划」把父目标详情展开，汇总在列表行与详情里各出现一次。
+        // 等详情标题出现再继续：这样汇总读的是展开后的两处，而不是列表里的一处。
+        composeRule.waitUntil(TIMEOUT) {
+            composeRule.onAllNodesWithText("当前父目标：$TARGET_TITLE").fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    /** 等编辑后的分钟数真的写进库里：对话框关闭只说明保存被点了，不说明写入已经落地。 */
+    private fun awaitOwnedMinutes(minutes: Int) {
+        composeRule.waitUntil(TIMEOUT) {
+            readState().timeEntries.firstOrNull { it.id == OWNED_ENTRY_ID }?.durationMinutes == minutes
+        }
+    }
+
+    private fun readState(): AttentionState {
+        val database = AttentionDatabase.create(ApplicationProvider.getApplicationContext())
+        return try {
+            runBlocking {
+                RoomAttentionStateRepository(
+                    business = RoomBusinessDataRepository(database),
+                    settings = ApplicationProvider.getApplicationContext<android.content.Context>()
+                        .createSettingsStore(),
+                ).read()
+            }
+        } finally {
+            database.close()
+        }
     }
 }
