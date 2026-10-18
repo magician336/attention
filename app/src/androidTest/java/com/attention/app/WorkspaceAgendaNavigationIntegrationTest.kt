@@ -146,6 +146,12 @@ class WorkspaceAgendaNavigationIntegrationTest {
 
     @Test
     fun starting_a_timer_from_a_schedule_entry_keeps_that_schedule_as_the_source() {
+        // 日程行来自异步加载的状态：先等今天的条目进入语义树，再做坐标滚动与点击。
+        // 少了这一步，慢一些的设备上会在数据到达之前就去定位行菜单。
+        composeRule.waitUntil(TIMEOUT) {
+            composeRule.onAllNodesWithTag("schedule-more-$TODAY_ENTRY_ID", useUnmergedTree = true)
+                .fetchSemanticsNodes().isNotEmpty()
+        }
         composeRule.onNodeWithTag("schedule-more-$TODAY_ENTRY_ID", useUnmergedTree = true)
             .performScrollTo()
             .performClick()
@@ -161,10 +167,10 @@ class WorkspaceAgendaNavigationIntegrationTest {
         val running = readState().activeTimer
         assertEquals(TODAY_ENTRY_ID, running?.scheduleEntryId)
 
-        // 从条目起计时会弹一条「通知权限未开启」的短时提示，它浮在页面底部，
-        // 正好盖住「结束并保存」。提示消失之前这个按钮点不动——先等它走，
-        // 再验证停止计时这条路径（同类的统计页用例已有同样的等待）。
-        composeRule.waitUntil(TIMEOUT) {
+        // 从条目起计时会先弹操作结果、再弹「通知权限未开启」，两条短提示串行出现，
+        // 浮在页面底部正好盖住「结束并保存」。提示消失之前这个按钮点不动——先等它们走，
+        // 再验证停止计时这条路径。两条提示的停留时间加起来会超过普通等待窗口，因此单独给足时间。
+        composeRule.waitUntil(FEEDBACK_TIMEOUT) {
             composeRule.onAllNodesWithTag("attention.feedback.snackbar").fetchSemanticsNodes().isEmpty()
         }
         composeRule.onNodeWithTag("agenda-running-timer-stop", useUnmergedTree = true)
@@ -178,6 +184,9 @@ class WorkspaceAgendaNavigationIntegrationTest {
 
     companion object {
         private const val TIMEOUT = 10_000L
+
+        /** 两条短提示串行出现时的等待窗口：每条提示自身就要停留数秒。 */
+        private const val FEEDBACK_TIMEOUT = 30_000L
         private const val TARGET_ID = "ui-nav-target"
         private const val TODAY_ENTRY_ID = "ui-nav-today"
         private const val TOMORROW_ENTRY_ID = "ui-nav-tomorrow"

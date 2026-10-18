@@ -47,7 +47,7 @@ class WorkspaceGoalSummaryCorrectionIntegrationTest {
         private const val OWNED_ENTRY_ID = "ui-summary-correction-owned"
         private const val UNOWNED_ENTRY_ID = "ui-summary-correction-unowned"
         private const val TARGET_TITLE = "UI-汇总纠错"
-        private const val TIMEOUT = 5_000L
+        private const val TIMEOUT = 10_000L
         private lateinit var planningDate: String
 
         @JvmStatic
@@ -96,7 +96,11 @@ class WorkspaceGoalSummaryCorrectionIntegrationTest {
         composeRule.onNodeWithTag("edit-time-$OWNED_ENTRY_ID").performScrollTo().performClick()
         composeRule.onNodeWithTag("edit-time-minutes-$OWNED_ENTRY_ID", useUnmergedTree = true).performScrollTo().performTextReplacement("20")
         composeRule.onNodeWithTag("save-time-$OWNED_ENTRY_ID").performClick()
-        composeRule.waitForIdle()
+        // 保存先关闭对话框、再异步写库；等保存入口真的消失之后再切换页面，
+        // 否则慢设备上目标树可能读到保存前的汇总。
+        composeRule.waitUntil(TIMEOUT) {
+            composeRule.onAllNodesWithTag("save-time-$OWNED_ENTRY_ID").fetchSemanticsNodes().isEmpty()
+        }
         openTargetDetails()
         assertSummary(25)
 
@@ -136,7 +140,7 @@ class WorkspaceGoalSummaryCorrectionIntegrationTest {
 
     private fun assertSummary(actualMinutes: Int) {
         val summary = "一次性阶段汇总：实际 $actualMinutes/30 分钟"
-        composeRule.waitUntil(5_000) {
+        composeRule.waitUntil(TIMEOUT) {
             composeRule.onAllNodesWithText(summary, substring = true).fetchSemanticsNodes().size == 2
         }
         composeRule.onAllNodesWithText(summary, substring = true).assertCountEquals(2)
