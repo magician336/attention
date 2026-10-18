@@ -200,7 +200,7 @@ class AgendaScreenTest {
         composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true).performScrollTo()
             .performTextReplacement("整理需求")
         composeRule.onNodeWithTag("agenda-estimate-input", useUnmergedTree = true).performTextReplacement("45")
-        composeRule.onNodeWithTag("agenda-add-submit", useUnmergedTree = true).performScrollTo().performClick()
+        submitAddSchedule()
 
         val draft: AgendaScheduleDraft = intents.addedSchedules.single()
         assertEquals("整理需求", draft.title)
@@ -218,9 +218,13 @@ class AgendaScreenTest {
 
         composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true).performScrollTo()
             .performTextReplacement("补记并安排")
-        composeRule.onNodeWithTag("agenda-backfill-toggle", useUnmergedTree = true).performScrollTo().performClick()
-        composeRule.onNodeWithTag("agenda-backfill-preset-30", useUnmergedTree = true).performScrollTo().performClick()
-        composeRule.onNodeWithTag("agenda-add-submit", useUnmergedTree = true).performScrollTo().performClick()
+        // 补记区的开关与预设也在面板底部，标题输入后的软键盘可能挡住它们：
+        // 语义点击跳过坐标，避免点击静默失效后读到默认时长。
+        composeRule.onNodeWithTag("agenda-backfill-toggle", useUnmergedTree = true)
+            .performSemanticsAction(SemanticsActions.OnClick)
+        composeRule.onNodeWithTag("agenda-backfill-preset-30", useUnmergedTree = true)
+            .performSemanticsAction(SemanticsActions.OnClick)
+        submitAddSchedule()
 
         assertEquals(0, intents.addedSchedules.size)
         assertEquals(1, intents.addedSchedulesWithBackfill.size)
@@ -235,7 +239,7 @@ class AgendaScreenTest {
         openAddScheduleSheet()
 
         composeRule.onNodeWithTag("agenda-estimate-input", useUnmergedTree = true).performTextReplacement("45")
-        composeRule.onNodeWithTag("agenda-add-submit", useUnmergedTree = true).performScrollTo().performClick()
+        submitAddSchedule()
 
         node("日程标题不能为空").assertIsDisplayed()
         assertEquals(emptyList<AgendaScheduleDraft>(), intents.addedSchedules)
@@ -253,7 +257,7 @@ class AgendaScreenTest {
         expandAddScheduleMoreSettings()
         composeRule.onNodeWithTag("agenda-reminder-input", useUnmergedTree = true).performScrollTo()
             .performTextReplacement("09:00")
-        composeRule.onNodeWithTag("agenda-add-submit", useUnmergedTree = true).performScrollTo().performClick()
+        submitAddSchedule()
 
         assertEquals(540, intents.addedSchedules.single().reminderMinuteOfDay)
         assertEquals(1, intents.permissionRequests)
@@ -334,11 +338,10 @@ class AgendaScreenTest {
         composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true)
             .performScrollTo().performTextReplacement("补记并安排")
         composeRule.onNodeWithTag("agenda-backfill-preset-30", useUnmergedTree = true)
-            .performScrollTo().performClick()
+            .performSemanticsAction(SemanticsActions.OnClick)
         // 预设会改写补记编辑器的本地状态；等这次重组落定再提交，避免读到旧的 15 分钟。
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("agenda-add-submit", useUnmergedTree = true)
-            .performScrollTo().performClick()
+        submitAddSchedule()
 
         assertEquals("2026-03-05", intents.addedSchedulesWithBackfill.single().first.planningDate)
         assertEquals(30, intents.addedSchedulesWithBackfill.single().second.durationMinutes)
@@ -362,7 +365,7 @@ class AgendaScreenTest {
 
         composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true).performScrollTo()
             .performTextReplacement("今天第一件事")
-        composeRule.onNodeWithTag("agenda-add-submit", useUnmergedTree = true).performScrollTo().performClick()
+        submitAddSchedule()
 
         assertEquals("2026-03-05", intents.addedSchedules.single().planningDate)
     }
@@ -1269,7 +1272,22 @@ class AgendaScreenTest {
 
     /** 展开添加日程面板里的「更多设置」，露出备注、提醒与关联计划。 */
     private fun expandAddScheduleMoreSettings() {
-        composeRule.onNodeWithTag("agenda-add-more-toggle", useUnmergedTree = true).performScrollTo().performClick()
+        // 面板贴着屏幕底部，标题输入后的软键盘可能盖住这枚按钮；
+        // 坐标点击会落在 IME 上并静默失效。直接触发按钮自己的点击语义。
+        composeRule.onNodeWithTag("agenda-add-more-toggle", useUnmergedTree = true)
+            .performSemanticsAction(SemanticsActions.OnClick)
+        composeRule.waitForIdle()
+    }
+
+    /**
+     * 提交添加面板。
+     *
+     * 与「更多设置」同理：提交按钮在面板底部，软键盘可能盖住它。
+     * 这条用例测的是表单行为，不是触摸命中，因此用语义点击绕过坐标。
+     */
+    private fun submitAddSchedule() {
+        composeRule.onNodeWithTag("agenda-add-submit", useUnmergedTree = true)
+            .performSemanticsAction(SemanticsActions.OnClick)
         composeRule.waitForIdle()
     }
 
