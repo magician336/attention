@@ -86,14 +86,20 @@ class WorkspaceBackNavigationIntegrationTest {
 
     @Test
     fun back_closes_the_schedule_detail_dialog_and_keeps_the_agenda_page() {
-        composeRule.onNodeWithTag("schedule-edit-$TODAY_ENTRY_ID", useUnmergedTree = true)
+        composeRule.onNodeWithTag("schedule-more-$TODAY_ENTRY_ID", useUnmergedTree = true)
             .performScrollTo()
+            .performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("schedule-more-edit-$TODAY_ENTRY_ID", useUnmergedTree = true)
             .performClick()
         composeRule.waitForIdle()
         // 对话框的标题永远在对话框顶部可见；表单字段在可滚动区域里，可能在视口之外
         composeRule.onNodeWithText("编辑日程").assertIsDisplayed()
 
-        Espresso.pressBack()
+        // 编辑对话框是独立窗口：当前窗口（对话框）本来就持有焦点，
+        // Espresso 的默认 pressBack 会等 Activity 根窗口重新获得焦点而超时。
+        // 无条件发送返回键，仍然是一次真实的返回事件。
+        Espresso.pressBackUnconditionally()
         composeRule.waitForIdle()
 
         // 日程详情优先被关掉，日程页本身还在，应用没有退出
@@ -107,14 +113,14 @@ class WorkspaceBackNavigationIntegrationTest {
     fun back_closes_the_date_picker_without_leaving_the_agenda_day_unchanged() {
         composeRule.onNodeWithTag("agenda-date-menu").performScrollTo().performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("agenda-all-dates").assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-range-all-dates").assertIsDisplayed()
 
         Espresso.pressBack()
         composeRule.waitForIdle()
 
         // 日期选择器优先被关掉，且没有顺带切走当前规划日
-        composeRule.onNodeWithTag("agenda-all-dates").assertDoesNotExist()
-        composeRule.onNodeWithTag("agenda-filter").assert(hasText("规划日 $TODAY"))
+        composeRule.onNodeWithTag("agenda-range-all-dates").assertDoesNotExist()
+        composeRule.onNodeWithTag("agenda-filter").assert(hasText("筛选：规划日 $TODAY"))
         assertEquals(Lifecycle.State.RESUMED, activityState())
     }
 

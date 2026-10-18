@@ -1,6 +1,7 @@
 package com.attention.app
 
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -75,15 +76,16 @@ class WorkspaceAgendaSessionRetentionIntegrationTest {
     /** 「所有日期」是这个会话里选中的范围，同样在会话内保留。 */
     @Test
     fun the_all_dates_range_survives_a_round_trip_to_another_workspace() {
-        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).performScrollTo().performClick()
+        openDateMenu()
+        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("agenda-filter").assert(hasText("所有日期"))
+        composeRule.onNodeWithTag("agenda-filter").assert(hasText("筛选：所有日期"))
 
         openWorkspace("nav-targets")
         composeRule.onNodeWithTag("nav-agenda", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
 
-        composeRule.onNodeWithTag("agenda-filter").assert(hasText("所有日期"))
+        composeRule.onNodeWithTag("agenda-filter").assert(hasText("筛选：所有日期"))
     }
 
     /** 重启：组合根重建后回到当前规划日，不恢复上一个会话遗留的日期筛选。 */
@@ -102,7 +104,8 @@ class WorkspaceAgendaSessionRetentionIntegrationTest {
     /** 重启：上一个会话选的是「所有日期」时，同样不残留。 */
     @Test
     fun a_restart_does_not_restore_a_previous_all_dates_range() {
-        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).performScrollTo().performClick()
+        openDateMenu()
+        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
 
         composeRule.activityRule.scenario.recreate()
@@ -115,8 +118,9 @@ class WorkspaceAgendaSessionRetentionIntegrationTest {
     @Test
     fun the_session_range_is_never_written_to_persistence() {
         // 一个明显不属于当前规划日的范围：任何残留都会立刻显形
-        composeRule.onNodeWithText("新增日程规划日 YYYY-MM-DD").performScrollTo().performTextReplacement(FAR_DATE)
-        composeRule.onNodeWithText("打开规划日").performScrollTo().performClick()
+        openDateMenu()
+        composeRule.onNode(hasSetTextAction()).performTextReplacement(FAR_DATE)
+        composeRule.onNodeWithTag("agenda-open-planning-day", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
         assertAgendaShowsPlanningDay(FAR_DATE)
 
@@ -138,8 +142,15 @@ class WorkspaceAgendaSessionRetentionIntegrationTest {
         assertAgendaShowsPlanningDay(TODAY)
     }
 
+    /** 打开日期菜单：三个范围与任意规划日输入都收在这个菜单里。 */
+    private fun openDateMenu() {
+        composeRule.onNodeWithTag("agenda-date-menu", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.waitForIdle()
+    }
+
     private fun selectTomorrow() {
-        composeRule.onNodeWithTag("agenda-range-tomorrow", useUnmergedTree = true).performScrollTo().performClick()
+        openDateMenu()
+        composeRule.onNodeWithTag("agenda-range-tomorrow", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
     }
 
@@ -150,7 +161,7 @@ class WorkspaceAgendaSessionRetentionIntegrationTest {
 
     private fun assertAgendaShowsPlanningDay(date: String) {
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("agenda-filter").assert(hasText("规划日 $date"))
+        composeRule.onNodeWithTag("agenda-filter").assert(hasText("筛选：规划日 $date"))
     }
 
     companion object {

@@ -15,10 +15,12 @@ import androidx.core.content.ContextCompat
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.selectable
@@ -196,7 +198,7 @@ private class SettingsActionsAdapter(
 
     override fun close() = onClose()
 
-    // 重新打开首次设置：组合根把工作台内的设置卡片显示出来，页面只发出这一条意图。
+    // 重新打开首次设置：组合根切到独立设置页，页面只发出这一条意图。
     override fun openOnboarding() = onOpenOnboarding()
 }
 
@@ -204,7 +206,7 @@ private class SettingsActionsAdapter(
  * 首次使用引导的 actions adapter，在组合根一侧组装。
  *
  * 每个写入动作都只在页面确认对应步骤后落地；跳过当前步骤只改变页面索引，
- * `completeOnboarding()` 再更新引导状态并把用户留在当前规划日的工作台。
+ * `completeOnboarding()` 再更新引导状态并把用户送回当前规划日的日程页。
  */
 private class OnboardingActionsAdapter(
     private val viewModel: AttentionViewModel,
@@ -644,11 +646,11 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     // 用户在外部打开之后亲手点别的入口，onSelect 会把它置为已确定，那次切换照常记录。
     var destinationSettled by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
-    // 引导是否被用户重新打开：设置页的「重新打开首次设置」把卡片显示出来。
+    // 引导是否被用户重新打开：设置页的「重新打开首次设置」切到独立设置页。
     // 自动出现的那一次由持久化的引导状态决定，不由这个变量决定。
     var onboardingRequested by remember { mutableStateOf(false) }
     // 引导状态直接读设置快照，并允许「还没读到」这个第三种状态：
-    // 未读到时不显示引导，因此已完成引导的老用户不会先看到一帧首次设置卡片。
+    // 未读到时不显示引导，因此已完成引导的老用户不会先看到一帧首次设置页。
     val persistedSettings by remember { context.createSettingsStore().settings }
         .collectAsStateWithLifecycle(initialValue = null)
     var persistedSettingsLoaded by remember { mutableStateOf(false) }
@@ -965,7 +967,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                 }
             },
             onRequestRestoreImportBackup = { restoreImportPromptVisible = true },
-            // 重新打开首次设置：先把设置页让出去，再显示工作台内的设置卡片。
+            // 重新打开首次设置：先把设置页让出去，再显示独立首次设置页。
             onOpenOnboarding = {
                 settingsOpen = false
                 onboardingRequested = true
@@ -1043,7 +1045,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         )
     }
 
-    // 首次设置以内嵌工作台卡片出现，核心入口始终保持可达。
+    // 首次设置是独立页面：首次启动可跳过，之后从设置页再次打开。
     val onboardingVisible = onboardingRequested || persistedSettings?.onboardingCompleted == false
     val onboardingState = onboardingScreenState(
         planningDate = agendaPlanningDay.toString(),
@@ -1068,40 +1070,48 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         // Prototype A uses the compact workbench itself as the page header. The generic
         // Material top bar added a large empty brand band above the date controls.
         bottomBar = {
-            // 主工作区收敛为日程、目标树、统计三个入口：今天/明天/所有日期是日程页里的范围，
-            // 设置不再是顶级入口——它从统计页底部的「设置与数据」进入，返回时回到统计页。
-            // 每一项同时有 Material 图标与中文标签，选中态带可访问语义。
-            Row(Modifier.fillMaxWidth().padding(6.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-                listOf(
-                    Triple(LaunchDestination.AGENDA, "日程", Icons.Filled.Event),
-                    Triple(LaunchDestination.TARGETS, "目标树", Icons.Filled.AccountTree),
-                    Triple(LaunchDestination.STATISTICS, "统计", Icons.Filled.Insights),
-                ).forEach { (item, label, icon) ->
-                    WorkspaceNavigationItem(
-                        label = label,
-                        icon = icon,
-                        // 设置页挂在统计页底下，因此停留在设置页时统计仍然处于选中态。
-                        selected = destination.asAgendaEntry() == item,
-                        onSelect = {
-                            // 从设置页切回主工作区：先离开设置，再换顶级页面。
-                            settingsOpen = false
-                            destinationChosen = true
-                            // 用户亲手点的落点一定是真实的：这一次的写回不必再等状态纠正。
-                            destinationSettled = true
-                            destination = item
-                        },
-                        modifier = Modifier.testTag("nav-${item.name.lowercase()}"),
-                    )
+            if (!onboardingVisible) {
+                // 主工作区收敛为日程、目标树、统计三个入口：今天/明天/所有日期是日程页里的范围，
+                // 设置不再是顶级入口——它从统计页底部的「设置与数据」进入，返回时回到统计页。
+                // 每一项同时有 Material 图标与中文标签，选中态带可访问语义。
+                // 活动是 edge-to-edge 的，而这里是自定义底栏（不是自带 insets 的 NavigationBar）：
+                // 不自己垫出系统导航栏高度，三项就会压在系统手势条下面。
+                Row(
+                    Modifier.fillMaxWidth().navigationBarsPadding().padding(6.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                ) {
+                    listOf(
+                        Triple(LaunchDestination.AGENDA, "日程", Icons.Filled.Event),
+                        Triple(LaunchDestination.TARGETS, "目标树", Icons.Filled.AccountTree),
+                        Triple(LaunchDestination.STATISTICS, "统计", Icons.Filled.Insights),
+                    ).forEach { (item, label, icon) ->
+                        WorkspaceNavigationItem(
+                            label = label,
+                            icon = icon,
+                            // 设置页挂在统计页底下，因此停留在设置页时统计仍然处于选中态。
+                            selected = destination.asAgendaEntry() == item,
+                            onSelect = {
+                                // 从设置页切回主工作区：先离开设置，再换顶级页面。
+                                settingsOpen = false
+                                destinationChosen = true
+                                // 用户亲手点的落点一定是真实的：这一次的写回不必再等状态纠正。
+                                destinationSettled = true
+                                destination = item
+                            },
+                            modifier = Modifier.testTag("nav-${item.name.lowercase()}"),
+                        )
+                    }
                 }
             }
         },
     // 短时提示宿主挂在 Scaffold 上，因此五个页面共用同一个出口，流程不被打断。
         snackbarHost = { AttentionSnackbarHost(state = feedback) },
     ) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize()) {
-            if (onboardingVisible) {
+        if (onboardingVisible) {
+            Box(Modifier.padding(padding).fillMaxSize()) {
                 OnboardingScreen(state = onboardingState, actions = onboardingActions)
             }
+        } else Column(Modifier.padding(padding).fillMaxSize()) {
             error?.let {
                 AttentionInlineError(
                     message = it,
@@ -1141,7 +1151,6 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                     state = agendaState,
                     actions = agendaActions,
                     openScheduleId = openScheduleId,
-                    onboardingVisible = onboardingVisible,
                 )
             }
             jsonPreview?.let { Text("JSON 预览：\n$it", modifier = Modifier.padding(16.dp)) }

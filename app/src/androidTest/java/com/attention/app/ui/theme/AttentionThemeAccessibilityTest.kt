@@ -47,12 +47,12 @@ class AttentionThemeAccessibilityTest {
         const val TOKEN_PROBE = "accessibility-token-probe"
 
         /**
-         * 被断言的页面级按钮：日程页上的「添加日程」入口。
+         * 被断言的页面级按钮：日程页常驻右下角的「调整计划」主操作。
          *
-         * #180 把添加表单收进了底部面板之后，面板里的提交按钮只在面板打开时参与组合，
-         * 因此页面基线改钉这个常驻入口——它是同一个 [AttentionButton]，声明同一条 48dp 基线。
+         * 添加表单的提交按钮只在底部面板打开时参与组合，因此页面基线钉这个常驻入口——
+         * 它是 [AttentionButton]，声明同一条 48dp 基线。
          */
-        const val AGENDA_ADD_ENTRY = "agenda-open-add-sheet"
+        const val AGENDA_ADD_ENTRY = "agenda-plan-action"
 
         /** 等页面切换与 DataStore 读取的上限。 */
         const val TIMEOUT = 10_000L
@@ -77,14 +77,14 @@ class AttentionThemeAccessibilityTest {
      *
      * 被测控件跟着主工作区收敛一起移动：今天工作台的每日容量卡片在 #172 下线，
      * 添加表单又在 #180 收进了底部面板（面板关闭时整块不参与组合）。因此这里钉住
-     * 页面上常驻的那个「添加日程」入口按钮：它同样是 [AttentionButton]，同样声明
-     * 48dp 最小高度，且确实在首屏的滚动容器里。
+     * 页面上常驻的「调整计划」主操作：它同样是 [AttentionButton]，同样声明
+     * 48dp 最小高度，且不随内容滚动移走。
      */
     @Test
     fun page_controls_meet_the_material3_touch_target_baseline() {
         composeRule.waitForTag(AGENDA_ADD_ENTRY)
         composeRule.onNodeWithTag(AGENDA_ADD_ENTRY, useUnmergedTree = true)
-            .performScrollTo()
+            .assertIsDisplayed()
             .assertHeightIsAtLeast(48.dp)
     }
 

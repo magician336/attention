@@ -38,8 +38,8 @@ import org.junit.runner.RunWith
  * 首次设置的验收：工作台内嵌、五步、可跳过，并且不遮挡核心入口。
  *
  * 这条用例走真实的 MainActivity 宿主路径，因此验证的是用户看到、点到与最终存下来的东西：
- * 未完成引导时第一次启动看到的是设置卡片和工作区；五步设置按规划日、周起始日、容量、计划、日程排列；
- * 跳过后回到当前规划日的日程；完成后不再自动出现；设置页可以重新打开它。
+ * 未完成引导时第一次启动看到的是独立设置页（ADR-0006），不覆盖日程页；五步设置按规划日、周起始日、
+ * 容量、计划、日程排列；跳过后回到当前规划日的日程；完成后不再自动出现；设置页可以重新打开它。
  *
  * 最关键的一条是 [completing_the_guide_changes_no_business_data_at_all]：
  * 引导前后目标、日程、设置与时间记录集合必须完全不变——旧引导卡片会创建这些数据，新引导一个都不写。
@@ -62,15 +62,17 @@ class WorkspaceOnboardingFlowIntegrationTest {
     }
 
     @Test
-    fun the_first_start_without_a_finished_guide_shows_the_inline_setup_and_workspace() {
+    fun the_first_start_without_a_finished_guide_shows_the_standalone_setup_page() {
         seed(onboardingCompleted = false)
 
         launch()
 
         awaitTag("onboarding-screen")
-        // 首次设置以内嵌卡片出现，底部导航与核心工作台入口仍然可达。
-        composeRule.onNodeWithTag("nav-agenda").assertIsDisplayed()
-        composeRule.onNodeWithTag("agenda-filter").assertIsDisplayed()
+        // ADR-0006：首次设置是独立页面，不再以内嵌卡片盖在日程页上；
+        // 引导期间底部导航与日程页都不渲染，跳过或完成后才回到日程。
+        composeRule.onNodeWithTag("onboarding-screen").assertIsDisplayed()
+        composeRule.onNodeWithTag("nav-agenda").assertDoesNotExist()
+        composeRule.onNodeWithTag("agenda-filter").assertDoesNotExist()
         composeRule.onNodeWithText("第 1 步，共 5 步").assertIsDisplayed()
         composeRule.onNodeWithTag("onboarding-page-title").assertIsDisplayed()
     }
@@ -108,7 +110,7 @@ class WorkspaceOnboardingFlowIntegrationTest {
         awaitTag("nav-agenda")
         composeRule.onNodeWithTag("agenda-filter").assertIsDisplayed()
         // 「规划日 …」在日程页上有不止一处文案（容量摘要里也会出现），因此断言落在筛选标题上
-        composeRule.onNodeWithTag("agenda-filter").assert(hasText("规划日 $TODAY"))
+        composeRule.onNodeWithTag("agenda-filter").assert(hasText("筛选：规划日 $TODAY"))
     }
 
     @Test
@@ -123,7 +125,7 @@ class WorkspaceOnboardingFlowIntegrationTest {
         awaitGone("onboarding-screen")
         composeRule.onNodeWithTag("agenda-filter").assertIsDisplayed()
         // 同上：规划日断言绑定在筛选标题这个元素上，不做全页文本搜索
-        composeRule.onNodeWithTag("agenda-filter").assert(hasText("规划日 $TODAY"))
+        composeRule.onNodeWithTag("agenda-filter").assert(hasText("筛选：规划日 $TODAY"))
     }
 
     @Test

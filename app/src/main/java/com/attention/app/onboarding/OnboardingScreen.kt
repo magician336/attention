@@ -32,7 +32,7 @@ import com.attention.workspace.state.OnboardingScreenState
 import com.attention.workspace.state.OnboardingStepKey
 
 /**
- * 首次设置以内嵌卡片的形式出现在工作台上，因此底部导航、添加日程和自由计时始终可达。
+ * 首次启动时作为独立页面出现；用户可以逐步设置，也可以立即跳过并进入日程页。
  * 每一步允许跳过；页面只在用户确认输入后发出对应 intent。
  */
 @OptIn(ExperimentalLayoutApi::class)

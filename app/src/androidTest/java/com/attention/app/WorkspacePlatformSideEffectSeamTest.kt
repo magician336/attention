@@ -62,10 +62,11 @@ class WorkspacePlatformSideEffectSeamTest {
         }
 
         // 提醒权限：页面只发出申请意图，权限对话框由组合根 adapter 负责
-        // 添加日程的表单住在底部面板里：从 Prototype A 的操作栈打开，
+        // 添加日程的表单住在底部面板里：从常驻的「调整计划」菜单打开，
         // 提醒属于低频字段，因此还要展开「更多设置」。
-        composeRule.onNodeWithTag("agenda-operation-add-schedule", useUnmergedTree = true)
-            .performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-plan-action", useUnmergedTree = true).performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("agenda-plan-menu-add", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true).performScrollTo()
             .performTextReplacement("带提醒的日程")
@@ -80,7 +81,10 @@ class WorkspacePlatformSideEffectSeamTest {
         assertEquals(1, agenda.permissionRequests)
 
         // 计时器：页面只发出带来源关联的 intent，前台服务由组合根 adapter 启动
-        composeRule.onNodeWithTag("schedule-start-timer-e1", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("schedule-more-e1", useUnmergedTree = true)
+            .performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("schedule-more-start-timer-e1", useUnmergedTree = true).performClick()
         assertEquals(listOf("e1"), agenda.startedTimerEntries.map { it.id })
     }
 

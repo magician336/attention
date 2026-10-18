@@ -2,11 +2,16 @@ package com.attention.app.agenda
 
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasClickAction
@@ -19,9 +24,12 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.percentOffset
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.attention.app.ui.components.AttentionFeedbackTags
 import com.attention.app.ui.components.AttentionStateKind
@@ -76,13 +84,19 @@ class AgendaScreenTest {
         // 所有日期是特殊视图：条目按规划日分组，每天各有自己的每日容量
         mount(allDatesScreenState())
 
-        node("筛选：所有日期").assertIsDisplayed()
-        node("容量合计").assertIsDisplayed()
-        node("240 分钟").assertIsDisplayed()
-        node("90 分钟").assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-filter", useUnmergedTree = true)
+            .assert(hasText("筛选：所有日期"))
+        composeRule.onNodeWithTag("agenda-summary-capacity", useUnmergedTree = true)
+            .assert(hasText("每日容量 4 小时", substring = true))
+        composeRule.onNodeWithTag("agenda-summary-planned", useUnmergedTree = true)
+            .assert(hasAnyDescendant(hasText("1小时30分")))
+        composeRule.onNodeWithTag("agenda-summary-actual", useUnmergedTree = true)
+            .assert(hasAnyDescendant(hasText("0分")))
         node("规划日 2026-03-05").assertIsDisplayed()
         node("已安排 60 / 120 分钟").assertIsDisplayed()
-        node("写周报").assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-schedule-row-e1", useUnmergedTree = true)
+            .performScrollTo()
+            .assert(hasAnyDescendant(hasText("写周报")))
         node("2026-03-05 · 60 分钟 · 工作 · 无提醒").assertIsDisplayed()
         // 每个规划日分区都在时间轴区块内，排在只读摘要之下：先滚到它再断言可见。
         composeRule.onNodeWithTag("agenda-capacity-summary-2026-03-05", useUnmergedTree = true)
@@ -94,7 +108,8 @@ class AgendaScreenTest {
         // 选中规划日：标题、筛选文案与容量卡片都跟着这一天
         mount(planningDayScreenState(LocalDate.of(2026, 3, 6)))
 
-        node("筛选：规划日 2026-03-06").assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-filter", useUnmergedTree = true)
+            .assert(hasText("筛选：规划日 2026-03-06"))
         node("开组会").assertIsDisplayed()
         composeRule.onNodeWithTag("agenda-capacity-summary", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
     }
@@ -110,7 +125,7 @@ class AgendaScreenTest {
         )
 
         composeRule.onNodeWithTag("agenda-filter", useUnmergedTree = true)
-            .assert(hasText("规划日 2026-03-05"))
+            .assert(hasText("筛选：规划日 2026-03-05"))
         composeRule.onNodeWithText(
             "日程条目可带预计时长；它不会自动变成实际投入。",
             useUnmergedTree = true,
@@ -168,10 +183,11 @@ class AgendaScreenTest {
         mount(planningDayScreenState(LocalDate.of(2026, 3, 6)), intents)
 
         composeRule.onNodeWithTag("agenda-date-menu", useUnmergedTree = true).performScrollTo().performClick()
-        composeRule.onNodeWithTag("agenda-all-dates", useUnmergedTree = true).performClick()
+        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).performClick()
 
-        // 所有日期是一个特殊视图：intent 是「不选某一天」，而不是一个日期值
-        assertEquals(listOf<LocalDate?>(null), intents.selectedDates)
+        // 所有日期是一个特殊视图，走独立的 selectAllDates intent，而不是某一天
+        assertEquals(emptyList<LocalDate?>(), intents.selectedDates)
+        assertEquals(listOf("allDates"), intents.dataIntents)
     }
 
     @Test
@@ -244,44 +260,72 @@ class AgendaScreenTest {
     }
 
     @Test
-    fun the_operation_stack_keeps_three_primary_actions_in_accessible_order() {
-        // Prototype A 的三个主要动作在窄屏共用一列；顺序和名称是页面的稳定公共 seam。
+    fun the_plan_action_is_a_persistent_menu_with_add_and_backfill_only() {
+        // 主操作常驻右下角，菜单只承担添加与补记；修改日程回到时间轴行内。
         mount(planningDayScreenState(planningDay))
 
-        composeRule.onNodeWithTag("agenda-operation-stack", useUnmergedTree = true)
-            .performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-plan-action", useUnmergedTree = true)
+            .assertIsDisplayed()
+            .assert(hasClickAction())
+            .assert(hasAnyDescendant(hasText("调整计划")))
 
-        val tags = orderedTestTags()
-        val actionTags = listOf(
-            "agenda-operation-add-schedule",
-            "agenda-operation-free-timer",
-            "agenda-operation-backfill",
-        )
-        val indices = actionTags.map { tag ->
-            tags.indexOf(tag).also {
-                assertTrue("操作栈按钮必须渲染：$tag，实际顺序：$tags", it >= 0)
-            }
-        }
-        assertEquals("操作栈固定为添加日程、开始自由计时、事后补记：$tags", indices.sorted(), indices)
+        openAdjustPlanMenu()
 
-        val labels = listOf("添加日程", "开始自由计时", "事后补记")
-        actionTags.zip(labels).forEach { (tag, label) ->
-            composeRule.onNodeWithTag(tag, useUnmergedTree = true)
-                .assertIsDisplayed()
-                .assert(hasClickAction())
-                .assert(hasAnyDescendant(hasText(label)))
-        }
+        composeRule.onNodeWithTag("agenda-plan-menu-add", useUnmergedTree = true)
+            .assertIsDisplayed()
+            .assert(hasAnyDescendant(hasText("添加日程")))
+        composeRule.onNodeWithTag("agenda-plan-menu-backfill", useUnmergedTree = true)
+            .assertIsDisplayed()
+            .assert(hasAnyDescendant(hasText("事后补记")))
+        // 菜单里恰好只有这两项；修改日程与取消完成都在行菜单里。
+        composeRule.onAllNodes(
+            hasClickAction() and hasAnyAncestor(hasTestTag("agenda-plan-menu")),
+            useUnmergedTree = true,
+        ).assertCountEquals(2)
+
+        // 自由计时没有进菜单，仍在页面的操作栈里。
+        composeRule.onNodeWithTag("agenda-operation-free-timer", useUnmergedTree = true)
+            .performScrollTo()
+            .assertIsDisplayed()
+            .assert(hasClickAction())
+            .assert(hasAnyDescendant(hasText("开始自由计时")))
+        composeRule.onAllNodesWithTag("agenda-operation-add-schedule", useUnmergedTree = true)
+            .assertCountEquals(0)
+        composeRule.onAllNodesWithTag("agenda-operation-backfill", useUnmergedTree = true)
+            .assertCountEquals(0)
+    }
+
+    @Test
+    fun the_plan_action_stays_visible_while_the_page_scrolls() {
+        // 主操作在滚动容器之外，滚到底部仍要看得见。
+        mount(planningDayScreenState(planningDay))
+
+        composeRule.onNodeWithTag("agenda-section-recurrence", useUnmergedTree = true).performScrollTo()
+
+        composeRule.onNodeWithTag("agenda-plan-action", useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun the_plan_action_is_hidden_while_the_first_load_is_pending() {
+        mount(planningDayScreenState(planningDay).copy(loading = true))
+
+        composeRule.onNodeWithTag("agenda-plan-action", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun the_plan_action_is_hidden_when_the_local_read_failed() {
+        mount(planningDayScreenState(planningDay).copy(loadError = "磁盘读不出来"))
+
+        composeRule.onNodeWithTag("agenda-plan-action", useUnmergedTree = true).assertDoesNotExist()
     }
 
     @Test
     fun the_backfill_operation_reuses_the_existing_combined_save_action_and_planning_day() {
-        // 「事后补记」沿用现有的保存日程并补记 intent，只是从操作栈直接打开实际投入编辑器。
+        // 「事后补记」沿用现有的保存日程并补记 intent，只是改从常驻的「调整计划」菜单打开。
         val intents = RecordingAgendaActions()
         mount(planningDayScreenState(selected = planningDay), intents)
 
-        composeRule.onNodeWithTag("agenda-operation-backfill", useUnmergedTree = true)
-            .performScrollTo().performClick()
-        composeRule.waitForIdle()
+        openBackfillSheet()
 
         composeRule.onNodeWithTag("agenda-add-sheet", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithTag("agenda-backfill-editor", useUnmergedTree = true).assertIsDisplayed()
@@ -291,6 +335,8 @@ class AgendaScreenTest {
             .performScrollTo().performTextReplacement("补记并安排")
         composeRule.onNodeWithTag("agenda-backfill-preset-30", useUnmergedTree = true)
             .performScrollTo().performClick()
+        // 预设会改写补记编辑器的本地状态；等这次重组落定再提交，避免读到旧的 15 分钟。
+        composeRule.waitForIdle()
         composeRule.onNodeWithTag("agenda-add-submit", useUnmergedTree = true)
             .performScrollTo().performClick()
 
@@ -392,7 +438,9 @@ class AgendaScreenTest {
         val intents = RecordingAgendaActions()
         mount(allDatesScreenState(), intents)
 
-        composeRule.onNodeWithTag("schedule-edit-e1", useUnmergedTree = true).performScrollTo().performClick()
+        openRowMenu("e1")
+        composeRule.onNodeWithTag("schedule-more-edit-e1", useUnmergedTree = true).performClick()
+        composeRule.waitForIdle()
         composeRule.onNodeWithTag("schedule-edit-estimate-e1", useUnmergedTree = true).performScrollTo()
             .performTextReplacement("90")
         // 保存按钮在对话框的操作区，不在可滚动正文里，因此不滚动
@@ -421,7 +469,8 @@ class AgendaScreenTest {
         val intents = RecordingAgendaActions()
         mount(allDatesScreenState(), intents)
 
-        composeRule.onNodeWithTag("schedule-start-timer-e1", useUnmergedTree = true).performScrollTo().performClick()
+        openRowMenu("e1")
+        composeRule.onNodeWithTag("schedule-more-start-timer-e1", useUnmergedTree = true).performClick()
 
         val entry: ScheduleEntry = intents.startedEntries.single()
         assertEquals("e1", entry.id)
@@ -430,11 +479,13 @@ class AgendaScreenTest {
 
     @Test
     fun starting_a_timer_is_disabled_while_a_timer_is_running() {
-        // 已有计时进行中时不允许从日程条目再起一个
+        // 已有计时进行中时不允许从日程条目再起一个；行菜单仍然打开，只是该项不可用
         mount(allDatesScreenState(canStartTimer = false))
 
-        composeRule.onNodeWithTag("schedule-start-timer-e1", useUnmergedTree = true)
+        openRowMenu("e1")
+        composeRule.onNodeWithTag("schedule-more-start-timer-e1", useUnmergedTree = true)
             .assertExists()
+            .assertIsNotEnabled()
     }
 
     @Test
@@ -521,8 +572,11 @@ class AgendaScreenTest {
         val intents = RecordingAgendaActions()
         mount(planningDayScreenState(planningDay), intents)
 
-        composeRule.onNodeWithTag("agenda-range-tomorrow", useUnmergedTree = true).performScrollTo().performClick()
-        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-date-menu", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-range-tomorrow", useUnmergedTree = true).performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("agenda-date-menu", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).performClick()
 
         assertEquals(listOf(LocalDate.of(2026, 3, 6)), intents.selectedDates)
         assertEquals(listOf("allDates"), intents.dataIntents)
@@ -671,7 +725,10 @@ class AgendaScreenTest {
         composeRule.onNodeWithTag("edit-time-r1", useUnmergedTree = true).performScrollTo().performClick()
         composeRule.onNodeWithTag("edit-time-minutes-r1", useUnmergedTree = true).performScrollTo()
             .performTextReplacement("90")
-        composeRule.onNodeWithTag("save-time-r1", useUnmergedTree = true).performClick()
+        // 展开后的编辑行贴着页面底部，可能落在悬浮主操作下面；这条用例钉的是保存发出的 intent，
+        // 因此直接触发按钮的语义点击，不和悬浮层抢触摸。
+        composeRule.onNodeWithTag("save-time-r1", useUnmergedTree = true)
+            .performSemanticsAction(SemanticsActions.OnClick)
         assertEquals(listOf("r1" to 90), intents.editedRecords.map { it.entryId to it.minutes })
 
         composeRule.onNodeWithTag("delete-time-r1", useUnmergedTree = true).performScrollTo().performClick()
@@ -796,11 +853,83 @@ class AgendaScreenTest {
         composeRule.onNodeWithTag("schedule-completion-check-e1", useUnmergedTree = true).performScrollTo().performClick()
         assertEquals(listOf("e1"), intents.confirmedCompletions)
 
-        // 更多菜单里真正发出完成意图的是「完成并记录」那一项：「编辑」只是打开编辑对话框，
+        // 更多菜单里真正发出完成意图的是「完成并记录」那一项：「修改日程」只是打开编辑对话框，
         // 本身不发 intent，因此不能拿它来断言「菜单发出了自己的意图」。
         composeRule.onNodeWithTag("schedule-more-e1", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.waitForIdle()
         composeRule.onNodeWithTag("schedule-more-completion-e1", useUnmergedTree = true).performClick()
         assertEquals(listOf("e1", "e1"), intents.confirmedCompletions)
+    }
+
+    @Test
+    fun tapping_the_row_card_opens_the_same_row_menu_as_the_more_button() {
+        mount(
+            planningDayScreenState(
+                planningDay,
+                timelineRows = listOf(row(reportEntry, "2026-03-05 · 60 分钟 · 工作 · 无提醒", true, targetLabel = "工作")),
+            ),
+        )
+
+        // 行卡是 pointerInput 入口，没有语义 OnClick，因此必须用真实坐标点击。
+        composeRule.onNodeWithTag("agenda-schedule-row-e1", useUnmergedTree = true)
+            .performScrollTo()
+            .performTouchInput { click(percentOffset(0.1f, 0.5f)) }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("schedule-more-edit-e1", useUnmergedTree = true)
+            .assertIsDisplayed()
+            .assert(hasAnyDescendant(hasText("修改日程")))
+        composeRule.onNodeWithTag("schedule-more-start-timer-e1", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("schedule-more-completion-e1", useUnmergedTree = true).assertIsDisplayed()
+
+        composeRule.onNodeWithTag("schedule-more-edit-e1", useUnmergedTree = true).performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("schedule-edit-save-e1", useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun tapping_the_row_completion_check_does_not_open_the_row_menu() {
+        // 整卡点击不能吞掉完成勾选框：点勾选框只发完成 intent，不展开行菜单。
+        val intents = RecordingAgendaActions()
+        mount(
+            planningDayScreenState(
+                planningDay,
+                timelineRows = listOf(row(reportEntry, "2026-03-05 · 60 分钟 · 工作 · 无提醒", true, targetLabel = "工作")),
+            ),
+            intents,
+        )
+
+        composeRule.onNodeWithTag("schedule-completion-check-e1", useUnmergedTree = true)
+            .performScrollTo()
+            .performTouchInput { click() }
+        composeRule.waitForIdle()
+
+        assertEquals(listOf("e1"), intents.confirmedCompletions)
+        composeRule.onNodeWithTag("schedule-more-edit-e1", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun a_completed_row_menu_offers_undo_completion() {
+        mount(
+            planningDayScreenState(
+                planningDay,
+                timelineRows = listOf(
+                    row(
+                        reportEntry,
+                        "2026-03-05 · 60 分钟 · 无提醒",
+                        true,
+                        investmentLabel = "计划投入 60 分钟 · 实际投入 60 分钟 · 已完成",
+                        completed = true,
+                    ),
+                ),
+            ),
+        )
+
+        openRowMenu("e1")
+
+        composeRule.onNodeWithTag("schedule-more-completion-e1", useUnmergedTree = true)
+            .assertIsDisplayed()
+            .assert(hasAnyDescendant(hasText("取消完成")))
     }
 
     @Test
@@ -848,8 +977,8 @@ class AgendaScreenTest {
 
     @Test
     fun the_first_screen_shows_its_sections_in_the_fixed_workbench_order() {
-        // 首屏自上而下固定为：规划日与每日容量摘要、时间轴、进行中的计时状态、添加日程入口、事后补记，
-        // 重复日程作为折叠的次级入口排在最后。
+        // 首屏自上而下固定为：规划日与每日容量摘要、时间轴、进行中的计时状态、自由计时、事后补记，
+        // 重复日程作为折叠的次级入口排在最后；添加与补记的主入口常驻在右下角，不占区块顺序。
         // 这条用例只管**整页区块顺序**；「正在计时的条目固定在时间轴顶部」是时间轴内部的事，
         // 由 [the_running_schedule_is_pinned_to_the_top_of_the_timeline] 单独断言。
         // 计时区块只有真的有计时时才占位，所以这条用例必须注入一个运行中的计时。
@@ -901,18 +1030,20 @@ class AgendaScreenTest {
         // 只由容量摘要卡指向统计页底部的「设置与数据」。
         mount(planningDayScreenState(planningDay))
 
-        node("筛选：规划日 2026-03-05").assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-filter", useUnmergedTree = true)
+            .assert(hasText("筛选：规划日 2026-03-05"))
         composeRule.onNodeWithTag("agenda-summary-capacity", useUnmergedTree = true)
-            .assert(hasAnyDescendant(hasText("每日容量")))
-            .assert(hasAnyDescendant(hasText("120 分钟")))
+            .assert(hasText("每日容量 2 小时", substring = true))
+            .assert(hasText("剩余 90 分钟", substring = true))
+            .assert(hasText("状态 未开始", substring = true))
         composeRule.onNodeWithTag("agenda-summary-planned", useUnmergedTree = true)
             .assert(hasAnyDescendant(hasText("已排时间")))
-            .assert(hasAnyDescendant(hasText("30 分钟")))
+            .assert(hasAnyDescendant(hasText("30分")))
         composeRule.onNodeWithTag("agenda-summary-actual", useUnmergedTree = true)
             .assert(hasAnyDescendant(hasText("实际投入")))
-            .assert(hasAnyDescendant(hasText("0 分钟")))
+            .assert(hasAnyDescendant(hasText("0分")))
         composeRule.onNodeWithTag("agenda-summary-capacity-status", useUnmergedTree = true)
-            .assert(hasText("剩余 90 分钟"))
+            .assert(hasAnyDescendant(hasText("未开始")))
         composeRule.onNodeWithTag("agenda-capacity-progress", useUnmergedTree = true).assertExists()
 
         // 详细边界与周起始设置不占紧凑摘要主内容，仍由现有设置入口负责。
@@ -947,15 +1078,16 @@ class AgendaScreenTest {
         )
 
         composeRule.onNodeWithTag("agenda-summary-capacity", useUnmergedTree = true)
-            .assert(hasAnyDescendant(hasText("每日容量")))
-            .assert(hasAnyDescendant(hasText("未设置")))
+            .assert(hasText("未设置", substring = true))
+            .assert(hasText("状态 未开始", substring = true))
         composeRule.onNodeWithTag("agenda-summary-planned", useUnmergedTree = true)
-            .assert(hasAnyDescendant(hasText("45 分钟")))
+            .assert(hasAnyDescendant(hasText("45分")))
         composeRule.onNodeWithTag("agenda-summary-actual", useUnmergedTree = true)
-            .assert(hasAnyDescendant(hasText("0 分钟")))
+            .assert(hasAnyDescendant(hasText("0分")))
         composeRule.onNodeWithTag("agenda-summary-capacity-status", useUnmergedTree = true)
-            .assert(hasText("每日容量未设置"))
-        composeRule.onNodeWithTag("agenda-capacity-progress", useUnmergedTree = true).assertDoesNotExist()
+            .assert(hasAnyDescendant(hasText("未开始")))
+        // 容量未设置时仍保留一条空轨道，但状态是「未开始」，不会画出一段假进度。
+        composeRule.onNodeWithTag("agenda-capacity-progress", useUnmergedTree = true).assertExists()
     }
 
     @Test
@@ -979,13 +1111,15 @@ class AgendaScreenTest {
         )
 
         composeRule.onNodeWithTag("agenda-summary-capacity", useUnmergedTree = true)
-            .assert(hasAnyDescendant(hasText("120 分钟")))
+            .assert(hasText("每日容量 2 小时", substring = true))
+            .assert(hasText("超载 30 分钟", substring = true))
+            .assert(hasText("状态 超载", substring = true))
         composeRule.onNodeWithTag("agenda-summary-planned", useUnmergedTree = true)
-            .assert(hasAnyDescendant(hasText("150 分钟")))
+            .assert(hasAnyDescendant(hasText("2小时30分")))
         composeRule.onNodeWithTag("agenda-summary-actual", useUnmergedTree = true)
-            .assert(hasAnyDescendant(hasText("30 分钟")))
+            .assert(hasAnyDescendant(hasText("30分")))
         composeRule.onNodeWithTag("agenda-summary-capacity-status", useUnmergedTree = true)
-            .assert(hasText("超载 30 分钟"))
+            .assert(hasAnyDescendant(hasText("超载")))
         composeRule.onNodeWithTag("agenda-capacity-progress", useUnmergedTree = true).assertExists()
     }
 
@@ -1007,9 +1141,11 @@ class AgendaScreenTest {
             ),
         )
 
-        node("写周报").assertIsDisplayed()
-        node("关联计划：工作").assertIsDisplayed()
-        node("计划投入 60 分钟 · 实际投入 0 分钟 · 未完成").assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-schedule-row-e1", useUnmergedTree = true)
+            .performScrollTo()
+            .assert(hasAnyDescendant(hasText("写周报")))
+            .assert(hasAnyDescendant(hasText("2026-03-05 · 60 分钟 · 工作 · 无提醒")))
+            .assert(hasAnyDescendant(hasText("计划投入 60 分钟 · 实际投入 0 分钟 · 未完成")))
     }
 
     @Test
@@ -1068,13 +1204,14 @@ class AgendaScreenTest {
         )
 
         node("已超出容量").assertIsDisplayed()
-        composeRule.onNodeWithTag("schedule-edit-e4", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithTag("schedule-start-timer-e4", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+        openRowMenu("e4")
+        composeRule.onNodeWithTag("schedule-more-edit-e4", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("schedule-more-start-timer-e4", useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test
     fun entries_without_a_time_range_stay_visible_in_the_unscheduled_group() {
-        // 没有具体时间的日程进入独立的「未安排时间」区域，仍然看得见
+        // 没有具体时间的日程进入独立的「未安排」区域，仍然看得见
         mount(
             planningDayScreenState(
                 selected = planningDay,
@@ -1085,27 +1222,48 @@ class AgendaScreenTest {
             ),
         )
 
-        node("未安排时间").assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-side-unscheduled", useUnmergedTree = true)
+            .performScrollTo()
+            .assert(hasAnyDescendant(hasText("未安排")))
         node("想到再做的").assertIsDisplayed()
     }
 
     @Test
     fun an_empty_planning_day_invites_the_first_schedule_and_opens_the_add_sheet() {
-        // 当天没有日程时显示「安排今天第一件事」，点一下直接把添加面板打开
+        // 当天没有日程时显示「安排今天第一件事」，常驻主操作仍可直接打开添加面板
         mount(emptyPlanningDayScreenState())
 
         node("安排今天第一件事").assertIsDisplayed()
-        composeRule.onNodeWithTag("agenda-first-schedule", useUnmergedTree = true).performScrollTo().performClick()
-        // 底部面板是一层，等它展开停下来再断言
-        composeRule.waitForIdle()
+        openAddScheduleSheet()
 
         composeRule.onNodeWithTag("agenda-add-sheet", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true).assertIsDisplayed()
     }
 
-    /** 通过工作台的操作栈打开添加日程底部面板。 */
+    /** 打开常驻在右下角的「调整计划」菜单。 */
+    private fun openAdjustPlanMenu() {
+        composeRule.onNodeWithTag("agenda-plan-action", useUnmergedTree = true).performClick()
+        composeRule.waitForIdle()
+    }
+
+    /** 通过「调整计划」菜单打开添加日程底部面板。 */
     private fun openAddScheduleSheet() {
-        composeRule.onNodeWithTag("agenda-operation-add-schedule", useUnmergedTree = true).performScrollTo().performClick()
+        openAdjustPlanMenu()
+        composeRule.onNodeWithTag("agenda-plan-menu-add", useUnmergedTree = true).performClick()
+        composeRule.waitForIdle()
+    }
+
+    /** 通过「调整计划」菜单打开事后补记。 */
+    private fun openBackfillSheet() {
+        openAdjustPlanMenu()
+        composeRule.onNodeWithTag("agenda-plan-menu-backfill", useUnmergedTree = true).performClick()
+        composeRule.waitForIdle()
+    }
+
+    /** 从时间轴行尾的「更多」打开该行的操作菜单。 */
+    private fun openRowMenu(entryId: String) {
+        composeRule.onNodeWithTag("schedule-more-$entryId", useUnmergedTree = true)
+            .performScrollTo().performClick()
         composeRule.waitForIdle()
     }
 

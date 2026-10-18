@@ -119,7 +119,7 @@ class WorkspaceLaunchPriorityIntegrationTest {
 
         awaitSelected("nav-agenda")
         // 指定规划日：第三个规划日被打开，当天的条目可见
-        awaitText("规划日 $FAR_DATE")
+        awaitText("筛选：规划日 $FAR_DATE")
         awaitText(FAR_ENTRY_TITLE)
         // 指定规划日之外的那一天不出现，条目确实被定位到了
         composeRule.onNodeWithText(TODAY_ENTRY_TITLE).assertDoesNotExist()

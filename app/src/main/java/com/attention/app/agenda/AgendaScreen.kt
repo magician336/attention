@@ -3,6 +3,7 @@ package com.attention.app.agenda
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,13 +25,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.EventNote
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PauseCircle
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -52,7 +58,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
@@ -69,6 +77,7 @@ import com.attention.app.ui.components.AttentionLoadingState
 import com.attention.app.ui.components.AttentionOutlinedButton
 import com.attention.app.ui.components.AttentionSelectedIndicator
 import com.attention.app.ui.components.AttentionTextButton
+import com.attention.app.ui.components.AttentionTouchTargetMinSize
 import com.attention.app.ui.format.DurationFormat
 import com.attention.app.ui.format.TimeEntrySourceFormat
 import com.attention.app.ui.theme.attentionTokens
@@ -92,14 +101,6 @@ import com.attention.workspace.state.agendaWeekdayLabel
 import java.time.LocalDate
 
 /**
- * 选中明天时「添加日程」入口旁的说明文案。
- *
- * 它回答的是「为什么突出」而不是「做什么」：做与为哪一天由按钮标题（投影里的
- * `addScheduleHeadingLabel`）说出，因此这一行不重复那一句。
- */
-private const val AGENDA_ADD_HIGHLIGHT_HINT = "切换规划日只换这一天：今天已有的日程不会带过来"
-
-/**
  * 日程页。它只接收自己的 [AgendaScreenState] 与 [AgendaActions]：
  * 不读完整领域状态，不读 ViewModel，也不读 Android API 与系统时间——
  * 规划日、日程条目、每日容量与提醒时间都由组合根注入的投影算好。
@@ -110,8 +111,9 @@ private const val AGENDA_ADD_HIGHLIGHT_HINT = "切换规划日只换这一天：
  * ## 首屏顺序
  *
  * 页面按投影给出的 [AgendaScreenState.workbenchSections] 自上而下渲染：
- * 规划日与每日容量摘要、时间轴、进行中的计时状态、添加日程入口、事后补记，
- * 重复日程作为折叠的次级入口排在最后。页面因此没有自己的顺序副本，
+ * 规划日与每日容量摘要、时间轴、进行中的计时状态、自由计时、事后补记，
+ * 重复日程作为折叠的次级入口排在最后；添加与补记的主入口常驻在页面右下角。
+ * 页面因此没有自己的顺序副本，
  * 「首屏固定为这个顺序」是一条由投影与测试共同钉住的约定。
  *
  * 提醒权限不在这里申请：页面只发出 [AgendaActions.requestReminderPermission] intent，
@@ -122,7 +124,6 @@ internal fun AgendaScreen(
     state: AgendaScreenState,
     actions: AgendaActions,
     openScheduleId: String? = null,
-    onboardingVisible: Boolean = false,
 ) {
     val tokens = attentionTokens()
     val today = state.planningDate.toString()
@@ -164,146 +165,160 @@ internal fun AgendaScreen(
         addMoreExpanded = false
         addBackfillExpanded = false
     }
-    Column(
-        Modifier.fillMaxSize().verticalScroll(scrollState).padding(tokens.spacing.large),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        // 读取本地数据的两件事都是组合根注入的事实，页面只按它们渲染（ADR-0005 第 1 节）：
-        // 还没读到给轻量时间轴骨架，读失败给带「重试」的错误状态。两者都不重排区块——
-        // 骨架复用同一批区块容器标识，因此首屏结构与顺序在三种状态下始终一致。
-        val loadError = state.loadError
-        if (loadError != null) {
-            AgendaLoadFailure(loadError = loadError, onRetry = actions::retryLoad)
-        } else if (state.loading) {
-            AgendaLoadingSkeleton()
-        } else {
-        BoxWithConstraints(Modifier.fillMaxWidth()) {
-            val wideLayout = maxWidth >= 600.dp
-            Column(
-                Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                state.workbenchSections.forEach { section ->
-                    when (section) {
-                AgendaWorkbenchSection.PLANNING_DAY_SUMMARY -> AgendaSummarySection(
-                    state = state,
-                    onboardingVisible = onboardingVisible,
-                    date = date,
-                    dateError = dateError,
-                    onDateChange = { value -> date = value; dateError = false },
-                    onOpenPlanningDay = ::openPlanningDay,
-                    onSelectDate = ::selectDate,
-                    dateMenuExpanded = dateMenuExpanded,
-                    onDateMenuChange = { dateMenuExpanded = it },
-                    actions = actions,
-                )
 
-                AgendaWorkbenchSection.TIMELINE -> if (wideLayout) {
-                    // 宽屏把时间轴与辅助操作栈并排；左列仍保留时间轴与运行计时的先序，
-                    // 这样读屏与窄屏都沿着「今天发生什么 → 下一步做什么」的顺序走。
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(tokens.spacing.medium),
-                        verticalAlignment = Alignment.Top,
-                    ) {
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            AgendaTimelineSection(
+    // 主操作与两张面板共用同一套打开方式，避免 flag 组合在多处漂移。
+    fun openAddSchedule() {
+        addMoreExpanded = false
+        addBackfillExpanded = false
+        addSheetOpen = true
+    }
+
+    fun openBackfill() {
+        addMoreExpanded = false
+        addBackfillExpanded = true
+        addSheetOpen = true
+    }
+
+    fun openFreeTimer() {
+        addSheetOpen = false
+        freeTimerSheetOpen = true
+    }
+
+    val loadError = state.loadError
+    Box(Modifier.fillMaxSize()) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState)
+                .padding(horizontal = 16.dp, vertical = tokens.spacing.medium),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            // 读取本地数据的两件事都是组合根注入的事实，页面只按它们渲染（ADR-0005 第 1 节）：
+            // 还没读到给轻量时间轴骨架，读失败给带「重试」的错误状态。两者都不重排区块——
+            // 骨架复用同一批区块容器标识，因此首屏结构与顺序在三种状态下始终一致。
+            if (loadError != null) {
+                AgendaLoadFailure(loadError = loadError, onRetry = actions::retryLoad)
+            } else if (state.loading) {
+                AgendaLoadingSkeleton()
+            } else {
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val wideLayout = maxWidth >= 600.dp
+                Column(
+                    Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    state.workbenchSections.forEach { section ->
+                        when (section) {
+                    AgendaWorkbenchSection.PLANNING_DAY_SUMMARY -> AgendaSummarySection(
+                        state = state,
+                        date = date,
+                        dateError = dateError,
+                        onDateChange = { value -> date = value; dateError = false },
+                        onOpenPlanningDay = ::openPlanningDay,
+                        onSelectDate = ::selectDate,
+                        dateMenuExpanded = dateMenuExpanded,
+                        onDateMenuChange = { dateMenuExpanded = it },
+                        actions = actions,
+                    )
+
+                    AgendaWorkbenchSection.TIMELINE -> if (wideLayout) {
+                        // 宽屏把时间轴与辅助操作栈并排；左列仍保留时间轴与运行计时的先序，
+                        // 这样读屏与窄屏都沿着「今天发生什么 → 下一步做什么」的顺序走。
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(tokens.spacing.medium),
+                            verticalAlignment = Alignment.Top,
+                        ) {
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                AgendaTimelineSection(
+                                    state = state,
+                                    actions = actions,
+                                    onEditRow = { editingRow = it },
+                                    includeUnscheduled = false,
+                                )
+                                if (state.activeTimer != null) {
+                                    // Compatibility seam: the running card now lives inside the
+                                    // first timeline row, so this marker has no second visual card.
+                                    Box(Modifier.height(0.dp).testTag("agenda-section-timer"))
+                                }
+                            }
+                            AgendaAuxiliaryStack(
                                 state = state,
                                 actions = actions,
                                 onEditRow = { editingRow = it },
-                                includeUnscheduled = false,
-                                // 空态直接给出添加日程入口：表单住在底部面板里，这里是把它打开。
-                                onAddFirstSchedule = { addMoreExpanded = false; addBackfillExpanded = false; addSheetOpen = true },
+                                onOpenFreeTimer = ::openFreeTimer,
                             )
-                            if (AgendaWorkbenchSection.RUNNING_TIMER in state.workbenchSections) {
-                                state.activeTimer?.let { timer ->
-                                    Column(Modifier.fillMaxWidth().testTag("agenda-section-timer")) {
-                                        AgendaRunningTimerSection(timer = timer, targets = state.targets, actions = actions)
-                                    }
-                                }
-                            }
                         }
+                    } else {
+                        AgendaTimelineSection(
+                            state = state,
+                            actions = actions,
+                            onEditRow = { editingRow = it },
+                            includeUnscheduled = false,
+                        )
+                    }
+
+                    AgendaWorkbenchSection.RUNNING_TIMER -> if (!wideLayout) state.activeTimer?.let { _ ->
+                        // The running controls are rendered in the first timeline row. Keep the
+                        // section seam for ordering and integrations without duplicating the card.
+                        Box(Modifier.height(0.dp).testTag("agenda-section-timer"))
+                    }
+
+                    AgendaWorkbenchSection.ADD_SCHEDULE -> if (!wideLayout) {
+                        // 窄屏也复用原型 A 的辅助栈：下一步、自由计时与未安排时间保持同一组结构；
+                        // 添加与补记的入口统一常驻在右下角的「调整计划」。
                         AgendaAuxiliaryStack(
                             state = state,
                             actions = actions,
                             onEditRow = { editingRow = it },
-                            onOpenAddSchedule = {
-                                addMoreExpanded = false
-                                addBackfillExpanded = false
-                                addSheetOpen = true
-                            },
-                            onOpenFreeTimer = {
-                                addSheetOpen = false
-                                freeTimerSheetOpen = true
-                            },
-                            onOpenBackfill = {
-                                addMoreExpanded = false
-                                addBackfillExpanded = true
-                                addSheetOpen = true
-                            },
+                            onOpenFreeTimer = ::openFreeTimer,
+                            compact = true,
                         )
                     }
-                } else {
-                    AgendaTimelineSection(
-                        state = state,
-                        actions = actions,
-                        onEditRow = { editingRow = it },
-                        // 空态直接给出添加日程入口：表单住在底部面板里，这里是把它打开。
-                        onAddFirstSchedule = { addMoreExpanded = false; addBackfillExpanded = false; addSheetOpen = true },
-                    )
-                }
 
-                AgendaWorkbenchSection.RUNNING_TIMER -> if (!wideLayout) state.activeTimer?.let { timer ->
-                    Column(Modifier.fillMaxWidth().testTag("agenda-section-timer")) {
-                        AgendaRunningTimerSection(timer = timer, targets = state.targets, actions = actions)
+                    AgendaWorkbenchSection.BACKFILL -> if (state.timeRecords.isNotEmpty()) {
+                        AgendaBackfillSection(
+                            state = state,
+                            editingRecord = editingRecord,
+                            onEditRecord = { editingRecord = it },
+                            onStopEditingRecord = { editingRecord = null },
+                            onDeleteRecord = { pendingDeleteRecordId = it },
+                            actions = actions,
+                        )
+                    } else {
+                        // 原型 A 的空态只保留时间轴说明和统一操作卡；保留零高度 seam，
+                        // 让既有集成仍能定位这个能力，但不再渲染一个空的「事后补记」标题。
+                        Box(Modifier.height(0.dp).testTag("agenda-section-backfill"))
                     }
-                }
 
-                AgendaWorkbenchSection.ADD_SCHEDULE -> if (!wideLayout) {
-                    AgendaOperationStack(
+                    AgendaWorkbenchSection.RECURRENCE -> AgendaRecurrenceSection(
                         state = state,
-                        onOpenAddSchedule = {
-                            addMoreExpanded = false
-                            addBackfillExpanded = false
-                            addSheetOpen = true
-                        },
-                        onOpenFreeTimer = {
-                            addSheetOpen = false
-                            freeTimerSheetOpen = true
-                        },
-                        onOpenBackfill = {
-                            addMoreExpanded = false
-                            addBackfillExpanded = true
-                            addSheetOpen = true
-                        },
+                        form = recurrenceForm,
+                        expanded = disclosure.recurrenceVisible,
+                        onToggle = disclosure::toggleRecurrence,
+                        date = date,
+                        actions = actions,
                     )
-                }
-
-                AgendaWorkbenchSection.BACKFILL -> AgendaBackfillSection(
-                    state = state,
-                    editingRecord = editingRecord,
-                    onEditRecord = { editingRecord = it },
-                    onStopEditingRecord = { editingRecord = null },
-                    onDeleteRecord = { pendingDeleteRecordId = it },
-                    actions = actions,
-                )
-
-                AgendaWorkbenchSection.RECURRENCE -> AgendaRecurrenceSection(
-                    state = state,
-                    form = recurrenceForm,
-                    expanded = disclosure.recurrenceVisible,
-                    onToggle = disclosure::toggleRecurrence,
-                    date = date,
-                    actions = actions,
-                )
+                        }
                     }
                 }
             }
+            }
+            // 停止计时的结果面板：只在刚刚停止之后出现，四个要素与两个决定都来自投影。
+            state.stopResult?.let { result ->
+                AgendaStopResultSection(result = result, actions = actions)
+            }
+            // 悬浮主操作常驻在内容之上；给滚动内容留出它的高度，最后一项不会被遮住。
+            Spacer(Modifier.height(AttentionTouchTargetMinSize + 32.dp))
         }
-        }
-        // 停止计时的结果面板：只在刚刚停止之后出现，四个要素与两个决定都来自投影。
-        state.stopResult?.let { result ->
-            AgendaStopResultSection(result = result, actions = actions)
+        if (loadError == null && !state.loading) {
+            AgendaPlanAction(
+                onAddSchedule = ::openAddSchedule,
+                onBackfill = ::openBackfill,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(16.dp),
+            )
         }
     }
     state.timeRecords.firstOrNull { it.entryId == pendingDeleteRecordId }?.let { pendingDelete ->
@@ -363,6 +378,85 @@ internal fun AgendaScreen(
         },
         onDismiss = { freeTimerSheetOpen = false },
     )
+}
+
+/**
+ * 常驻的「调整计划」主操作。
+ *
+ * 它固定在页面内容区的右下角，不随滚动移走；菜单只承担添加与补记两项。
+ * 行内修改走时间轴行自己的菜单，因此这里不再放「修改日程」。
+ */
+@Composable
+private fun AgendaPlanAction(
+    onAddSchedule: () -> Unit,
+    onBackfill: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val tokens = attentionTokens()
+    var expanded by remember { mutableStateOf(false) }
+    val fabShape = ButtonDefaults.shape
+    Box(modifier) {
+        AttentionButton(
+            onClick = { expanded = true },
+            modifier = Modifier
+                .testTag("agenda-plan-action")
+                .shadow(6.dp, fabShape),
+            shape = fabShape,
+        ) {
+            Text("调整计划")
+            Icon(
+                Icons.Filled.ArrowDropDown,
+                contentDescription = null,
+                modifier = Modifier.padding(start = tokens.spacing.small).size(18.dp),
+            )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier
+                .widthIn(min = 220.dp, max = 280.dp)
+                .testTag("agenda-plan-menu"),
+        ) {
+            DropdownMenuItem(
+                text = {
+                    Column {
+                        Text("添加日程")
+                        Text(
+                            "新建一条计划",
+                            style = tokens.typography.caption,
+                            color = tokens.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                },
+                onClick = {
+                    expanded = false
+                    onAddSchedule()
+                },
+                modifier = Modifier.testTag("agenda-plan-menu-add"),
+            )
+            DropdownMenuItem(
+                text = {
+                    Column {
+                        Text("事后补记")
+                        Text(
+                            "把已经发生的投入记下来",
+                            style = tokens.typography.caption,
+                            color = tokens.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                },
+                onClick = {
+                    expanded = false
+                    onBackfill()
+                },
+                modifier = Modifier.testTag("agenda-plan-menu-backfill"),
+            )
+        }
+    }
 }
 
 /**
@@ -433,7 +527,6 @@ private fun AgendaLoadFailure(loadError: String, onRetry: () -> Unit) {
 @Composable
 private fun AgendaSummarySection(
     state: AgendaScreenState,
-    onboardingVisible: Boolean,
     date: String,
     dateError: Boolean,
     onDateChange: (String) -> Unit,
@@ -445,163 +538,241 @@ private fun AgendaSummarySection(
 ) {
     val tokens = attentionTokens()
     val summary = state.workbenchSummary
-    Column(Modifier.fillMaxWidth().testTag("agenda-section-summary"), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        // 日期范围切换：今天、明天与所有日期是同一页上的三个范围，不是三个顶级入口。
-        // 选中态用填充色之外的图标与语义表达，不依赖颜色单独传达。
-        if (state.ranges.isNotEmpty()) {
-            FlowRow(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+    val itemCount = state.timelineRows.size + state.unscheduledRows.size +
+        state.dateSections.sumOf { it.timelineRows.size + it.unscheduledRows.size }
+    val compactDateLabel = when {
+        state.selectedDate == null -> "所有日期"
+        state.selectedDate == state.planningDate -> "今天"
+        state.selectedDate == state.planningDate.plusDays(1) -> "明天"
+        else -> state.selectedDate.toString()
+    }
+    val compactCapacityStatus = summary.capacityStatusLabel
+        ?.replace("每日容量未设置", "未设置")
+        ?.replace("暂无多日数据", "暂无数据")
+    val plannedMinutes = summary.plannedMinutes ?: 0
+    val actualMinutes = summary.actualMinutes ?: 0
+    val statusLabel = when {
+        summary.capacityStatusLabel?.contains("超载") == true ||
+            summary.capacityStatusLabel?.contains("超出") == true -> "超载"
+        actualMinutes > 0 -> "进行中"
+        plannedMinutes > 0 -> "未开始"
+        else -> "空闲"
+    }
+    val statusColor = when (statusLabel) {
+        "进行中" -> tokens.colorScheme.primary
+        "超载" -> tokens.colorScheme.error
+        else -> tokens.colorScheme.outline
+    }
+    fun compactDuration(minutes: Int): String = DurationFormat.ofMinutes(minutes)
+        .replace(" ", "")
+        .replace("分钟", "分")
+
+    val progress = if (statusLabel == "未开始" || statusLabel == "空闲") {
+        0f
+    } else {
+        summary.capacityProgress?.coerceIn(0f, 1f) ?: 0f
+    }
+    Column(Modifier.fillMaxWidth().testTag("agenda-section-summary"), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        // 日期切换收进一个入口，首屏只保留当前范围；这样窄屏不会出现横向滚动的按钮串。
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier
+                    .weight(1f)
+                    .testTag("agenda-filter")
+                    .semantics { text = AnnotatedString(state.filterLabel) },
             ) {
-                state.ranges.forEach { range ->
-                    val selected = range.selected
-                    val tag = when (range.scope) {
-                        AgendaRangeScope.TODAY -> "agenda-range-today"
-                        AgendaRangeScope.TOMORROW -> "agenda-range-tomorrow"
-                        AgendaRangeScope.ALL_DATES -> "agenda-range-all-dates"
-                    }
-                    if (selected) {
-                        AttentionSelectedIndicator(
-                            selected = true,
-                            label = range.label,
-                            modifier = Modifier.testTag(tag),
-                        )
-                    } else {
-                        AttentionTextButton(
+                AttentionTextButton(
+                    onClick = { onDateMenuChange(true) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                    .testTag("agenda-date-menu"),
+                ) {
+                    Text(
+                        compactDateLabel,
+                        style = tokens.typography.caption,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.semantics { text = AnnotatedString(state.filterLabel) },
+                    )
+                }
+                DropdownMenu(expanded = dateMenuExpanded, onDismissRequest = { onDateMenuChange(false) }) {
+                    Text("查看日期", style = tokens.typography.caption, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                    state.ranges.forEach { range ->
+                        val tag = when (range.scope) {
+                            AgendaRangeScope.TODAY -> "agenda-range-today"
+                            AgendaRangeScope.TOMORROW -> "agenda-range-tomorrow"
+                            AgendaRangeScope.ALL_DATES -> "agenda-range-all-dates"
+                        }
+                        DropdownMenuItem(
+                            text = { Text(range.label) },
                             onClick = {
                                 if (range.scope == AgendaRangeScope.ALL_DATES) actions.selectAllDates()
                                 else range.date?.let(actions::selectPlanningDate)
+                                onDateMenuChange(false)
                             },
                             modifier = Modifier.testTag(tag),
-                        ) { Text(range.label) }
+                        )
+                    }
+                    state.availableDates
+                        .filterNot { option -> state.ranges.any { it.date == option.date } }
+                        .forEach { availableDate ->
+                            DropdownMenuItem(
+                                text = { Text(availableDate.label) },
+                                onClick = { onSelectDate(availableDate.date); onDateMenuChange(false) },
+                                modifier = Modifier.testTag("agenda-date-${availableDate.date}"),
+                            )
+                        }
+                    Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        OutlinedTextField(
+                            date,
+                            onDateChange,
+                            label = { Text("规划日") },
+                            placeholder = { Text("YYYY-MM-DD") },
+                            modifier = Modifier.fillMaxWidth().height(56.dp),
+                            singleLine = true,
+                            isError = dateError,
+                        )
+                        AttentionTextButton(
+                            onClick = { onOpenPlanningDay(); onDateMenuChange(false) },
+                            modifier = Modifier
+                                .align(Alignment.End)
+                                .testTag("agenda-open-planning-day"),
+                        ) { Text("打开") }
                     }
                 }
             }
-        }
-        Box(
-            Modifier
-                .testTag("agenda-filter")
-                .semantics {
-                    text = AnnotatedString(state.headingLabel)
-                },
-        ) {
             AttentionTextButton(
-                onClick = { onDateMenuChange(true) },
-                modifier = Modifier.testTag("agenda-date-menu"),
-            ) {
-                Text(state.filterLabel, style = tokens.typography.caption)
-            }
-            DropdownMenu(expanded = dateMenuExpanded, onDismissRequest = { onDateMenuChange(false) }) {
-                DropdownMenuItem(
-                    text = { Text("所有日期") },
-                    onClick = { onSelectDate(null); onDateMenuChange(false) },
-                    modifier = Modifier.testTag("agenda-all-dates"),
-                )
-                state.availableDates.forEach { availableDate ->
-                    DropdownMenuItem(
-                        text = { Text(availableDate.label) },
-                        onClick = { onSelectDate(availableDate.date); onDateMenuChange(false) },
-                        modifier = Modifier.testTag("agenda-date-${availableDate.date}"),
-                    )
-                }
-            }
+                onClick = actions::openSettings,
+                modifier = Modifier.testTag("agenda-summary-settings"),
+            ) { Text("设置", style = tokens.typography.caption) }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                date,
-                onDateChange,
-                label = { Text("新增日程规划日 YYYY-MM-DD") },
-                modifier = Modifier.weight(1f),
-                singleLine = true,
-                isError = dateError,
-                supportingText = if (dateError) ({ Text("请输入有效的规划日") }) else null,
-            )
-            AttentionOutlinedButton(onClick = onOpenPlanningDay) { Text("打开规划日") }
-        }
-        Card(
+        // 摘要是一条轻量信息带：不再用大卡片和长说明堆叠，四个读数固定在同一行。
+        Column(
             Modifier
                 .fillMaxWidth()
-                // 容量摘要只读，但它是通往完整设置的入口：设置住在统计页底部的「设置与数据」，
-                // 工作台不复制一份设置表单，也不自己跳转，只发出这一条意图。
                 .clickable(onClick = actions::openSettings)
-                .testTag("agenda-open-settings"),
-            shape = RoundedCornerShape(tokens.radius.medium),
-        ) {
-            Column(
-                Modifier
-                    .padding(horizontal = tokens.spacing.medium, vertical = tokens.spacing.small)
-                    .testTag("agenda-capacity-summary")
-                    .semantics {
-                        text = AnnotatedString(
-                            listOfNotNull(summary.capacityUsageLabel, summary.capacityStatusLabel)
-                                .joinToString(" "),
-                        )
-                        contentDescription = listOfNotNull(
-                            summary.capacityMinutes?.let { "每日容量 $it 分钟" } ?: "每日容量未设置",
-                            summary.plannedMinutes?.let { "已排时间 $it 分钟" } ?: "已排时间 0 分钟",
-                            summary.actualMinutes?.let { "实际投入 $it 分钟" } ?: "实际投入 0 分钟",
-                            summary.capacityStatusLabel,
-                        ).joinToString("，")
-                    },
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                // 三项读数直接消费 workspace-state 的结构化事实：页面不从行列表重新求和。
-                val noAggregate = state.selectedDate == null && summary.capacityStatusLabel == "暂无多日数据"
-                Column(Modifier.testTag("agenda-workbench-summary")) {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(tokens.spacing.medium),
-                    ) {
-                        AgendaSummaryMetric(
-                            // During first setup the agenda remains visible underneath the
-                            // inline wizard. Use its shorter label there to avoid two
-                            // identical "每日容量" nodes in one accessibility query; the
-                            // settled workbench keeps the prototype's stable terminology.
-                            label = when {
-                                onboardingVisible -> "容量"
-                                state.selectedDate == null -> "容量合计"
-                                else -> "每日容量"
-                            },
-                            value = summary.capacityMinutes?.let { "$it 分钟" }
-                                ?: if (noAggregate) "暂无" else "未设置",
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("agenda-summary-capacity"),
-                        )
-                        AgendaSummaryMetric(
-                            label = "已排时间",
-                            value = summary.plannedMinutes?.let { "$it 分钟" } ?: "0 分钟",
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("agenda-summary-planned"),
-                        )
-                        AgendaSummaryMetric(
-                            label = "实际投入",
-                            value = summary.actualMinutes?.let { "$it 分钟" } ?: "0 分钟",
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("agenda-summary-actual"),
-                        )
-                    }
-                    Text(
-                        summary.capacityStatusLabel
-                            ?: if (state.selectedDate == null) "暂无多日数据" else "每日容量未设置",
-                        modifier = Modifier.testTag("agenda-summary-capacity-status"),
-                        style = tokens.typography.caption,
+                .testTag("agenda-open-settings")
+                .semantics {
+                    text = AnnotatedString(
+                        listOfNotNull(summary.capacityUsageLabel, summary.capacityStatusLabel, statusLabel)
+                            .joinToString(" "),
                     )
-                    summary.capacityProgress?.let { progress ->
-                        LinearProgressIndicator(
-                            progress = { progress },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("agenda-capacity-progress"),
+                    contentDescription = listOfNotNull(
+                        summary.capacityMinutes?.let { "每日容量 $it 分钟" } ?: "每日容量未设置",
+                        summary.plannedMinutes?.let { "已排时间 $it 分钟" } ?: "已排时间 0 分钟",
+                        summary.actualMinutes?.let { "实际投入 $it 分钟" } ?: "实际投入 0 分钟",
+                        summary.capacityStatusLabel,
+                        "状态 $statusLabel",
+                    ).joinToString("，")
+                },
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Box(Modifier.fillMaxWidth().height(1.dp).background(tokens.colorScheme.outlineVariant))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 6.dp)
+                    .testTag("agenda-capacity-summary"),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(
+                    Modifier.weight(1.05f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(compactDateLabel, style = tokens.typography.caption, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("$itemCount 项", style = tokens.typography.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Box(Modifier.width(1.dp).height(38.dp).background(tokens.colorScheme.outlineVariant))
+                AgendaSummaryMetric(
+                    label = "已排",
+                    value = summary.plannedMinutes?.let(::compactDuration) ?: "0分",
+                    semanticLabel = "已排时间",
+                    modifier = Modifier.weight(1f).testTag("agenda-summary-planned"),
+                )
+                Box(Modifier.width(1.dp).height(38.dp).background(tokens.colorScheme.outlineVariant))
+                AgendaSummaryMetric(
+                    label = "实际",
+                    value = summary.actualMinutes?.let(::compactDuration) ?: "0分",
+                    semanticLabel = "实际投入",
+                    modifier = Modifier.weight(1f).testTag("agenda-summary-actual"),
+                )
+                Box(Modifier.width(1.dp).height(38.dp).background(tokens.colorScheme.outlineVariant))
+                Column(
+                    Modifier
+                        .weight(1.25f)
+                        .testTag("agenda-summary-capacity")
+                        .semantics {
+                            text = AnnotatedString(
+                                listOfNotNull(
+                                    summary.capacityMinutes?.let { "每日容量 ${DurationFormat.ofMinutes(it)}" },
+                                    compactCapacityStatus,
+                                    "状态 $statusLabel",
+                                ).joinToString(" "),
+                            )
+                        },
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        modifier = Modifier.testTag("agenda-summary-capacity-status"),
+                    ) {
+                        Box(
+                            Modifier
+                                .size(7.dp)
+                                .background(statusColor, CircleShape)
+                                .testTag("agenda-summary-status-dot"),
                         )
+                        Text(statusLabel, style = tokens.typography.caption, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .background(tokens.colorScheme.outlineVariant, RoundedCornerShape(2.dp))
+                            .testTag("agenda-capacity-progress"),
+                    ) {
+                        if (progress > 0f) {
+                            Box(
+                                Modifier
+                                    .fillMaxWidth(progress)
+                                    .height(4.dp)
+                                    .background(statusColor, RoundedCornerShape(2.dp)),
+                            )
+                        }
                     }
                 }
-                // 完整设置在统计页底部的「设置与数据」；这里只给出路，不复制一份表单。
-                Text("打开设置与数据", style = tokens.typography.caption)
             }
+            Box(Modifier.fillMaxWidth().height(1.dp).background(tokens.colorScheme.outlineVariant))
+        }
+    }
+}
+
+/** 原型 A 的日期范围选中态使用中性纸色；完成绿色只表达已完成，不借给筛选状态。 */
+@Composable
+private fun AgendaSelectedRangeIndicator(
+    label: String,
+    modifier: Modifier = Modifier,
+) {
+    val tokens = attentionTokens()
+    Surface(
+        shape = RoundedCornerShape(tokens.radius.small),
+        color = tokens.colorScheme.surfaceVariant,
+        contentColor = tokens.colorScheme.onSurface,
+        modifier = modifier,
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(tokens.spacing.small),
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = tokens.spacing.medium, vertical = tokens.spacing.small),
+        ) {
+            Icon(Icons.Filled.Check, contentDescription = "已选中", modifier = Modifier.size(16.dp))
+            Text(label)
         }
     }
 }
@@ -610,66 +781,73 @@ private fun AgendaSummarySection(
 private fun AgendaSummaryMetric(
     label: String,
     value: String,
+    semanticLabel: String? = null,
+    supporting: String? = null,
+    progress: Float? = null,
     modifier: Modifier = Modifier,
 ) {
     val tokens = attentionTokens()
     Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(label, style = tokens.typography.caption)
-        Text(value, style = tokens.typography.body)
+        Text(
+            label,
+            style = tokens.typography.caption,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = semanticLabel?.let { Modifier.semantics { text = AnnotatedString(it) } } ?: Modifier,
+        )
+        Text(value, style = tokens.typography.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        supporting?.let { Text(it, style = tokens.typography.caption, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        progress?.let {
+            LinearProgressIndicator(
+                progress = { it },
+                modifier = Modifier.fillMaxWidth().height(4.dp).testTag("agenda-capacity-progress"),
+            )
+        }
     }
 }
 
 /**
  * 宽屏时间轴右侧的辅助操作栈。它只消费投影里的下一步与未安排事实，
- * 不在页面里重新排序日程，也不把动作藏进第二层菜单。
+ * 不在页面里重新排序日程；添加与补记由常驻的「调整计划」承担。
  */
 @Composable
 private fun AgendaAuxiliaryStack(
     state: AgendaScreenState,
     actions: AgendaActions,
     onEditRow: (AgendaScheduleRow) -> Unit,
-    onOpenAddSchedule: () -> Unit,
     onOpenFreeTimer: () -> Unit,
-    onOpenBackfill: () -> Unit,
+    compact: Boolean = false,
 ) {
     val unscheduledRows = state.unscheduledRows.ifEmpty {
         state.dateSections.flatMap { it.unscheduledRows }
     }
+    val timelineVisible = state.timelineRows.isNotEmpty() ||
+        state.dateSections.any { it.timelineRows.isNotEmpty() } ||
+        state.activeTimer != null
+    val layoutModifier = if (compact) Modifier.fillMaxWidth() else Modifier.widthIn(min = 240.dp, max = 300.dp)
     Column(
-        Modifier
-            .widthIn(min = 240.dp, max = 300.dp)
-            .testTag("agenda-side-stack"),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        layoutModifier.testTag("agenda-side-stack"),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        AgendaNextStepCard(state)
-        // Prototype A keeps the three primary actions next to the next-step card.
-        // Unscheduled entries are a secondary review surface and follow the actions.
-        AgendaOperationStack(
-            state = state,
-            onOpenAddSchedule = onOpenAddSchedule,
-            onOpenFreeTimer = onOpenFreeTimer,
-            onOpenBackfill = onOpenBackfill,
-        )
-        Card(
-            Modifier.fillMaxWidth().testTag("agenda-side-unscheduled"),
-            shape = RoundedCornerShape(attentionTokens().radius.medium),
-        ) {
+        // 空态不抢首屏焦点：没有时间轴内容时只保留说明和统一操作入口。
+        if (timelineVisible) {
+            AgendaNextStepCard(state)
+        }
+        AgendaOperationStack(onOpenFreeTimer = onOpenFreeTimer)
+        if (unscheduledRows.isNotEmpty()) {
+            Box(Modifier.fillMaxWidth().height(1.dp).background(attentionTokens().colorScheme.outlineVariant))
             Column(
-                Modifier.padding(attentionTokens().spacing.medium),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                Modifier.fillMaxWidth().testTag("agenda-side-unscheduled"),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Text("未安排", style = attentionTokens().typography.title)
-                if (unscheduledRows.isEmpty()) {
-                    Text("暂无未安排日程", modifier = Modifier.testTag("agenda-side-unscheduled-empty"))
-                } else {
-                    unscheduledRows.forEach { row ->
-                        AgendaScheduleRowCard(
-                            row = row,
-                            actions = actions,
-                            onEdit = { onEditRow(row) },
-                            secondary = true,
-                        )
-                    }
+                Text("未安排", style = attentionTokens().typography.body)
+                unscheduledRows.forEach { row ->
+                    AgendaScheduleRowCard(
+                        row = row,
+                        actions = actions,
+                        onEdit = { onEditRow(row) },
+                        secondary = true,
+                    )
                 }
             }
         }
@@ -682,115 +860,49 @@ private fun AgendaNextStepCard(state: AgendaScreenState) {
     val tokens = attentionTokens()
     val timelineRows = state.timelineRows.ifEmpty { state.dateSections.flatMap { it.timelineRows } }
     val next = timelineRows.firstOrNull { !it.timing && !it.completed }
-    Card(
+    Column(
         Modifier.fillMaxWidth().testTag("agenda-next-step"),
-        shape = RoundedCornerShape(tokens.radius.medium),
+        verticalArrangement = Arrangement.spacedBy(tokens.spacing.small),
     ) {
-        Column(
-            Modifier.padding(tokens.spacing.medium),
-            verticalArrangement = Arrangement.spacedBy(tokens.spacing.small),
-        ) {
-            Text("下一步", style = tokens.typography.title)
-            if (next == null) {
-                Text("暂无下一步", modifier = Modifier.testTag("agenda-next-step-empty"))
-            } else {
-                Text(next.title, modifier = Modifier.testTag("agenda-next-step-title"))
-                Text(next.detailLabel, style = tokens.typography.caption)
-            }
+        Text("下一步", style = tokens.typography.caption, color = tokens.colorScheme.onSurfaceVariant)
+        if (next == null) {
+            Text("暂无下一步", style = tokens.typography.body, modifier = Modifier.testTag("agenda-next-step-empty"))
+        } else {
+            Text(next.title, style = tokens.typography.body, modifier = Modifier.testTag("agenda-next-step-title"))
+            Text(next.detailLabel, style = tokens.typography.caption)
         }
     }
 }
 
 /**
- * 三个主要动作的统一入口。窄屏只渲染这一列；宽屏由辅助栈复用同一件组件，
- * 因而回调、日期上下文和触控尺寸不会因布局切换而分叉。
+ * A 的次级操作入口：自由计时。
+ *
+ * 窄屏只渲染这一列；宽屏由辅助栈复用同一件组件。添加与补记已经上移到常驻的
+ * 「调整计划」，这里保留自由计时，避免把它塞进菜单后多一层点击。
  */
 @Composable
 private fun AgendaOperationStack(
-    state: AgendaScreenState,
-    onOpenAddSchedule: () -> Unit,
     onOpenFreeTimer: () -> Unit,
-    onOpenBackfill: () -> Unit,
 ) {
-    val tokens = attentionTokens()
-    val hasAgendaRows = state.timelineRows.isNotEmpty() ||
-        state.unscheduledRows.isNotEmpty() ||
-        state.dateSections.any { it.timelineRows.isNotEmpty() || it.unscheduledRows.isNotEmpty() }
     Column(
         Modifier
             .fillMaxWidth()
             .testTag("agenda-section-add"),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        if (state.highlightAddSchedule) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.testTag("agenda-add-highlight"),
-            ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.EventNote,
-                    contentDescription = "为明天安排日程",
-                    modifier = Modifier.size(tokens.spacing.medium),
-                )
-                Text(AGENDA_ADD_HIGHLIGHT_HINT, style = tokens.typography.body)
-            }
-        }
-        Text(
-            if (state.highlightAddSchedule) state.addScheduleHeadingLabel else "日程操作",
-            style = tokens.typography.title,
-        )
         Column(
             Modifier
                 .fillMaxWidth()
-                .testTag("agenda-operation-stack")
-                .semantics {
-                    contentDescription = if (hasAgendaRows) {
-                        "日程操作：添加日程、开始自由计时、事后补记"
-                    } else {
-                        "日程操作：开始自由计时、事后补记"
-                    }
-                },
+                .testTag("agenda-operation-stack"),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (hasAgendaRows) {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .testTag("agenda-open-add-sheet")
-                        // Keep the compatibility tag used by existing integrations while
-                        // exposing one merged actionable node to accessibility services.
-                        .semantics(mergeDescendants = true) {
-                            contentDescription = "添加日程"
-                            text = AnnotatedString("添加日程")
-                            onClick {
-                                onOpenAddSchedule()
-                                true
-                            }
-                        },
-                ) {
-                    AttentionButton(
-                        onClick = onOpenAddSchedule,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("agenda-operation-add-schedule")
-                            .semantics { contentDescription = "添加日程，规划日 ${state.addScheduleDefaultDate.ifBlank { state.selectedDate?.toString() ?: state.planningDate.toString() }}" },
-                    ) { Text("添加日程") }
-                }
-            }
-            AttentionOutlinedButton(
+            AttentionTextButton(
                 onClick = onOpenFreeTimer,
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("agenda-operation-free-timer")
                     .semantics { contentDescription = "开始自由计时" },
             ) { Text("开始自由计时") }
-            AttentionOutlinedButton(
-                onClick = onOpenBackfill,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("agenda-operation-backfill")
-                    .semantics { contentDescription = "事后补记，规划日 ${state.addScheduleDefaultDate.ifBlank { state.selectedDate?.toString() ?: state.planningDate.toString() }}" },
-            ) { Text("事后补记") }
         }
     }
 }
@@ -807,49 +919,55 @@ private fun AgendaTimelineSection(
     actions: AgendaActions,
     onEditRow: (AgendaScheduleRow) -> Unit,
     includeUnscheduled: Boolean = true,
-    onAddFirstSchedule: () -> Unit,
 ) {
     val tokens = attentionTokens()
     Column(Modifier.fillMaxWidth().testTag("agenda-section-timeline"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        state.emptyLabel?.let { emptyLabel ->
-            Text(emptyLabel, modifier = Modifier.testTag("agenda-empty"))
-        }
+        // 规划日空态只保留一条说明和一个入口；所有日期视图仍保留原有说明 seam。
+        state.emptyLabel
+            ?.takeUnless { state.workbenchEmptyLabel != null && state.dateSections.isEmpty() }
+            ?.let { emptyLabel ->
+            Text(
+                emptyLabel,
+                style = tokens.typography.caption,
+                color = tokens.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("agenda-empty"),
+            )
+            }
         if (state.dateSections.isEmpty()) {
             if (state.timelineRows.isEmpty() && state.unscheduledRows.isEmpty()) {
-                state.workbenchEmptyLabel?.let { emptyLabel ->
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.testTag("agenda-workbench-empty")) {
-                        Text(emptyLabel)
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .testTag("agenda-open-add-sheet")
-                                // The empty state already has the sole visible add action;
-                                // expose the legacy page-level tag on this same node so the
-                                // accessibility baseline does not require a duplicate button.
-                                .semantics(mergeDescendants = true) {
-                                    contentDescription = "添加日程"
-                                    text = AnnotatedString("添加日程")
-                                    onClick {
-                                        onAddFirstSchedule()
-                                        true
-                                    }
-                                },
-                        ) {
-                            AttentionButton(
-                                onClick = onAddFirstSchedule,
-                                modifier = Modifier.testTag("agenda-first-schedule"),
-                            ) { Text("添加日程") }
-                        }
+                    state.workbenchEmptyLabel?.let { emptyLabel ->
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.testTag("agenda-workbench-empty")) {
+                        Text(emptyLabel, style = tokens.typography.caption, color = tokens.colorScheme.onSurfaceVariant)
                     }
                 }
             }
-            AgendaTimelineRows(state.timelineRows, actions, onEditRow)
+            AgendaTimelineRows(
+                rows = state.timelineRows,
+                actions = actions,
+                onEditRow = onEditRow,
+                activeTimer = state.activeTimer,
+                timerTargets = state.targets,
+            )
             if (includeUnscheduled) AgendaUnscheduledGroup(state.unscheduledRows, actions, onEditRow)
         } else {
-            state.dateSections.forEach { section ->
-                Text("规划日 ${section.planningDate}", style = tokens.typography.title)
-                Text(section.capacityLabel, modifier = Modifier.testTag("agenda-capacity-summary-${section.planningDate}"))
-                AgendaTimelineRows(section.timelineRows, actions, onEditRow)
+            val timerSectionIndex = state.dateSections.indexOfFirst { section ->
+                section.timelineRows.any(AgendaScheduleRow::timing) || section.timelineRows.isNotEmpty()
+            }
+            state.dateSections.forEachIndexed { sectionIndex, section ->
+                Text("规划日 ${section.planningDate}", style = tokens.typography.body)
+                Text(
+                    section.capacityLabel,
+                    style = tokens.typography.caption,
+                    color = tokens.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("agenda-capacity-summary-${section.planningDate}"),
+                )
+                AgendaTimelineRows(
+                    rows = section.timelineRows,
+                    actions = actions,
+                    onEditRow = onEditRow,
+                    activeTimer = state.activeTimer?.takeIf { sectionIndex == timerSectionIndex },
+                    timerTargets = state.targets,
+                )
                 if (includeUnscheduled) AgendaUnscheduledGroup(section.unscheduledRows, actions, onEditRow)
             }
         }
@@ -861,22 +979,22 @@ private fun AgendaTimelineRows(
     rows: List<AgendaScheduleRow>,
     actions: AgendaActions,
     onEditRow: (AgendaScheduleRow) -> Unit,
+    activeTimer: AgendaActiveTimer? = null,
+    timerTargets: List<AgendaTargetOption> = emptyList(),
 ) {
-    if (rows.isEmpty()) return
+    if (rows.isEmpty() && activeTimer == null) return
     val tokens = attentionTokens()
     val timelineGutterWidth = 48.dp
-    val timelineNodeGap = 10.dp
+    val timelineNodeGap = 24.dp
     val timelineNodeSize = 10.dp
-    // Prototype A's timeline is a tree: time gutter, continuous axis and a node for
-    // each schedule card. Keep the existing row card as the interaction surface so
-    // edit/start/complete semantics remain unchanged while the list gains the missing
-    // temporal structure.
+    // 时间轴是主画布：只用一条细轴和节点分隔，不再把每一行包成大卡片。
     Column(
         Modifier
             .fillMaxWidth()
             .testTag("agenda-timeline-tree")
+            .padding(vertical = 2.dp)
             .drawBehind {
-                val axisX = timelineGutterWidth.toPx() + timelineNodeGap.toPx() + timelineNodeSize.toPx() / 2
+                val axisX = 12.dp.toPx() + timelineGutterWidth.toPx() + timelineNodeGap.toPx() + timelineNodeSize.toPx() / 2
                 drawLine(
                     color = tokens.colorScheme.outlineVariant,
                     start = Offset(axisX, 0f),
@@ -886,7 +1004,10 @@ private fun AgendaTimelineRows(
             },
         verticalArrangement = Arrangement.spacedBy(tokens.spacing.small),
     ) {
-        rows.forEach { row ->
+        if (rows.isEmpty()) {
+            AgendaRunningTimerStandalone(timer = activeTimer!!, targets = timerTargets, actions = actions)
+        }
+        rows.forEachIndexed { index, row ->
             val nodeColor = when {
                 row.timing -> tokens.brand.timingInProgress.accent
                 row.completed -> tokens.brand.completed.accent
@@ -895,7 +1016,7 @@ private fun AgendaTimelineRows(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(vertical = tokens.spacing.small),
+                    .padding(vertical = 2.dp),
                 verticalAlignment = Alignment.Top,
                 horizontalArrangement = Arrangement.spacedBy(timelineNodeGap),
             ) {
@@ -903,17 +1024,23 @@ private fun AgendaTimelineRows(
                     text = if (row.timing) "现在" else row.startText.ifBlank { "—" },
                     style = tokens.typography.caption,
                     color = tokens.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.width(timelineGutterWidth).padding(top = 4.dp),
+                    modifier = Modifier.width(timelineGutterWidth).padding(top = 8.dp),
                 )
                 Box(
                     Modifier
-                        .padding(top = 8.dp)
+                        .padding(top = 12.dp)
                         .size(timelineNodeSize)
                         .background(nodeColor, CircleShape)
                         .border(2.dp, tokens.colorScheme.background, CircleShape),
                 )
                 Box(Modifier.weight(1f)) {
-                    AgendaScheduleRowCard(row, actions = actions, onEdit = { onEditRow(row) })
+                    AgendaScheduleRowCard(
+                        row = row,
+                        actions = actions,
+                        onEdit = { onEditRow(row) },
+                        activeTimer = activeTimer?.takeIf { row.timing || index == 0 },
+                        timerTargets = timerTargets,
+                    )
                 }
             }
         }
@@ -930,117 +1057,129 @@ private fun AgendaUnscheduledGroup(
     if (rows.isEmpty()) return
     val tokens = attentionTokens()
     Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.testTag("agenda-unscheduled")) {
-        Text("未安排时间", style = tokens.typography.title, modifier = Modifier.testTag("agenda-unscheduled-heading"))
+        Text("未安排时间", style = tokens.typography.body, modifier = Modifier.testTag("agenda-unscheduled-heading"))
         rows.forEach { row ->
             AgendaScheduleRowCard(row, actions = actions, onEdit = { onEditRow(row) }, secondary = true)
         }
     }
 }
 
+/** 没有对应日程条目的自由计时也固定在时间轴第一行，避免恢复旧的独立计时卡。 */
+@Composable
+private fun AgendaRunningTimerStandalone(
+    timer: AgendaActiveTimer,
+    targets: List<AgendaTargetOption>,
+    actions: AgendaActions,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(24.dp),
+    ) {
+        Text("现在", style = attentionTokens().typography.caption, modifier = Modifier.width(48.dp).padding(top = 4.dp))
+        Box(
+            Modifier
+                .padding(top = 8.dp)
+                .size(10.dp)
+                .background(attentionTokens().brand.timingInProgress.accent, CircleShape),
+        )
+        Card(
+            Modifier.weight(1f).testTag("agenda-running-timer"),
+            shape = RoundedCornerShape(attentionTokens().radius.medium),
+            colors = CardDefaults.cardColors(containerColor = attentionTokens().brand.timingInProgress.container),
+        ) {
+            Column(
+                Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("schedule-timing-cue")) {
+                    Text("正在计时：${timer.targetLabel}", style = attentionTokens().typography.caption)
+                }
+                Box(
+                    Modifier
+                        .background(attentionTokens().brand.timingInProgress.container, RoundedCornerShape(attentionTokens().radius.small))
+                        .padding(4.dp),
+                ) {
+                    Icon(
+                        if (timer.paused) Icons.Filled.PauseCircle else Icons.Filled.Timer,
+                        contentDescription = timer.statusLabel,
+                        tint = attentionTokens().brand.timingInProgress.onContainer,
+                        modifier = Modifier.size(16.dp).testTag("agenda-running-timer-tint"),
+                    )
+                }
+                Text(timer.statusLabel, modifier = Modifier.testTag("agenda-running-timer-status"))
+                Text(timer.elapsedLabel, modifier = Modifier.testTag("agenda-running-timer-elapsed"))
+                timer.pendingHintLabel?.let { hint ->
+                    Text(hint, modifier = Modifier.testTag("agenda-running-timer-hint"))
+                }
+                AgendaRunningTimerControls(timer = timer, targets = targets, actions = actions)
+            }
+        }
+    }
+}
+
 /**
- * 首屏第三块：进行中的计时状态。
- *
- * 计时卡下线之后，运行中的计时仍然必须看得见并停得掉；正在计时的那条日程由时间轴
- * 内部置顶强调（见 [AgendaTimelineSection]），这里给出的是状态与控制。
- * 暂停、恢复、结束并保存是首屏仅有的两个主控制；切换目标与从此刻继续收在更多菜单里，
- * 低频动作因此不占首屏。暂停不等于已保存，所以暂停态要明说下一步。
+ * 运行中日程的紧凑控制。它嵌在时间轴第一行的日程卡里，避免再渲染第二张计时卡。
  */
 @Composable
-private fun AgendaRunningTimerSection(
+private fun AgendaRunningTimerControls(
     timer: AgendaActiveTimer,
     targets: List<AgendaTargetOption>,
     actions: AgendaActions,
 ) {
     var timerMoreExpanded by remember(timer.targetId) { mutableStateOf(false) }
-    val tokens = attentionTokens()
-    val rust = tokens.brand.timingInProgress
-    Card(
-        modifier = Modifier.fillMaxWidth().testTag("agenda-running-timer"),
-        shape = RoundedCornerShape(tokens.radius.medium),
-        colors = CardDefaults.cardColors(containerColor = rust.container),
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(
-            Modifier.padding(tokens.spacing.medium),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                // 状态不只靠颜色：色块里的图标与旁边的文字都说出计时中 / 已暂停。
-                Box(
-                    Modifier
-                        .background(rust.container, RoundedCornerShape(tokens.radius.small))
-                        .padding(tokens.spacing.small),
-                ) {
-                    Icon(
-                        imageVector = if (timer.paused) Icons.Filled.PauseCircle else Icons.Filled.Timer,
-                        // 图标本身也带语义：读屏用户不靠颜色也知道现在是暂停还是运行。
-                        contentDescription = timer.statusLabel,
-                        tint = rust.onContainer,
-                        // 强调标记与它的状态语义放在同一个节点上：非合并语义树里父节点
-                        // 不继承子节点的 contentDescription，标记挂在容器上时读屏会丢掉状态。
-                        modifier = Modifier.size(tokens.spacing.medium).testTag("agenda-running-timer-tint"),
-                    )
-                }
-                Column(Modifier.weight(1f)) {
-                    // 「正在计时：<目标>」是既有宿主验收用例与读屏都认的文案，保持原样。
-                    Text("正在计时：${timer.targetLabel}", style = tokens.typography.title)
-                    Text(timer.statusLabel, modifier = Modifier.testTag("agenda-running-timer-status"))
-                }
-            }
-            Text(timer.elapsedLabel, modifier = Modifier.testTag("agenda-running-timer-elapsed"))
-            // 暂停不等于已保存：这一行告诉用户下一步该走恢复还是结束并保存。
-            timer.pendingHintLabel?.let { hint ->
-                Text(hint, modifier = Modifier.testTag("agenda-running-timer-hint"))
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (timer.paused) {
-                    AttentionButton(
-                        onClick = actions::resumeRunningTimer,
-                        modifier = Modifier.testTag("agenda-running-timer-resume"),
-                    ) { Text("恢复计时") }
-                } else {
-                    AttentionOutlinedButton(
-                        onClick = actions::pauseRunningTimer,
-                        modifier = Modifier.testTag("agenda-running-timer-pause"),
-                    ) { Text("暂停") }
-                }
-                AttentionOutlinedButton(
-                    onClick = actions::stopRunningTimer,
-                    modifier = Modifier.testTag("agenda-running-timer-stop"),
-                ) { Text("结束并保存") }
-                // 次级操作收在这里：首屏只留暂停 / 恢复与结束并保存。
-                Box {
-                    AttentionTextButton(
-                        onClick = { timerMoreExpanded = true },
-                        modifier = Modifier.testTag("agenda-running-timer-more"),
-                    ) { Text("更多") }
-                    DropdownMenu(
-                        expanded = timerMoreExpanded,
-                        onDismissRequest = { timerMoreExpanded = false },
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("从此刻继续") },
-                            onClick = { actions.recoverRunningTimerFromNow(); timerMoreExpanded = false },
-                            modifier = Modifier.testTag("agenda-running-timer-recover"),
-                        )
-                        DropdownMenuItem(
-                            text = { Text("切换到「未归属活动」") },
-                            onClick = { actions.switchRunningTimerTarget(null); timerMoreExpanded = false },
-                            modifier = Modifier.testTag("agenda-running-timer-switch-unowned"),
-                        )
-                        // 当前目标同样用文字标出，不靠高亮颜色单独表达。
-                        targets.forEach { target ->
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        "切换到「${target.title}」" +
-                                            if (target.targetId == timer.targetId) "（当前）" else "",
-                                    )
-                                },
-                                onClick = { actions.switchRunningTimerTarget(target.targetId); timerMoreExpanded = false },
-                                modifier = Modifier.testTag("agenda-running-timer-switch-${target.targetId}"),
+        if (timer.paused) {
+            AttentionButton(
+                onClick = actions::resumeRunningTimer,
+                modifier = Modifier.testTag("agenda-running-timer-resume"),
+            ) { Text("恢复") }
+        } else {
+            AttentionOutlinedButton(
+                onClick = actions::pauseRunningTimer,
+                modifier = Modifier.testTag("agenda-running-timer-pause"),
+            ) { Text("暂停") }
+        }
+        AttentionOutlinedButton(
+            onClick = actions::stopRunningTimer,
+            modifier = Modifier.testTag("agenda-running-timer-stop"),
+        ) { Text("结束并保存") }
+        Box {
+            AttentionTextButton(
+                onClick = { timerMoreExpanded = true },
+                modifier = Modifier.testTag("agenda-running-timer-more"),
+            ) { Text("更多") }
+            DropdownMenu(
+                expanded = timerMoreExpanded,
+                onDismissRequest = { timerMoreExpanded = false },
+            ) {
+                DropdownMenuItem(
+                    text = { Text("从此刻继续") },
+                    onClick = { actions.recoverRunningTimerFromNow(); timerMoreExpanded = false },
+                    modifier = Modifier.testTag("agenda-running-timer-recover"),
+                )
+                DropdownMenuItem(
+                    text = { Text("切换到「未归属活动」") },
+                    onClick = { actions.switchRunningTimerTarget(null); timerMoreExpanded = false },
+                    modifier = Modifier.testTag("agenda-running-timer-switch-unowned"),
+                )
+                targets.forEach { target ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                "切换到「${target.title}」" +
+                                    if (target.targetId == timer.targetId) "（当前）" else "",
                             )
-                        }
-                    }
+                        },
+                        onClick = {
+                            actions.switchRunningTimerTarget(target.targetId)
+                            timerMoreExpanded = false
+                        },
+                        modifier = Modifier.testTag("agenda-running-timer-switch-${target.targetId}"),
+                    )
                 }
             }
         }
@@ -1500,6 +1639,10 @@ private fun AgendaRecurrenceSection(
  * 计划投入、实际投入、完成状态与「已超出容量」都由投影给出，页面不比较分钟数，
  * 因此预计时长永远不会被当成实际投入展示。正在计时的那条用文字与图标说明状态，
  * 锈橙色只是补充语义。
+ *
+ * 整卡是触摸用户的便捷入口：点卡片任意非控件区域和点行尾 `⋮` 打开同一个行菜单。
+ * 整卡刻意用 `pointerInput` 而不是 `clickable`，避免把行内完成控件、计时控制
+ * 与文字合并成一个点击语义；`⋮` 仍是读屏用户的等价入口。
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -1508,6 +1651,8 @@ private fun AgendaScheduleRowCard(
     actions: AgendaActions,
     onEdit: () -> Unit,
     secondary: Boolean = false,
+    activeTimer: AgendaActiveTimer? = null,
+    timerTargets: List<AgendaTargetOption> = emptyList(),
 ) {
     val tokens = attentionTokens()
     val entry: ScheduleEntry = row.entry
@@ -1517,35 +1662,80 @@ private fun AgendaScheduleRowCard(
         else -> tokens.brand.scheduled
     }
     val cardColor = when {
-        row.timing -> tokens.brand.timingInProgress.container
+        row.timing -> tokens.colorScheme.surfaceContainerLow
         secondary -> tokens.colorScheme.surfaceContainerLow
-        else -> tokens.colorScheme.surface
+        else -> tokens.colorScheme.background
     }
-    Card(
-        Modifier.fillMaxWidth().testTag("agenda-schedule-row-${entry.id}"),
-        shape = RoundedCornerShape(tokens.radius.medium),
-        colors = CardDefaults.cardColors(containerColor = cardColor),
+    var rowMoreExpanded by remember(entry.id) { mutableStateOf(false) }
+    val rowTapModifier = if (row.offersMoreMenu) {
+        Modifier.pointerInput(entry.id) {
+            detectTapGestures { rowMoreExpanded = true }
+        }
+    } else {
+        Modifier
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(cardColor)
+            .drawBehind {
+                val accentWidth = 3.dp.toPx()
+                drawLine(
+                    color = statusSemantic.accent,
+                    start = Offset(accentWidth / 2f, 0f),
+                    end = Offset(accentWidth / 2f, size.height),
+                    strokeWidth = accentWidth,
+                )
+                drawLine(
+                    color = tokens.colorScheme.outlineVariant,
+                    start = Offset(0f, size.height - 1.dp.toPx()),
+                    end = Offset(size.width, size.height - 1.dp.toPx()),
+                    strokeWidth = 1.dp.toPx(),
+                )
+            }
+            .then(rowTapModifier)
+            .testTag("agenda-schedule-row-${entry.id}"),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Column(
             Modifier
                 .fillMaxWidth()
-                .padding(tokens.spacing.medium),
-            verticalArrangement = Arrangement.spacedBy(tokens.spacing.small),
+                .padding(start = 12.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            if (row.timing) {
+            if (row.timing || activeTimer != null) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("schedule-timing-cue")) {
-                    Icon(
-                        Icons.Filled.Timer,
-                        contentDescription = "正在计时",
-                        tint = tokens.brand.timingInProgress.accent,
-                        modifier = Modifier.size(16.dp),
-                    )
                     Text(
-                        "正在计时",
+                        activeTimer?.let { "正在计时：${it.targetLabel}" } ?: "正在计时",
                         style = tokens.typography.caption,
                         color = tokens.brand.timingInProgress.accent,
                         modifier = Modifier.padding(start = tokens.spacing.small),
                     )
+                }
+                activeTimer?.let { timer ->
+                    Column(
+                        Modifier.testTag("agenda-running-timer"),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Box(
+                            Modifier
+                                .background(tokens.brand.timingInProgress.container, RoundedCornerShape(tokens.radius.small))
+                                .padding(4.dp),
+                        ) {
+                            Icon(
+                                if (timer.paused) Icons.Filled.PauseCircle else Icons.Filled.Timer,
+                                contentDescription = timer.statusLabel,
+                                tint = tokens.brand.timingInProgress.onContainer,
+                                modifier = Modifier.size(16.dp).testTag("agenda-running-timer-tint"),
+                            )
+                        }
+                        Text(timer.statusLabel, modifier = Modifier.testTag("agenda-running-timer-status"))
+                        Text(timer.elapsedLabel, modifier = Modifier.testTag("agenda-running-timer-elapsed"))
+                        timer.pendingHintLabel?.let { hint ->
+                            Text(hint, modifier = Modifier.testTag("agenda-running-timer-hint"))
+                        }
+                        AgendaRunningTimerControls(timer = timer, targets = timerTargets, actions = actions)
+                    }
                 }
             }
             Row(
@@ -1564,22 +1754,15 @@ private fun AgendaScheduleRowCard(
                         row.detailLabel,
                         style = tokens.typography.caption,
                         color = tokens.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    row.targetLabel?.let {
-                        Text(
-                            "关联计划：$it",
-                            style = tokens.typography.caption,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
                     if (row.investmentLabel.isNotBlank()) {
                         Text(
                             row.investmentLabel,
                             style = tokens.typography.caption,
-                            maxLines = 2,
+                            color = tokens.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
@@ -1589,14 +1772,6 @@ private fun AgendaScheduleRowCard(
                             style = tokens.typography.caption,
                             color = tokens.brand.error.accent,
                             modifier = Modifier.testTag("schedule-capacity-notice-${entry.id}"),
-                        )
-                    }
-                    if (row.note.isNotBlank()) {
-                        Text(
-                            row.note,
-                            style = tokens.typography.caption,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
@@ -1622,47 +1797,43 @@ private fun AgendaScheduleRowCard(
                 horizontalArrangement = Arrangement.spacedBy(tokens.spacing.small),
                 verticalArrangement = Arrangement.spacedBy(tokens.spacing.small),
             ) {
-                AttentionTextButton(onClick = onEdit, modifier = Modifier.testTag("schedule-edit-${entry.id}")) { Text("编辑") }
-                AttentionTextButton(
-                    onClick = { actions.startTimerFromEntry(entry) },
-                    enabled = row.canStartTimer,
-                    modifier = Modifier.testTag("schedule-start-timer-${entry.id}"),
-                ) { Text("开始计时") }
-                AttentionTextButton(
-                    onClick = {
-                        if (row.completed) actions.toggleScheduleCompleted(entry.id)
-                        else actions.confirmScheduleCompleted(entry.id)
-                    },
-                    modifier = Modifier.testTag("schedule-completion-${entry.id}"),
-                ) { Text(if (row.completed) "取消完成" else "完成并记录") }
-                // 勾选框是完成这件事的可见主入口：完成状态同时由方框与文字表达，
-                // 不依赖颜色。更多菜单把编辑与计时控制收在同一个可见按钮后面，
-                // 因此长按至多是额外的熟练操作快捷方式，而不是唯一入口。
                 if (row.offersCompletionCheck) {
-                    Checkbox(
-                        checked = row.completed,
-                        onCheckedChange = {
-                            if (row.completed) actions.toggleScheduleCompleted(entry.id)
-                            else actions.confirmScheduleCompleted(entry.id)
-                        },
-                        modifier = Modifier
-                            .testTag("schedule-completion-check-${entry.id}")
-                            .semantics { contentDescription = "完成「${row.title}」" },
-                    )
+                    Box(
+                        Modifier
+                            .testTag("schedule-completion-${entry.id}")
+                            .semantics {
+                                contentDescription = "完成「${row.title}」"
+                                onClick {
+                                    if (row.completed) actions.toggleScheduleCompleted(entry.id)
+                                    else actions.confirmScheduleCompleted(entry.id)
+                                    true
+                                }
+                            },
+                    ) {
+                        Checkbox(
+                            checked = row.completed,
+                            onCheckedChange = {
+                                if (row.completed) actions.toggleScheduleCompleted(entry.id)
+                                else actions.confirmScheduleCompleted(entry.id)
+                            },
+                            modifier = Modifier.testTag("schedule-completion-check-${entry.id}"),
+                        )
+                    }
                 }
                 if (row.offersMoreMenu) {
-                    var rowMoreExpanded by remember(entry.id) { mutableStateOf(false) }
                     Box {
                         AttentionTextButton(
                             onClick = { rowMoreExpanded = true },
-                            modifier = Modifier.testTag("schedule-more-${entry.id}"),
-                        ) { Text("更多") }
+                            modifier = Modifier
+                                .testTag("schedule-more-${entry.id}")
+                                .semantics { contentDescription = "更多操作" },
+                        ) { Icon(Icons.Filled.MoreVert, contentDescription = null) }
                         DropdownMenu(
                             expanded = rowMoreExpanded,
                             onDismissRequest = { rowMoreExpanded = false },
                         ) {
                             DropdownMenuItem(
-                                text = { Text("编辑") },
+                                text = { Text("修改日程") },
                                 onClick = { rowMoreExpanded = false; onEdit() },
                                 modifier = Modifier.testTag("schedule-more-edit-${entry.id}"),
                             )
