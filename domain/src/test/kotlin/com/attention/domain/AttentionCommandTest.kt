@@ -236,4 +236,58 @@ class AttentionCommandTest {
         assertEquals(null, partialResult.state.activeTimer)
         assertTrue(partialResult.state.timeEntries.isEmpty())
     }
+
+    @Test
+    fun saving_a_schedule_with_backfill_records_one_manual_entry_atomically() {
+        val schedule = ScheduleEntry("backfill-schedule", date.toString(), "事后补记", estimatedMinutes = 30)
+        val command = AttentionCommand.SaveSchedule(
+            schedule,
+            ScheduleBackfill(durationMinutes = 25, note = "已完成一部分"),
+        )
+
+        val result = command.execute(AttentionState(), Instant.parse("2026-10-08T12:00:00Z"), utc)
+
+        assertEquals(listOf(schedule), result.state.schedules)
+        assertEquals(1, result.state.timeEntries.size)
+        assertEquals(TimeEntrySource.MANUAL, result.state.timeEntries.single().source)
+        assertEquals(schedule.id, result.state.timeEntries.single().scheduleEntryId)
+        assertEquals(25, result.state.timeEntries.single().durationMinutes)
+    }
+
+    @Test
+    fun editing_a_schedule_with_an_existing_manual_backfill_does_not_create_a_second_entry() {
+        val schedule = ScheduleEntry("backfill-edit", date.toString(), "编辑补记", estimatedMinutes = 30)
+        val first = AttentionCommand.SaveSchedule(
+            schedule,
+            ScheduleBackfill(durationMinutes = 20, dedupeExistingSchedule = true),
+        ).execute(AttentionState(), Instant.parse("2026-10-08T12:00:00Z"), utc)
+
+        val edited = schedule.copy(title = "编辑后的日程")
+        val second = AttentionCommand.SaveSchedule(
+            edited,
+            ScheduleBackfill(durationMinutes = 25, dedupeExistingSchedule = true),
+        ).execute(first.state, Instant.parse("2026-10-08T12:01:00Z"), utc)
+
+        assertEquals("编辑后的日程", second.state.schedules.single().title)
+        assertEquals(1, second.state.timeEntries.size)
+        assertEquals(20, second.state.timeEntries.single().durationMinutes)
+    }
+
+    @Test
+    fun confirming_a_schedule_with_an_existing_confirmation_only_marks_completion() {
+        val schedule = ScheduleEntry("met-schedule", date.toString(), "已达标", estimatedMinutes = 30)
+        val state = AttentionCommand.SaveSchedule(
+            schedule,
+            ScheduleBackfill(durationMinutes = 30),
+        ).execute(AttentionState(), Instant.parse("2026-10-08T12:00:00Z"), utc).state
+
+        val confirmed = AttentionCommand.ConfirmSchedule(schedule.id, durationMinutes = 30)
+            .execute(state, Instant.parse("2026-10-08T12:01:00Z"), utc)
+
+        val result = AttentionCommand.ConfirmSchedule(schedule.id).execute(confirmed.state, Instant.parse("2026-10-08T12:02:00Z"), utc)
+
+        assertTrue(result.state.schedules.single().completed)
+        assertEquals(2, result.state.timeEntries.size)
+        assertTrue(result.timeEntries.isEmpty())
+    }
 }

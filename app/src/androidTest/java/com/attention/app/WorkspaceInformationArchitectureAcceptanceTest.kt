@@ -9,6 +9,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -107,29 +108,33 @@ class WorkspaceInformationArchitectureAcceptanceTest {
      */
     @Test
     fun the_day_ranges_and_an_arbitrary_planning_day_never_create_another_top_level_entry() {
-        // 三个范围是日程页内的筛选，不是三个顶级入口
-        composeRule.onNodeWithTag("agenda-range-today").assertIsDisplayed()
-        composeRule.onNodeWithTag("agenda-range-tomorrow").assertIsDisplayed()
-        composeRule.onNodeWithTag("agenda-range-all-dates").assertIsDisplayed()
+        // 三个范围是日程页日期菜单里的筛选，不是三个顶级入口
         composeRule.onAllNodes(hasNavTagPrefix()).assertCountEquals(3)
+        composeRule.onNodeWithTag("agenda-date-menu", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-range-today", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-range-tomorrow", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).assertIsDisplayed()
 
-        composeRule.onNodeWithTag("agenda-range-tomorrow", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-range-tomorrow", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("agenda-filter").assert(hasText("规划日 $TOMORROW"))
+        composeRule.onNodeWithTag("agenda-filter").assert(hasText("筛选：规划日 $TOMORROW"))
         // 选了明天之后底部入口数不变，日程仍然处于选中态
         composeRule.onAllNodes(hasNavTagPrefix()).assertCountEquals(3)
         assertEquals(true, selectedOf("nav-agenda"))
 
-        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-date-menu", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
         composeRule.onAllNodes(hasNavTagPrefix()).assertCountEquals(3)
         assertEquals(true, selectedOf("nav-agenda"))
 
         // 任意规划日：仍然只是日程页上的一个筛选
-        composeRule.onNodeWithText("新增日程规划日 YYYY-MM-DD").performScrollTo().performTextReplacement(FAR_DATE)
-        composeRule.onNodeWithText("打开规划日").performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-date-menu", useUnmergedTree = true).performScrollTo().performClick()
+        // 菜单项住在 popup 自己的 root 里：直接发语义动作，不对 popup 节点做滚动。
+        composeRule.onNode(hasSetTextAction()).performTextReplacement(FAR_DATE)
+        composeRule.onNodeWithTag("agenda-open-planning-day", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("agenda-filter").assert(hasText("规划日 $FAR_DATE"))
+        composeRule.onNodeWithTag("agenda-filter").assert(hasText("筛选：规划日 $FAR_DATE"))
         composeRule.onAllNodes(hasNavTagPrefix()).assertCountEquals(3)
         assertEquals(true, selectedOf("nav-agenda"))
 
@@ -183,14 +188,22 @@ class WorkspaceInformationArchitectureAcceptanceTest {
     @Test
     fun the_timer_backup_and_aggregation_capabilities_still_reach_the_user_through_the_new_navigation() {
         // 计时器：日程条目起计时保留来源关联，运行中可见且停得掉
-        composeRule.onNodeWithTag("schedule-start-timer-$TODAY_ENTRY_ID", useUnmergedTree = true)
+        composeRule.onNodeWithTag("schedule-more-$TODAY_ENTRY_ID", useUnmergedTree = true)
             .performScrollTo()
+            .performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("schedule-more-start-timer-$TODAY_ENTRY_ID", useUnmergedTree = true)
             .performClick()
         composeRule.waitUntil(TIMEOUT) {
             composeRule.onAllNodesWithTag("agenda-running-timer").fetchSemanticsNodes().isNotEmpty()
         }
         composeRule.onNodeWithText("正在计时：UI-验收父目标", substring = true).performScrollTo().assertIsDisplayed()
         assertEquals(TODAY_ENTRY_ID, readBusinessState().activeTimer?.scheduleEntryId)
+        // 同一条短时提示会浮在页面底部并盖住「结束并保存」，提示走之前这个按钮点不动。
+        // 这条用例后面等提示消失是为了点「打开设置」，这里等它是为了停表：同一件事，同一处等待。
+        composeRule.waitUntil(TIMEOUT) {
+            composeRule.onAllNodesWithTag("attention.feedback.snackbar").fetchSemanticsNodes().isEmpty()
+        }
         composeRule.onNodeWithTag("agenda-running-timer-stop", useUnmergedTree = true).performScrollTo().performClick()
         composeRule.waitUntil(TIMEOUT) {
             composeRule.onAllNodesWithTag("agenda-running-timer").fetchSemanticsNodes().isEmpty()

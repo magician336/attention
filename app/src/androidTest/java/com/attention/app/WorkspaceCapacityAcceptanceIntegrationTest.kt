@@ -3,15 +3,18 @@ package com.attention.app
 import android.app.Activity
 import android.app.Instrumentation
 import android.content.Intent
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.espresso.intent.Intents
@@ -29,6 +32,7 @@ import com.attention.domain.RecurrenceRule
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.ScheduleFrequency
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
 import org.hamcrest.Matchers.allOf
 import org.junit.After
 import org.junit.Before
@@ -73,11 +77,16 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
         composeRule.onNodeWithText("UI-重复发生条目").assertExists()
 
         selectDate(PRIMARY_DATE)
-        composeRule.onNodeWithTag("agenda-capacity-summary", useUnmergedTree = true)
+        // 摘要语义文本挂在整条信息带上（agenda-open-settings），行内的 agenda-capacity-summary
+        // 只是布局容器，不承载文字。
+        composeRule.onNodeWithTag("agenda-open-settings", useUnmergedTree = true)
             .performScrollTo()
             .assert(hasText("已安排 60 / 60 分钟", substring = true))
 
         // Adding an estimated-duration entry is allowed even when it makes the day overloaded.
+        // #180 把添加表单收进了底部面板：面板打开时规划日已经填成正在看的那一天，
+        // 因此这里先从常驻的「调整计划」菜单打开它，再在表单里填标题与预计分钟。
+        openAddScheduleSheet()
         replace("agenda-title-input", "UI-新增超载")
         replace("agenda-estimate-input", "1")
         click("agenda-add-submit")
@@ -85,8 +94,12 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
         composeRule.onNodeWithText("UI-新增超载").assertExists()
 
         // Editing remains available while overloaded, and the summary follows the edit.
-        click("schedule-edit-$ESTIMATED_ID")
-        replace("schedule-edit-estimate-$ESTIMATED_ID", "31")
+        openEditDialog(ESTIMATED_ID)
+        // 编辑对话框在点击之后的下一帧才组合出来（面板要动画进场）：先等它出现再填，
+        // 否则紧接着的查询落在对话框还不存在的时刻。等待的是同一个节点，不是更弱的断言。
+        // 编辑对话框在点击之后的一帧才组合出来（面板要动画进场），而且它出现之后紧接着的
+        // 查询偶尔还会落空：先等它出现，再重试整次填写。重试的不是断言——写不进去照样失败。
+        writeWhenReady("schedule-edit-estimate-$ESTIMATED_ID", "31")
         click("schedule-edit-save-$ESTIMATED_ID")
         waitForText("已安排 62 / 60 分钟（超载）")
 
@@ -96,14 +109,17 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
         waitForText("已安排 62 / 60 分钟（超载）")
 
         // Reducing the edited entry removes the overload notice without touching its date.
-        click("schedule-edit-$ESTIMATED_ID")
-        replace("schedule-edit-estimate-$ESTIMATED_ID", "29")
+        // 上一条动作（完成日程）的短时提示浮在页面底部，会盖住编辑入口并吞掉这次点击：
+        // 表现是点击静默无效、对话框始终不出现。提示走之前不点下一次。
+        waitForFeedbackToLeave()
+        openEditDialog(ESTIMATED_ID)
+        writeWhenReady("schedule-edit-estimate-$ESTIMATED_ID", "29")
         click("schedule-edit-save-$ESTIMATED_ID")
         waitForText("已安排 60 / 60 分钟")
 
         // Date switching and the all-dates grouping continue to show independent totals.
         selectDate(SECONDARY_DATE)
-        composeRule.onNodeWithTag("agenda-capacity-summary", useUnmergedTree = true)
+        composeRule.onNodeWithTag("agenda-open-settings", useUnmergedTree = true)
             .performScrollTo()
             .assert(hasText("已安排 45 / 60 分钟", substring = true))
         selectAllDates()
@@ -144,15 +160,22 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
     private fun openSettingsFromStatistics() {
         composeRule.onNode(hasText("统计") and hasClickAction()).performClick()
         composeRule.waitForIdle()
+        // 上一步的短时提示还浮在统计页底部，会盖住这个入口并吞掉点击：表现是设置页根本没打开。
+        waitForFeedbackToLeave()
         composeRule.onNodeWithTag("statistics-open-settings").performScrollTo().performClick()
         composeRule.waitForIdle()
+        // 设置页是重组之后才出现的，等它真的在树上再继续。
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            composeRule.onAllNodesWithTag("statistics-open-settings").fetchSemanticsNodes().isEmpty()
+        }
     }
 
     private fun openAgenda() {
-        // 「所有日期」现在是日程页里的一个日期范围，不再是底部的顶级入口
+        // 「所有日期」现在是日程页日期菜单里的一个范围，不再是底部的顶级入口
         composeRule.onNodeWithTag("nav-agenda", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-date-menu", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
     }
 
@@ -164,7 +187,27 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
 
     private fun selectAllDates() {
         composeRule.onNodeWithTag("agenda-date-menu", useUnmergedTree = true).performScrollTo().performClick()
-        composeRule.onNodeWithTag("agenda-all-dates", useUnmergedTree = true).performClick()
+        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).performClick()
+        composeRule.waitForIdle()
+    }
+
+    /** 从常驻的「调整计划」菜单打开添加日程底部面板。 */
+    private fun openAddScheduleSheet() {
+        composeRule.onNodeWithTag("agenda-plan-action", useUnmergedTree = true).performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("agenda-plan-menu-add", useUnmergedTree = true).performClick()
+        composeRule.waitForIdle()
+    }
+
+    /** 从时间轴行菜单打开编辑对话框。 */
+    private fun openEditDialog(entryId: String) {
+        // 滚动之后行尾的 ⋮ 可能正好落在常驻「调整计划」按钮下面，坐标点击会被悬浮层吃掉；
+        // 这条用例钉的是行菜单这条路径，因此直接触发 ⋮ 的语义点击。
+        composeRule.onNodeWithTag("schedule-more-$entryId", useUnmergedTree = true)
+            .performScrollTo()
+            .performSemanticsAction(SemanticsActions.OnClick)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("schedule-more-edit-$entryId", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
     }
 
@@ -178,6 +221,27 @@ class WorkspaceCapacityAcceptanceIntegrationTest {
             node.performClick()
         } else {
             node.performScrollTo().performClick()
+        }
+    }
+
+    /** 页面底部的短时提示离开之后再继续：它浮在内容之上，会吞掉落在它上面的点击。 */
+    private fun waitForFeedbackToLeave() {
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            composeRule.onAllNodesWithTag("attention.feedback.snackbar").fetchSemanticsNodes().isEmpty()
+        }
+    }
+
+    /**
+     * 等带 [tag] 的输入框真正可写，再把 [value] 填进去。
+     *
+     * 编辑对话框与添加面板都在点击之后的一帧才组合出来（要动画进场），因此紧接着的查询会落空。
+     * 这里重试的是整次填写：写不进去在超时之后照样失败，断言没有被放宽。
+     */
+    private fun writeWhenReady(tag: String, value: String) {
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            runCatching {
+                composeRule.onNodeWithTag(tag, useUnmergedTree = true).performScrollTo().performTextReplacement(value)
+            }.isSuccess
         }
     }
 

@@ -7,6 +7,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.attention.domain.ScheduleFrequency
 import com.attention.workspace.state.AgendaRecurrenceDraft
+import com.attention.workspace.state.AgendaBackfillDraft
 import com.attention.workspace.state.AgendaScheduleDraft
 import java.time.LocalDate
 
@@ -86,6 +87,78 @@ internal class AgendaScheduleForm {
         note = ""
         targetId = null
         error = null
+    }
+}
+
+/** 页面共用的事后补记时长编辑器；分钟部分只接受 5 分钟步进。 */
+internal class AgendaBackfillForm {
+    var hours by mutableStateOf("")
+        private set
+    var minutes by mutableStateOf("")
+        private set
+    var error: String? by mutableStateOf(null)
+        private set
+    private var initialized by mutableStateOf(false)
+
+    fun initialize(defaultMinutes: Int) {
+        if (initialized) return
+        setTotal(defaultMinutes.coerceAtLeast(5))
+        initialized = true
+    }
+
+    fun setPreset(totalMinutes: Int) {
+        setTotal(totalMinutes)
+        error = null
+    }
+
+    fun changeHours(value: String) {
+        hours = value
+        error = null
+    }
+
+    fun changeMinutes(value: String) {
+        minutes = value
+        error = null
+    }
+
+    fun totalMinutes(): Int? {
+        val hourValue = hours.trim().toIntOrNull() ?: return null
+        val minuteValue = minutes.trim().toIntOrNull() ?: return null
+        return (hourValue * 60 + minuteValue).takeIf { it > 0 && minuteValue in 0..55 && minuteValue % 5 == 0 }
+    }
+
+    fun validate(): String? {
+        val hourValue = hours.trim().toIntOrNull()
+        val minuteValue = minutes.trim().toIntOrNull()
+        return when {
+            hourValue == null || hourValue < 0 -> "请输入有效的小时"
+            minuteValue == null || minuteValue !in 0..55 || minuteValue % 5 != 0 -> "分钟必须是 0 到 55 之间的 5 分钟步进"
+            hourValue * 60 + minuteValue < 5 -> "实际投入至少为 5 分钟"
+            else -> null
+        }
+    }
+
+    fun validateAndShowError(): Boolean {
+        error = validate()
+        return error == null
+    }
+
+    fun toDraft(targetId: String?, note: String = ""): AgendaBackfillDraft = AgendaBackfillDraft(
+        durationMinutes = totalMinutes() ?: error("事后补记时长尚未校验"),
+        targetId = targetId,
+        note = note,
+    )
+
+    fun reset() {
+        hours = ""
+        minutes = ""
+        error = null
+        initialized = false
+    }
+
+    private fun setTotal(totalMinutes: Int) {
+        hours = (totalMinutes / 60).toString()
+        minutes = (totalMinutes % 60).toString()
     }
 }
 
@@ -177,6 +250,9 @@ internal class AgendaRecurrenceForm {
 
 @Composable
 internal fun rememberAgendaScheduleForm(): AgendaScheduleForm = remember { AgendaScheduleForm() }
+
+@Composable
+internal fun rememberAgendaBackfillForm(): AgendaBackfillForm = remember { AgendaBackfillForm() }
 
 @Composable
 internal fun rememberAgendaRecurrenceForm(): AgendaRecurrenceForm = remember { AgendaRecurrenceForm() }

@@ -31,6 +31,84 @@ fun AttentionState.agendaEntries(planningDate: LocalDate? = null): List<Schedule
     )
     .toList()
 
+/**
+ * 这条日程条目有没有具体开始时间。
+ *
+ * 有开始时间的日程落在时间轴上按开始/结束时间排列；没有的日程仍然属于这一天，
+ * 但它没有时刻可排，因此进入独立的「未安排时间」区域，而不是被排到时间轴末尾假装有位置。
+ */
+fun ScheduleEntry.hasStartTime(): Boolean = startMinute != null
+
+/**
+ * 一个规划日上的时间轴分组。
+ *
+ * [timed] 是有具体开始时间的日程，按开始时间、结束时间与稳定 id 排列，正在计时的那条固定在最前；
+ * [unscheduled] 是这一天里没有具体时间的日程。
+ */
+data class AgendaTimeline(
+    val timed: List<ScheduleEntry>,
+    val unscheduled: List<ScheduleEntry>,
+)
+
+/** 所有日期视图下的一个规划日分组，它自己带这一天的时间轴。 */
+data class AgendaDayTimeline(
+    val planningDate: String,
+    val timeline: AgendaTimeline,
+)
+
+/** 正在进行计时的日程条目 id。自由计时没有日程来源，因此为 null，没有条目可以置顶。 */
+fun AttentionState.timingScheduleEntryId(): String? = activeTimer?.scheduleEntryId
+
+/**
+ * 一个规划日的时间轴。正在计时的那条固定在顶部，其余按开始/结束时间排列；
+ * 没有具体开始时间的日程进入 [AgendaTimeline.unscheduled]。
+ *
+ * 置顶跨过「有没有开始时间」这个划分：「未安排时间」里的日程同样可以起计时，
+ * 它一旦正在计时就出现在时间轴第一位，而不是留在未安排时间区域里。
+ * 没有日程来源的自由计时没有条目可置顶，时间轴保持原样。
+ */
+fun AttentionState.agendaTimeline(planningDate: LocalDate): AgendaTimeline {
+    val entries = agendaEntries(planningDate)
+    val runningId = timingScheduleEntryId()
+    fun ScheduleEntry.onTimeline() = hasStartTime() || id == runningId
+    val timed = entries
+        .filter { it.onTimeline() }
+        .sortedWith(
+            // 置顶先于时间排序：正在计时的条目即使时段在后面，也必须是第一行
+            compareByDescending<ScheduleEntry> { it.id == runningId }
+                .thenBy { it.startMinute }
+                .thenBy { it.endMinute ?: Int.MAX_VALUE }
+                .thenBy { it.id },
+        )
+    return AgendaTimeline(timed = timed, unscheduled = entries.filterNot { it.onTimeline() })
+}
+
+/**
+ * 所有日期视图下按规划日分组的时间轴，每个规划日内部各自把正在计时的条目置顶。
+ *
+ * 分组键取自条目自身的规划日字符串，与 [agendaEntries] 的排序口径一致，因此同一次
+ * 数据读取里日期分组与时间轴顺序不会各说各话。
+ */
+fun AttentionState.agendaDayTimelines(): List<AgendaDayTimeline> = schedules
+    .asSequence()
+    .map { it.planningDate }
+    .distinct()
+    .sorted()
+    .map { date -> AgendaDayTimeline(date, agendaTimeline(LocalDate.parse(date))) }
+    .toList()
+
+/**
+ * 这条日程条目自己的计划时长是否超出这一天的每日容量。
+ *
+ * 口径与 [capacitySummary] 一致：正数预计时长优先，否则回退到完整有效的时间段。
+ * 每日容量只是可解释的提示，因此这个判定不会拦住保存日程或保存实际投入。
+ * 未设置每日容量时没有超载可言。
+ */
+fun AttentionState.exceedsDailyCapacity(entry: ScheduleEntry): Boolean {
+    val capacity = settings.dailyCapacityMinutes ?: return false
+    return (entry.plannedMinutes() ?: 0) > capacity
+}
+
 fun AttentionState.targetChildren(parentId: String?, onDate: LocalDate? = null): List<Target> = targets
     .filter { target ->
         !target.archived && (onDate?.let { parentAt(target.id, it) == parentId } ?: (target.parentId == parentId))
@@ -201,15 +279,13 @@ fun AttentionState.capacitySummary(date: String): CapacitySummary {
 }
 
 /**
- * Returns the minutes reserved by one saved schedule entry.
+ * 计划时长：用户为这条日程承诺的分钟数，没有承诺时返回 null。
  *
- * A positive estimate is the user's planning value and therefore takes
- * precedence over the optional time range. Invalid imported estimates fall
- * back to a valid complete range, while a partial or invalid range contributes
- * zero minutes. This keeps malformed imported entries from reducing a day's
- * used capacity below zero.
+ * 口径与每日容量一致：正数预计时长是用户的计划值，优先于可选时间段；无效的
+ * 预计时长回退到完整有效的时间段，部分或无效时间段不算承诺。因此容量计算与
+ * 「计划时长」说的是同一件事，二者不会给出不同的答案。
  */
-private fun ScheduleEntry.capacityMinutes(): Int = estimatedMinutes
+fun ScheduleEntry.plannedMinutes(): Int? = estimatedMinutes
     ?.takeIf { it > 0 }
     ?: if (
         startMinute != null &&
@@ -220,8 +296,16 @@ private fun ScheduleEntry.capacityMinutes(): Int = estimatedMinutes
     ) {
         endMinute - startMinute
     } else {
-        0
+        null
     }
+
+/**
+ * Returns the minutes reserved by one saved schedule entry.
+ *
+ * A schedule entry without a planned duration reserves nothing, which keeps
+ * malformed imported entries from reducing a day's used capacity below zero.
+ */
+private fun ScheduleEntry.capacityMinutes(): Int = plannedMinutes() ?: 0
 
 fun AttentionState.periodStats(date: LocalDate, cadence: GoalCadence): PeriodStats {
     val range = periodRange(date, cadence)
@@ -476,6 +560,13 @@ fun AttentionState.appendOneTimeGoalStage(
     )
 }
 
+/**
+ * 追加一笔实际投入。
+ *
+ * [scheduleEntryId] 非空时这笔记录由某条日程条目产生，这条链接的判定只在 `:domain` 里做。
+ * [backfillRequestId] 只属于事后补记（[TimeEntrySource.MANUAL]）：它标识「这一次提交」，
+ * 重放同一次提交时用它避免重复记账，但绝不用来判定这条日程是否已经有投入。
+ */
 fun AttentionState.addTimeEntry(
     planningDate: String,
     durationMinutes: Int,
@@ -483,13 +574,50 @@ fun AttentionState.addTimeEntry(
     source: TimeEntrySource = TimeEntrySource.MANUAL,
     occurredAtEpochMillis: Long? = null,
     note: String = "",
+    scheduleEntryId: String? = null,
+    backfillRequestId: String? = null,
 ): AttentionState {
     LocalDate.parse(planningDate)
-    require(durationMinutes > 0)
+    require(durationMinutes > 0) { "时间记录时长必须为正数" }
     require(validRecordTarget(targetId)) { "时间记录只能归入未归档目标" }
-    return copy(timeEntries = timeEntries + TimeEntry(planningDate = planningDate, durationMinutes = durationMinutes, targetId = targetId, source = source, occurredAtEpochMillis = occurredAtEpochMillis, note = note))
+    require(scheduleEntryId == null || schedules.any { it.id == scheduleEntryId }) { "时间记录只能关联存在的日程条目" }
+    require(backfillRequestId == null || source == TimeEntrySource.MANUAL) { "只有事后补记带提交意图标识" }
+    require(backfillRequestId == null || backfillRequestId.isNotBlank()) { "提交意图标识不能为空" }
+    return copy(timeEntries = timeEntries + TimeEntry(planningDate = planningDate, durationMinutes = durationMinutes, targetId = targetId, source = source, occurredAtEpochMillis = occurredAtEpochMillis, note = note, scheduleEntryId = scheduleEntryId, backfillRequestId = backfillRequestId))
         .recalculateExperience()
 }
+
+/**
+ * 日程完成确认已经为这条日程条目记下的那笔实际投入。
+ *
+ * 这是「重复确认同一个动作」的幂等判据：同一条日程重复确认仍然是同一个动作，不该产生第二笔。
+ * 它只认 [TimeEntrySource.SCHEDULE_CONFIRMED]——事后补记和计时结算是各自独立的事实，
+ * 既不能让确认跳过记账，也不能反过来被确认吞掉。
+ */
+fun AttentionState.confirmedInvestmentForSchedule(scheduleEntryId: String): TimeEntry? =
+    timeEntries.firstOrNull { it.scheduleEntryId == scheduleEntryId && it.source == TimeEntrySource.SCHEDULE_CONFIRMED }
+
+/** [confirmedInvestmentForSchedule] 的布尔形式。 */
+fun AttentionState.hasConfirmedInvestmentFor(scheduleEntryId: String): Boolean =
+    confirmedInvestmentForSchedule(scheduleEntryId) != null
+
+/**
+ * 这条日程条目已经记录在案的事后补记，按提交先后排列。
+ *
+ * 一条日程可以有多笔补记：用户每显式提交一次都是一个新的事实，都必须被记录下来。
+ * 页面投影用它在日程条目上展示「已补记多久」，而不是用它决定补记入口是否出现。
+ */
+fun AttentionState.backfillsForSchedule(scheduleEntryId: String): List<TimeEntry> =
+    timeEntries.filter { it.scheduleEntryId == scheduleEntryId && it.source == TimeEntrySource.MANUAL }
+
+/**
+ * 这一次事后补记提交是否已经应用过。
+ *
+ * 重放判据：同一次保存（重试、双击、事务重放）沿用同一个提交意图标识，
+ * 因此第二次到达时命中已有记录，不会再记一笔。新的补记用新的标识，必然被记录。
+ */
+fun AttentionState.appliedBackfill(requestId: String): TimeEntry? =
+    timeEntries.firstOrNull { it.backfillRequestId == requestId }
 
 fun AttentionState.editTimeEntry(entryId: String, durationMinutes: Int, targetId: String?, note: String = ""): AttentionState {
     require(durationMinutes > 0 && validRecordTarget(targetId)) { "时间记录只能归入未归档目标" }
@@ -547,12 +675,17 @@ fun AttentionState.toggleScheduleCompleted(entryId: String): AttentionState {
 }
 
 /**
- * Completes a schedule entry and records the actual invested time it claimed. A record created
- * this way is schedule-confirmed: it carries no precise start or end timestamp, because the user
- * confirmed it against the plan rather than measuring it with the timer.
+ * 完成一条日程条目，并记下它声称的那笔实际投入。以这种方式产生的记录来源是
+ * `SCHEDULE_CONFIRMED`：它没有精确起止时刻，因为用户是按计划确认的，不是计时测出来的。
+ *
+ * 同一条日程重复确认是同一个动作，因此幂等：已经有 [TimeEntrySource.SCHEDULE_CONFIRMED]
+ * 记录时只保证完成标记，不再补第二笔，投入经验与达成里程碑因此不会被重复奖励。
+ * 这条判据不认事后补记与计时结算——那是各自独立的事实，不能互相吞掉。
  */
 fun AttentionState.confirmScheduleCompleted(entryId: String, durationMinutes: Int? = null): AttentionState {
     val entry = schedules.firstOrNull { it.id == entryId } ?: throw IllegalArgumentException("日程条目不存在")
+    val completedSchedules = schedules.map { schedule -> if (schedule.id == entryId) schedule.copy(completed = true) else schedule }
+    if (hasConfirmedInvestmentFor(entryId)) return copy(schedules = completedSchedules).recalculateExperience()
     val rangeMinutes = if (entry.startMinute != null && entry.endMinute != null) {
         entry.endMinute - entry.startMinute
     } else {
@@ -565,7 +698,7 @@ fun AttentionState.confirmScheduleCompleted(entryId: String, durationMinutes: In
     require(minutes > 0) { "时间记录时长必须为正数" }
     require(validRecordTarget(entry.targetId)) { "时间记录只能归入未归档目标" }
     return copy(
-        schedules = schedules.map { schedule -> if (schedule.id == entryId) schedule.copy(completed = true) else schedule },
+        schedules = completedSchedules,
         timeEntries = timeEntries + TimeEntry(
             planningDate = entry.planningDate,
             durationMinutes = minutes,
@@ -575,6 +708,50 @@ fun AttentionState.confirmScheduleCompleted(entryId: String, durationMinutes: In
             scheduleEntryId = entryId,
         ),
     ).recalculateExperience()
+}
+
+/** 与这条日程关联的实际投入合计：只统计 `scheduleEntryId` 指向它的时间记录。 */
+fun AttentionState.scheduleInvestedMinutes(entryId: String): Int =
+    timeEntries.filter { it.scheduleEntryId == entryId }.sumOf(TimeEntry::durationMinutes)
+
+/**
+ * 达到计划时长才算完成。没有计划时长的日程不由系统猜测，它保持用户自己的判断。
+ */
+fun AttentionState.isScheduleInvestmentMet(entryId: String): Boolean {
+    val planned = schedules.firstOrNull { it.id == entryId }?.plannedMinutes() ?: return false
+    return scheduleInvestedMinutes(entryId) >= planned
+}
+
+/**
+ * 把已达标且仍未完成的日程标记完成。
+ *
+ * 这是幂等的：已经完成的日程不再变化，并且不新增任何时间记录——完成状态只是
+ * 对既有实际投入的读数，投入来源与它结算时写入的来源保持一致。
+ */
+fun AttentionState.completeScheduleMetByInvestment(entryId: String?): AttentionState {
+    if (entryId == null || !isScheduleInvestmentMet(entryId)) return this
+    if (schedules.first { it.id == entryId }.completed) return this
+    return copy(schedules = schedules.map { entry ->
+        if (entry.id == entryId) entry.copy(completed = true) else entry
+    })
+}
+
+/**
+ * 用户在停止计时的结果面板上明确决定「这条做完了」时，把日程标记完成。
+ *
+ * 与 [completeScheduleMetByInvestment] 的区别在于判据：那个由已投入分钟数结算，只在达到
+ * 计划时长时改变状态；这个由用户的决定驱动，因此**不足计划时长也能真完成**。
+ *
+ * 它是幂等的，而且只翻完成位、不新增任何时间记录：那一笔投入已经在停止计时时写下，
+ * 再建第二笔会把它算两遍。重复点同一处不会把它翻回未完成——那是 [toggleScheduleCompleted]
+ * 的语义，两条路径在页面上互斥。
+ */
+fun AttentionState.markScheduleCompleted(entryId: String): AttentionState {
+    require(schedules.any { it.id == entryId }) { "日程条目不存在" }
+    if (schedules.first { it.id == entryId }.completed) return this
+    return copy(schedules = schedules.map { entry ->
+        if (entry.id == entryId) entry.copy(completed = true) else entry
+    })
 }
 
 private fun AttentionState.validateScheduleEntry(entry: ScheduleEntry) {

@@ -15,10 +15,12 @@ import androidx.core.content.ContextCompat
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.selectable
@@ -34,7 +36,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -87,12 +88,16 @@ import com.attention.app.statistics.rememberStatisticsSelection
 import com.attention.app.targets.TargetsScreen
 import com.attention.app.targets.rememberTargetsSelection
 import com.attention.workspace.state.AgendaActions
+import com.attention.workspace.state.AgendaOperationFeedback
+import com.attention.workspace.state.AgendaBackfillDraft
 import com.attention.workspace.state.AgendaRecurrenceDraft
 import com.attention.workspace.state.AgendaScheduleDraft
+import com.attention.workspace.state.AGENDA_UNDO_LABEL
 import com.attention.workspace.state.OnboardingActions
 import com.attention.workspace.state.SettingsActions
 import com.attention.workspace.state.StatisticsActions
 import com.attention.workspace.state.TargetsActions
+import com.attention.workspace.state.agendaFeedbackMessage
 import com.attention.workspace.state.agendaScreenState
 import com.attention.workspace.state.onboardingScreenState
 import com.attention.workspace.state.settingsScreenState
@@ -107,6 +112,7 @@ import com.attention.domain.LaunchDestination
 import com.attention.domain.Migration
 import com.attention.domain.newId
 import com.attention.domain.ScheduleEntry
+import com.attention.domain.ScheduleBackfill
 import com.attention.domain.StoredSettings
 import com.attention.domain.TimeEntry
 import com.attention.domain.asAgendaEntry
@@ -122,6 +128,23 @@ import java.time.LocalDate
 import java.time.ZoneId
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+
+/**
+ * 组合根交给日程页的两个加载事实。
+ *
+ * 「还在读」与「读失败」都由组合根判定（ADR-0005 第 1 节）：页面拿到的领域状态在读上来之前
+ * 是一份空的默认值，它自己分不出「用户真的没有数据」与「还没读到」，因此页面不去猜。
+ * 读取失败优先于加载中：失败时页面给的是带「重试」的错误状态，而不是一直转骨架。
+ */
+internal data class AgendaLoadFacts(
+    val loading: Boolean,
+    val loadError: String?,
+)
+
+internal fun agendaLoadFacts(stateLoaded: Boolean, loadError: String?): AgendaLoadFacts = AgendaLoadFacts(
+    loading = !stateLoaded && loadError == null,
+    loadError = loadError,
+)
 
 /**
  * 设置页的 actions adapter，在组合根一侧组装：页面发出 intent，这里落到 ViewModel、
@@ -175,21 +198,53 @@ private class SettingsActionsAdapter(
 
     override fun close() = onClose()
 
-    // 重新打开引导：组合根负责把独立的全屏引导举到工作区之上，页面只发出这一条意图。
+    // 重新打开首次设置：组合根切到独立设置页，页面只发出这一条意图。
     override fun openOnboarding() = onOpenOnboarding()
 }
 
 /**
  * 首次使用引导的 actions adapter，在组合根一侧组装。
  *
- * 引导只有一个落地：更新引导状态（`SettingsSnapshot.onboardingCompleted`），并把用户送到
- * 当前规划日的日程。它**不**创建目标、日程、设置或时间记录——adapter 里除了
- * `viewModel.finishOnboarding()` 之外没有任何写业务数据的调用，这正是本票与旧引导卡片的区别。
+ * 每个写入动作都只在页面确认对应步骤后落地；跳过当前步骤只改变页面索引，
+ * `completeOnboarding()` 再更新引导状态并把用户送回当前规划日的日程页。
  */
 private class OnboardingActionsAdapter(
     private val viewModel: AttentionViewModel,
     private val onCompleted: () -> Unit,
 ) : OnboardingActions {
+    override fun savePlanningDaySettings(boundaryMinutes: Int, weekStartDay: Int, dailyCapacityMinutes: Int?) {
+        viewModel.setSettings(
+            StoredSettings(
+                planningDayBoundaryMinutes = boundaryMinutes,
+                weekStartDay = weekStartDay,
+                dailyCapacityMinutes = dailyCapacityMinutes,
+            ),
+        )
+    }
+
+    override fun selectWeekStartDay(day: Int) {
+        viewModel.setWeekStart(day)
+    }
+
+    override fun addFirstTarget(title: String) {
+        viewModel.addTarget(title)
+    }
+
+    override fun addFirstSchedule(draft: AgendaScheduleDraft) {
+        viewModel.saveSchedule(
+            ScheduleEntry(
+                planningDate = draft.planningDate,
+                title = draft.title,
+                startMinute = draft.startMinute,
+                endMinute = draft.endMinute,
+                estimatedMinutes = draft.estimatedMinutes,
+                note = draft.note,
+                targetId = draft.targetId,
+                reminderEpochMillis = null,
+            ),
+        )
+    }
+
     override fun completeOnboarding() {
         viewModel.finishOnboarding()
         onCompleted()
@@ -208,10 +263,33 @@ private class AgendaActionsAdapter(
     private val currentPlanningDay: () -> LocalDate,
     private val zone: ZoneId,
     private val onStartTimerFromEntry: (ScheduleEntry) -> Unit,
+    private val onStartFreeTimer: (String?) -> Unit,
     private val onRequestReminderPermission: () -> Unit,
     private val onStopTimer: () -> Unit,
+    private val onRecoverTimerFromNow: () -> Unit,
     private val onTimeRecordDeleted: (TimeEntry) -> Unit,
+    private val onOpenSettings: () -> Unit,
+    /**
+     * 短时成功确认的出口。
+     *
+     * 成功提示属于组合根的反馈宿主（ADR-0005 第 1 节）：页面只发 intent，这里把它交给
+     * 宿主展示，因此页面里没有 Toast，也没有第二套反馈方式。
+     */
+    private val onFeedback: (AgendaOperationFeedback) -> Unit,
 ) : AgendaActions {
+    private fun scheduleEntryFrom(draft: AgendaScheduleDraft, date: LocalDate): ScheduleEntry = ScheduleEntry(
+        planningDate = draft.planningDate,
+        title = draft.title,
+        startMinute = draft.startMinute,
+        endMinute = draft.endMinute,
+        estimatedMinutes = draft.estimatedMinutes,
+        note = draft.note,
+        targetId = draft.targetId,
+        reminderEpochMillis = draft.reminderMinuteOfDay?.let { minute ->
+            reminderEpochMillis(date, minute, zone)
+        },
+    )
+
     override fun selectPlanningDate(date: LocalDate?) {
         // 点击那一刻的规划日要一起交进去：范围高亮按它判定，之后跨过规划日界线也不会丢。
         selection.selectDate(date, currentPlanningDay())
@@ -227,48 +305,109 @@ private class AgendaActionsAdapter(
 
     override fun addSchedule(draft: AgendaScheduleDraft) {
         val date = LocalDate.parse(draft.planningDate)
-        viewModel.addSchedule(
-            ScheduleEntry(
-                planningDate = draft.planningDate,
-                title = draft.title,
-                startMinute = draft.startMinute,
-                endMinute = draft.endMinute,
-                estimatedMinutes = draft.estimatedMinutes,
-                note = draft.note,
-                targetId = draft.targetId,
-                reminderEpochMillis = draft.reminderMinuteOfDay?.let { minute ->
-                    reminderEpochMillis(date, minute, zone)
-                },
+        viewModel.saveSchedule(scheduleEntryFrom(draft, date))
+        onFeedback(AgendaOperationFeedback.SCHEDULE_ADDED)
+    }
+
+    override fun addScheduleWithBackfill(draft: AgendaScheduleDraft, backfill: AgendaBackfillDraft) {
+        val date = LocalDate.parse(draft.planningDate)
+        viewModel.saveSchedule(
+            scheduleEntryFrom(draft, date),
+            ScheduleBackfill(
+                durationMinutes = backfill.durationMinutes,
+                targetId = backfill.targetId,
+                note = backfill.note,
             ),
         )
+        onFeedback(AgendaOperationFeedback.TIME_RECORDED)
     }
 
     override fun updateSchedule(entry: ScheduleEntry, reminderMinuteOfDay: Int?) {
-        viewModel.updateSchedule(
-            entry.copy(
-                reminderEpochMillis = reminderMinuteOfDay?.let { minute ->
-                    reminderEpochMillis(LocalDate.parse(entry.planningDate), minute, zone)
-                },
+        viewModel.saveSchedule(entry.copy(reminderEpochMillis = reminderMinuteOfDay?.let { minute ->
+            reminderEpochMillis(LocalDate.parse(entry.planningDate), minute, zone)
+        }))
+        onFeedback(AgendaOperationFeedback.SCHEDULE_UPDATED)
+    }
+
+    override fun updateScheduleWithBackfill(
+        entry: ScheduleEntry,
+        reminderMinuteOfDay: Int?,
+        backfill: AgendaBackfillDraft,
+    ) {
+        viewModel.saveSchedule(
+            entry.copy(reminderEpochMillis = reminderMinuteOfDay?.let { minute ->
+                reminderEpochMillis(LocalDate.parse(entry.planningDate), minute, zone)
+            }),
+            ScheduleBackfill(
+                durationMinutes = backfill.durationMinutes,
+                targetId = backfill.targetId,
+                note = backfill.note,
+                dedupeExistingSchedule = true,
             ),
         )
+        onFeedback(AgendaOperationFeedback.TIME_RECORDED)
     }
 
     override fun confirmScheduleCompleted(entryId: String) {
         viewModel.confirmScheduleCompleted(entryId)
+        onFeedback(AgendaOperationFeedback.SCHEDULE_COMPLETED)
     }
 
     override fun toggleScheduleCompleted(entryId: String) {
         viewModel.toggleScheduleCompleted(entryId)
+        // 切换完成与取消完成走同一条命令，确认因此只说「完成状态已更新」，
+        // 不去猜这一次到底是切到了哪一侧——结论由时间轴上的那一行自己说。
+        onFeedback(AgendaOperationFeedback.SCHEDULE_COMPLETION_TOGGLED)
+    }
+
+    // 结果面板上的「标记为完成」与行上的完成是同一件事：走同一条既有完成路径，
+    // 完成标记与投入经验、里程碑仍由领域计算，不新造命令。
+    override fun markStoppedScheduleCompleted(entryId: String) {
+        viewModel.markStoppedScheduleCompleted(entryId)
+        viewModel.clearStoppedEntryIds()
+    }
+
+    // 「结束并保留未完成」只是关闭这一次结果面板：投入已经记下，完成状态保持原样。
+    override fun dismissStopResult() {
+        viewModel.clearStoppedEntryIds()
     }
 
     // 条目一起带出，因此产出的时间记录保留同一个来源关联。
-    override fun startTimerFromEntry(entry: ScheduleEntry) = onStartTimerFromEntry(entry)
+    override fun startTimerFromEntry(entry: ScheduleEntry) {
+        onStartTimerFromEntry(entry)
+        onFeedback(AgendaOperationFeedback.TIMER_STARTED)
+    }
+
+    // 自由计时没有日程来源：scheduleEntryId 必须是 null，不能拿某条日程冒充来源。
+    // 平台动作（前台计时服务、恢复提示、通知权限提示）与从条目起计时完全一致。
+    override fun startFreeTimer(targetId: String?) = onStartFreeTimer(targetId)
 
     // 运行中的计时只能从日程页停掉：平台动作（停前台计时服务、撤掉恢复提示）仍归组合根。
-    override fun stopRunningTimer() = onStopTimer()
+    override fun stopRunningTimer() {
+        onStopTimer()
+        onFeedback(AgendaOperationFeedback.TIMER_STOPPED)
+    }
+
+    // 暂停、恢复、切换与从此刻继续都只是领域命令：通知栏是持久化状态的投影，
+    // 因此这些动作不需要页面自己去碰前台服务（ADR-0005 第 4 节）。
+    override fun pauseRunningTimer() {
+        viewModel.pauseTimer()
+    }
+
+    override fun resumeRunningTimer() {
+        viewModel.resumeTimer()
+    }
+
+    // 从此刻继续意味着用户已经对上一次被打断的计时做了决定，恢复提示要一并撤掉。
+    override fun recoverRunningTimerFromNow() = onRecoverTimerFromNow()
+
+    override fun switchRunningTimerTarget(targetId: String?) {
+        viewModel.switchTimer(targetId)
+    }
 
     override fun editTime(entryId: String, minutes: Int, targetId: String?, note: String) {
         viewModel.editTime(entryId, minutes, targetId, note)
+        onFeedback(AgendaOperationFeedback.TIME_RECORDED)
     }
 
     // 删除的可撤销提示由组合根展示：撤销要用回被删掉的那条记录本身。
@@ -279,13 +418,24 @@ private class AgendaActionsAdapter(
     override fun addRecurrenceAndMaterialize(draft: AgendaRecurrenceDraft) {
         val rule = draft.toRecurrenceRule()
         viewModel.addRecurrenceAndMaterialize(rule, LocalDate.parse(rule.startDate).plusDays(30))
+        onFeedback(AgendaOperationFeedback.RECURRENCE_ADDED)
     }
 
     override fun stopRecurrence(ruleId: String) {
         viewModel.stopRecurrence(ruleId)
+        onFeedback(AgendaOperationFeedback.RECURRENCE_STOPPED)
     }
 
     override fun requestReminderPermission() = onRequestReminderPermission()
+
+    // 重试就是重新读一次本地数据：重新订阅发生在组合根持有的仓储上，页面不碰持久化。
+    override fun retryLoad() {
+        viewModel.retryLoad()
+        onFeedback(AgendaOperationFeedback.LOAD_RETRYING)
+    }
+
+    // 完整设置住在统计页底部的「设置与数据」；工作台只发出这一条意图，跳转本身由组合根完成。
+    override fun openSettings() = onOpenSettings()
 }
 
 private class WorkspaceViewModelFactory(
@@ -496,11 +646,11 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     // 用户在外部打开之后亲手点别的入口，onSelect 会把它置为已确定，那次切换照常记录。
     var destinationSettled by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
-    // 引导是否被用户重新打开：设置页的「重新打开引导」把它举起来。
+    // 引导是否被用户重新打开：设置页的「重新打开首次设置」切到独立设置页。
     // 自动出现的那一次由持久化的引导状态决定，不由这个变量决定。
     var onboardingRequested by remember { mutableStateOf(false) }
     // 引导状态直接读设置快照，并允许「还没读到」这个第三种状态：
-    // 未读到时不显示引导，因此已完成引导的老用户不会先看到一帧全屏引导。
+    // 未读到时不显示引导，因此已完成引导的老用户不会先看到一帧首次设置页。
     val persistedSettings by remember { context.createSettingsStore().settings }
         .collectAsStateWithLifecycle(initialValue = null)
     var persistedSettingsLoaded by remember { mutableStateOf(false) }
@@ -706,6 +856,24 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         )
     }
 
+    // 自由计时：不带日程来源，只带一个计划（或未归属活动）。平台动作与上面同一条路径，
+    // 差别只在产出的时间记录没有 scheduleEntryId。
+    fun startFreeTimer(targetId: String?) {
+        viewModel.startTimer(
+            targetId = targetId,
+            onSuccess = {
+                AttentionBootReceiver.cancelRecoveryPrompt(context)
+                if (!notificationsEnabled(context)) {
+                    feedbackScope.launch {
+                        feedback.showMessage("通知权限未开启，计时仍会保存；通知栏控制不可用。")
+                    }
+                }
+                ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
+            },
+            scheduleEntryId = null,
+        )
+    }
+
     val currentWeekStartDay by androidx.compose.runtime.rememberUpdatedState(state.settings.weekStartDay)
     // 日程页的选中范围由页面 module 提供类型与迁移语义，组合根只持有一个实例来喂投影。
     // 这一个实例挂在组合根上、活过页面切换，因此会话内的日期筛选被保留；
@@ -718,6 +886,10 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     val externalPlanningDate = externalSchedulePlanningDate(state, openScheduleDate, openScheduleId)
     val agendaSelection = rememberAgendaSelection(externalPlanningDate)
     val agendaPlanningDay = state.planningDate(injectedNow, injectedZone)
+    val stoppedEntryIds by viewModel.stoppedEntryIds.collectAsStateWithLifecycle()
+    // 「还在读」与「读失败」都是组合根掌握的事实：页面不调仓储，也不自己判断空白是不是加载中。
+    val loadError by viewModel.loadError.collectAsStateWithLifecycle()
+    val agendaLoad = agendaLoadFacts(stateLoaded, loadError)
     val agendaState = agendaScreenState(
         state = state,
         now = injectedNow,
@@ -726,6 +898,11 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         // 范围高亮来自选择状态自己记住的显式范围，跨规划日界线也不会丢。
         selectedScope = agendaSelection.selectedRangeScope(agendaPlanningDay),
         openScheduleId = openScheduleId,
+        // 「刚刚停止的那一笔」由组合根交出：停止命令成功后 ViewModel 记下这次产出的记录 id，
+        // 用户消费结果时清空。页面因此不缓存任何历史，也不会反复展示陈旧结果。
+        stoppedEntryIds = stoppedEntryIds,
+        loading = agendaLoad.loading,
+        loadError = agendaLoad.loadError,
     )
 
     // 统计页的周期选择由统计页 module 提供类型与迁移语义，组合根只持有一个实例来喂投影。
@@ -790,7 +967,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                 }
             },
             onRequestRestoreImportBackup = { restoreImportPromptVisible = true },
-            // 重新打开引导：先把设置页让出去，再把全屏引导举起来。
+            // 重新打开首次设置：先把设置页让出去，再显示独立首次设置页。
             onOpenOnboarding = {
                 settingsOpen = false
                 onboardingRequested = true
@@ -830,6 +1007,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             currentPlanningDay = { currentAgendaPlanningDay },
             zone = injectedZone,
             onStartTimerFromEntry = ::startTimerFromSchedule,
+            onStartFreeTimer = ::startFreeTimer,
             onRequestReminderPermission = { requestReminderPermission(context) },
             onStopTimer = {
                 viewModel.stopTimer(onSuccess = {
@@ -837,22 +1015,42 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                     context.stopService(AttentionTimerService.intent(context))
                 })
             },
+            onRecoverTimerFromNow = {
+                viewModel.recoverTimer(onSuccess = {
+                    AttentionBootReceiver.cancelRecoveryPrompt(context)
+                })
+            },
             onTimeRecordDeleted = { removed ->
                 feedbackScope.launch {
                     feedback.showUndoableMessage(
-                        message = "已删除这条实际投入，它不再计入目标进度与统计。",
+                        message = agendaFeedbackMessage(AgendaOperationFeedback.TIME_DELETED),
+                        undoLabel = AGENDA_UNDO_LABEL,
                         onUndo = { viewModel.restoreTimeEntry(removed) },
                     )
                 }
             },
+            // 容量摘要的完整设置入口：设置仍然住在统计页底部的「设置与数据」，
+            // 因此这里先把顶级页面让给统计，再把设置页举起来，返回时自然回到统计页。
+            onOpenSettings = {
+                destinationChosen = true
+                destinationSettled = true
+                destination = LaunchDestination.STATISTICS
+                settingsOpen = true
+            },
+            // 成功确认走同一条反馈宿主通路：与删除撤销共用一个 Snackbar 出口，
+            // 因此整个工作区只有一套短时提示方式。
+            onFeedback = { operation ->
+                feedbackScope.launch { feedback.showMessage(agendaFeedbackMessage(operation)) }
+            },
         )
     }
 
-    // 引导是独立全屏的：它盖在整个工作区之上，因此顶栏、底部导航与页面内容都不渲染。
-    // 自动出现的那一次只由持久化的引导状态决定（没读到设置之前不显示），
-    // 从设置页重新打开的那一次由 [onboardingRequested] 决定；两种来源离开后都不再自动出现。
+    // 首次设置是独立页面：首次启动可跳过，之后从设置页再次打开。
     val onboardingVisible = onboardingRequested || persistedSettings?.onboardingCompleted == false
-    val onboardingState = onboardingScreenState()
+    val onboardingState = onboardingScreenState(
+        planningDate = agendaPlanningDay.toString(),
+        settings = state.settings,
+    )
     val onboardingActions: OnboardingActions = remember(viewModel) {
         OnboardingActionsAdapter(
             viewModel = viewModel,
@@ -868,45 +1066,52 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         )
     }
 
-    if (onboardingVisible) {
-        OnboardingScreen(state = onboardingState, actions = onboardingActions)
-    }
-    // 引导出现时工作区整体不渲染：顶栏、底部导航与页面内容都让位给这层独立全屏引导。
-    if (!onboardingVisible) {
-        Scaffold(
-        topBar = { TopAppBar(title = { Text("Attention") }) },
+    Scaffold(
+        // Prototype A uses the compact workbench itself as the page header. The generic
+        // Material top bar added a large empty brand band above the date controls.
         bottomBar = {
-            // 主工作区收敛为日程、目标树、统计三个入口：今天/明天/所有日期是日程页里的范围，
-            // 设置不再是顶级入口——它从统计页底部的「设置与数据」进入，返回时回到统计页。
-            // 每一项同时有 Material 图标与中文标签，选中态带可访问语义。
-            Row(Modifier.fillMaxWidth().padding(6.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-                listOf(
-                    Triple(LaunchDestination.AGENDA, "日程", Icons.Filled.Event),
-                    Triple(LaunchDestination.TARGETS, "目标树", Icons.Filled.AccountTree),
-                    Triple(LaunchDestination.STATISTICS, "统计", Icons.Filled.Insights),
-                ).forEach { (item, label, icon) ->
-                    WorkspaceNavigationItem(
-                        label = label,
-                        icon = icon,
-                        // 设置页挂在统计页底下，因此停留在设置页时统计仍然处于选中态。
-                        selected = destination.asAgendaEntry() == item,
-                        onSelect = {
-                            // 从设置页切回主工作区：先离开设置，再换顶级页面。
-                            settingsOpen = false
-                            destinationChosen = true
-                            // 用户亲手点的落点一定是真实的：这一次的写回不必再等状态纠正。
-                            destinationSettled = true
-                            destination = item
-                        },
-                        modifier = Modifier.testTag("nav-${item.name.lowercase()}"),
-                    )
+            if (!onboardingVisible) {
+                // 主工作区收敛为日程、目标树、统计三个入口：今天/明天/所有日期是日程页里的范围，
+                // 设置不再是顶级入口——它从统计页底部的「设置与数据」进入，返回时回到统计页。
+                // 每一项同时有 Material 图标与中文标签，选中态带可访问语义。
+                // 活动是 edge-to-edge 的，而这里是自定义底栏（不是自带 insets 的 NavigationBar）：
+                // 不自己垫出系统导航栏高度，三项就会压在系统手势条下面。
+                Row(
+                    Modifier.fillMaxWidth().navigationBarsPadding().padding(6.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                ) {
+                    listOf(
+                        Triple(LaunchDestination.AGENDA, "日程", Icons.Filled.Event),
+                        Triple(LaunchDestination.TARGETS, "目标树", Icons.Filled.AccountTree),
+                        Triple(LaunchDestination.STATISTICS, "统计", Icons.Filled.Insights),
+                    ).forEach { (item, label, icon) ->
+                        WorkspaceNavigationItem(
+                            label = label,
+                            icon = icon,
+                            // 设置页挂在统计页底下，因此停留在设置页时统计仍然处于选中态。
+                            selected = destination.asAgendaEntry() == item,
+                            onSelect = {
+                                // 从设置页切回主工作区：先离开设置，再换顶级页面。
+                                settingsOpen = false
+                                destinationChosen = true
+                                // 用户亲手点的落点一定是真实的：这一次的写回不必再等状态纠正。
+                                destinationSettled = true
+                                destination = item
+                            },
+                            modifier = Modifier.testTag("nav-${item.name.lowercase()}"),
+                        )
+                    }
                 }
             }
         },
     // 短时提示宿主挂在 Scaffold 上，因此五个页面共用同一个出口，流程不被打断。
         snackbarHost = { AttentionSnackbarHost(state = feedback) },
     ) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize()) {
+        if (onboardingVisible) {
+            Box(Modifier.padding(padding).fillMaxSize()) {
+                OnboardingScreen(state = onboardingState, actions = onboardingActions)
+            }
+        } else Column(Modifier.padding(padding).fillMaxSize()) {
             error?.let {
                 AttentionInlineError(
                     message = it,
@@ -954,7 +1159,6 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             scheduleExportMessage?.let { Text(it, modifier = Modifier.padding(horizontal = 16.dp)) }
             csvBundleMessage?.let { Text(it, modifier = Modifier.padding(horizontal = 16.dp)) }
         }
-    }
     }
     pendingImport?.let { plan ->
         AlertDialog(

@@ -1,5 +1,6 @@
 package com.attention.app.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.heightIn
@@ -12,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.attention.app.ui.theme.attentionTokens
 
 /**
  * 触控目标的最小边长：Material 与 Android 无障碍基线都是 48dp。
@@ -41,11 +43,16 @@ fun AttentionButton(
     contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
     content: @Composable RowScope.() -> Unit,
 ) {
+    val tokens = attentionTokens()
     Button(
         onClick = onClick,
         modifier = modifier.attentionTouchTarget(),
         enabled = enabled,
         shape = shape,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = tokens.brand.timingInProgress.accent,
+            contentColor = tokens.colorScheme.onPrimary,
+        ),
         contentPadding = contentPadding,
         content = content,
     )
@@ -63,11 +70,16 @@ fun AttentionOutlinedButton(
     contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
     content: @Composable RowScope.() -> Unit,
 ) {
+    val tokens = attentionTokens()
     OutlinedButton(
         onClick = onClick,
         modifier = modifier.attentionTouchTarget(),
         enabled = enabled,
         shape = shape,
+        colors = ButtonDefaults.outlinedButtonColors(
+            contentColor = tokens.brand.timingInProgress.accent,
+        ),
+        border = BorderStroke(1.dp, tokens.colorScheme.outlineVariant),
         contentPadding = contentPadding,
         content = content,
     )
@@ -85,11 +97,15 @@ fun AttentionTextButton(
     contentPadding: PaddingValues = ButtonDefaults.TextButtonContentPadding,
     content: @Composable RowScope.() -> Unit,
 ) {
+    val tokens = attentionTokens()
     TextButton(
         onClick = onClick,
         modifier = modifier.attentionTouchTarget(),
         enabled = enabled,
         shape = shape,
+        colors = ButtonDefaults.textButtonColors(
+            contentColor = tokens.brand.timingInProgress.accent,
+        ),
         contentPadding = contentPadding,
         content = content,
     )

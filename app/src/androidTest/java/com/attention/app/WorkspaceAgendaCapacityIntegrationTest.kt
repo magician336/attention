@@ -43,7 +43,7 @@ class WorkspaceAgendaCapacityIntegrationTest {
 
         composeRule.onNodeWithTag("agenda-date-menu", useUnmergedTree = true).performScrollTo().performClick()
         composeRule.onNodeWithTag("agenda-date-2026-10-08", useUnmergedTree = true).performClick()
-        composeRule.onNodeWithTag("agenda-capacity-summary", useUnmergedTree = true)
+        composeRule.onNodeWithTag("agenda-open-settings", useUnmergedTree = true)
             .performScrollTo()
             .assert(hasText("已安排 45 / 60 分钟", substring = true))
 
@@ -53,7 +53,7 @@ class WorkspaceAgendaCapacityIntegrationTest {
                 .setSnapshot(SettingsSnapshot(dailyCapacityMinutes = null, onboardingCompleted = true))
         }
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("agenda-capacity-summary", useUnmergedTree = true)
+        composeRule.onNodeWithTag("agenda-open-settings", useUnmergedTree = true)
             .performScrollTo()
             .assert(hasText("已安排 45 分钟", substring = true))
             .assert(hasText("未设置", substring = true))
@@ -69,7 +69,8 @@ class WorkspaceAgendaCapacityIntegrationTest {
         // 「所有日期」现在是日程页里的一个日期范围，不再是底部的顶级入口
         composeRule.onNodeWithTag("nav-agenda", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-date-menu", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
     }
 

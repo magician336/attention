@@ -73,6 +73,14 @@ data class TimeEntry(
     val occurredAtEpochMillis: Long? = null,
     val note: String = "",
     val scheduleEntryId: String? = null,
+    /**
+     * 事后补记这一次提交意图的标识。
+     *
+     * 只有 [TimeEntrySource.MANUAL] 的事后补记带它；它回答的是「这一次提交是否已经落库」，
+     * 而不是「这条日程是否已经有投入」。同一次保存重试、双击或事务重放时沿用同一个值，
+     * 因此重放只会命中已有记录而不会再记一笔；下一次新的补记则是新的值，必然被记录。
+     */
+    val backfillRequestId: String? = null,
 )
 
 @Serializable
@@ -210,7 +218,43 @@ data class TargetDeletionImpact(
     val activeTimerCount: Int,
 )
 
-fun newId(): String = UUID.randomUUID().toString()
+/**
+ * 标识用的逻辑时钟。它只在 [newId] 内部被读写，不参与任何领域规则。
+ *
+ * 取「本次时刻」与「上一次加一」中的较大者，于是时钟回拨与同毫秒并发都被吸收：
+ * 回拨时逻辑时钟停在原处继续加一，并发时靠 CAS 保证只有一条线程前进一步。
+ * 重启后它归零，而系统时刻已经远大于零，所以归零不会与旧 id 撞车。
+ */
+private val idLogicalClock = java.util.concurrent.atomic.AtomicLong(0L)
+
+private const val ID_CLOCK_WIDTH = 9
+private const val ID_RANDOM_LENGTH = 10
+
+/**
+ * 生成一个全局唯一、并且字典序与创建顺序一致的标识。
+ *
+ * 随机 UUID 满足唯一性却不满足顺序：读路径大量用 `ORDER BY ... , id` 收尾，
+ * 而同一规划日里没有精确发生时刻的时间记录——事后补记与日程完成确认——
+ * `occurredAtEpochMillis` 为 null，会在排序里并列，于是先后落到 id 上。
+ * id 随机就意味着同一份数据每次读出来的顺序都可能不同，重启之后还会换位置，
+ * 用户看到的时间记录列表会自己跳动。
+ *
+ * 标识由「定长 base36 的逻辑时钟」加一段随机尾巴拼成：定长保证字典序就是创建顺序，
+ * 尾段保证同一微秒内也不会重复。
+ *
+ * [nowMillis] 可注入，因此测试可以固定标识的时间前缀。
+ */
+fun newId(nowMillis: Long = System.currentTimeMillis()): String {
+    while (true) {
+        val previous = idLogicalClock.get()
+        val next = if (nowMillis > previous) nowMillis else previous + 1
+        if (idLogicalClock.compareAndSet(previous, next)) {
+            val clock = next.toString(36).padStart(ID_CLOCK_WIDTH, '0')
+            val random = UUID.randomUUID().toString().replace("-", "").take(ID_RANDOM_LENGTH)
+            return clock + random
+        }
+    }
+}
 
 data class GoalProgress(
     val targetMinutes: Int,

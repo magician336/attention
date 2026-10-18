@@ -7,12 +7,14 @@ import com.attention.domain.ScheduleEntry
 import com.attention.domain.ScheduleFrequency
 import com.attention.domain.StoredSettings
 import com.attention.domain.Target
+import com.attention.domain.TimerSegment
 import com.attention.domain.occurrences
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -37,6 +39,9 @@ class AgendaScreenStateTest {
         selectedDate: LocalDate? = null,
         selectedScope: AgendaRangeScope? = null,
         openScheduleId: String? = null,
+        stoppedEntryIds: List<String>? = null,
+        loading: Boolean = false,
+        loadError: String? = null,
     ) = agendaScreenState(
         state = state,
         now = instant,
@@ -44,7 +49,43 @@ class AgendaScreenStateTest {
         selectedDate = selectedDate,
         selectedScope = selectedScope,
         openScheduleId = openScheduleId,
+        stoppedEntryIds = stoppedEntryIds,
+        loading = loading,
+        loadError = loadError,
     )
+
+    @Test
+    fun the_loading_and_read_failure_facts_are_injected_not_guessed_by_the_page() {
+        // 读到之前领域状态是一份空的默认值，页面自己分不出「没有数据」与「还没读到」；
+        // 因此这两个事实由组合根注入，投影原样带给页面。
+        val loadingScreenState = project(
+            state = stateWith(ScheduleEntry("a", "2026-03-05", "当日条目")),
+            selectedDate = today,
+            loading = true,
+        )
+
+        assertTrue("正在读取本地数据必须被投影成加载事实", loadingScreenState.loading)
+        assertNull("加载中不是读取失败", loadingScreenState.loadError)
+        // 条目仍然照常投影：加载骨架之后接管的正是这份数据，页面不需要重新请求。
+        assertEquals(listOf("当日条目"), loadingScreenState.unscheduledRows.map { it.title })
+
+        val failedScreenState = project(
+            state = stateWith(ScheduleEntry("a", "2026-03-05", "当日条目")),
+            selectedDate = today,
+            loadError = "读取失败",
+        )
+
+        assertFalse("读取失败时页面不该停在加载骨架上", failedScreenState.loading)
+        assertEquals("读取失败说明", "读取失败", failedScreenState.loadError)
+    }
+
+    @Test
+    fun a_loaded_workbench_carries_neither_loading_nor_a_read_failure() {
+        val screenState = project(state = stateWith(ScheduleEntry("a", "2026-03-05", "当日条目")))
+
+        assertFalse("读上来之后不再是加载中", screenState.loading)
+        assertNull("读上来之后没有读取失败", screenState.loadError)
+    }
 
     private fun stateWith(vararg entries: ScheduleEntry, settings: StoredSettings = StoredSettings()) =
         AttentionState(schedules = entries.toList(), settings = settings)
@@ -66,8 +107,12 @@ class AgendaScreenStateTest {
         assertNull("所有日期视图不显示单日容量卡片", screenState.selectedCapacityLabel)
         assertEquals(listOf("2026-03-05", "2026-03-06"), screenState.dateSections.map { it.planningDate })
         assertEquals(
+            emptyList<String>(),
+            screenState.dateSections.first().timelineRows.map { it.entry.id },
+        )
+        assertEquals(
             listOf("a", "c"),
-            screenState.dateSections.first().rows.map { it.entry.id },
+            screenState.dateSections.first().unscheduledRows.map { it.entry.id },
         )
         assertNull("有条目时不显示空态文案", screenState.emptyLabel)
     }
@@ -77,7 +122,7 @@ class AgendaScreenStateTest {
         // 选中规划日时只显示当天的日程条目，容量卡片针对该日
         val screenState = project(
             state = stateWith(
-                ScheduleEntry("a", "2026-03-05", "当日条目", estimatedMinutes = 45),
+                ScheduleEntry("a", "2026-03-05", "当日条目", startMinute = 540, endMinute = 585, estimatedMinutes = 45),
                 ScheduleEntry("b", "2026-03-06", "次日条目", estimatedMinutes = 30),
             ),
             selectedDate = LocalDate.of(2026, 3, 5),
@@ -85,7 +130,7 @@ class AgendaScreenStateTest {
 
         assertEquals("规划日 2026-03-05", screenState.headingLabel)
         assertEquals("筛选：规划日 2026-03-05", screenState.filterLabel)
-        assertEquals(listOf("a"), screenState.selectedRows.map { it.entry.id })
+        assertEquals(listOf("a"), screenState.timelineRows.map { it.entry.id })
         assertTrue(screenState.dateSections.isEmpty())
         assertEquals("已安排 45 分钟（每日容量未设置）", screenState.selectedCapacityLabel)
     }
@@ -179,7 +224,9 @@ class AgendaScreenStateTest {
             screenState.dateSections.map { it.planningDate },
         )
         screenState.dateSections.forEach { section ->
-            assertEquals(1, section.rows.size)
+            // 物化出的条目没有具体时间，因此落在未安排时间，而不是被排到时间轴上
+            assertEquals(0, section.timelineRows.size)
+            assertEquals(1, section.unscheduledRows.size)
         }
         val line = screenState.recurrenceRules.single()
         assertEquals("rule-1", line.ruleId)
@@ -247,7 +294,7 @@ class AgendaScreenStateTest {
             ),
         )
 
-        val row = project(state = state).dateSections.single().rows.single()
+        val row = project(state = state).dateSections.single().timelineRows.single()
 
         assertEquals("写周报", row.title)
         assertEquals(
@@ -268,12 +315,12 @@ class AgendaScreenStateTest {
         // 提醒时间按注入的时区显示：同一毫秒在洛杉矶落在前一天 18:00
         val epoch = com.attention.domain.reminderEpochMillis(LocalDate.of(2026, 3, 5), 9 * 60, zone)
         val state = stateWith(
-            ScheduleEntry("e1", "2026-03-05", "写周报", reminderEpochMillis = epoch),
+            ScheduleEntry("e1", "2026-03-05", "写周报", reminderEpochMillis = epoch, startMinute = 540, endMinute = 600),
         )
 
-        val shanghai = project(state = state, zone = zone).dateSections.single().rows.single()
+        val shanghai = project(state = state, zone = zone).dateSections.single().timelineRows.single()
         val losAngeles = project(state = state, zone = ZoneId.of("America/Los_Angeles"))
-            .dateSections.single().rows.single()
+            .dateSections.single().timelineRows.single()
 
         assertTrue(shanghai.detailLabel.contains(" · 提醒 09:00"))
         assertEquals("17:00", losAngeles.reminderText)
@@ -281,9 +328,9 @@ class AgendaScreenStateTest {
 
     @Test
     fun start_timer_is_enabled_only_when_no_timer_is_running() {
-        val entry = ScheduleEntry("e1", "2026-03-05", "写周报")
+        val entry = ScheduleEntry("e1", "2026-03-05", "写周报", startMinute = 540, endMinute = 600)
 
-        assertTrue(project(state = stateWith(entry)).dateSections.single().rows.single().canStartTimer)
+        assertTrue(project(state = stateWith(entry)).dateSections.single().timelineRows.single().canStartTimer)
     }
 
     @Test
@@ -397,7 +444,7 @@ class AgendaScreenStateTest {
 
         assertTrue(screenState.highlightAddSchedule)
         assertEquals("为明天（2026-03-06）添加日程", screenState.addScheduleHeadingLabel)
-        assertTrue("今天的条目不会被复制到明天", screenState.selectedRows.isEmpty())
+        assertTrue("今天的条目不会被复制到明天", screenState.timelineRows.isEmpty() && screenState.unscheduledRows.isEmpty())
         assertEquals("规划日 2026-03-06 暂无日程条目。", screenState.emptyLabel)
 
         val todayView = project(state = state, selectedDate = today, selectedScope = AgendaRangeScope.TODAY)
@@ -425,6 +472,77 @@ class AgendaScreenStateTest {
         assertFalse(timer?.paused ?: true)
         assertEquals(1, timer?.elapsedMinutes)
         assertNull("没有计时进行时不显示运行中计时", project(state = stateWith()).activeTimer)
+    }
+
+    @Test
+    fun the_elapsed_minutes_come_from_the_injected_now_and_not_from_a_wall_clock() {
+        // 页面不读时钟：已投入只能随组合根注入的那一份 now 增长。
+        val state = stateWith().copy(
+            targets = listOf(Target("t1", title = "写周报")),
+            activeTimer = ActiveTimer(
+                targetId = "t1",
+                startedAtEpochMillis = now.minusSeconds(90).toEpochMilli(),
+                lastPlanningDate = "2026-03-05",
+            ),
+        )
+
+        val atStart = project(state = state, instant = now).activeTimer
+        val later = project(state = state, instant = now.plusSeconds(5 * 60)).activeTimer
+
+        assertEquals(1, atStart?.elapsedMinutes)
+        assertEquals(6, later?.elapsedMinutes)
+    }
+
+    @Test
+    fun a_paused_timer_freezes_the_elapsed_minutes_and_names_the_next_step() {
+        // 暂停不等于已保存：这行文字必须同时说清「还没记入」与「下一步做什么」。
+        val pausedAt = now.minusSeconds(30 * 60)
+        val state = stateWith().copy(
+            targets = listOf(Target("t1", title = "写周报")),
+            activeTimer = ActiveTimer(
+                targetId = "t1",
+                startedAtEpochMillis = pausedAt.toEpochMilli(),
+                accumulatedMillis = 5 * 60_000L,
+                paused = true,
+                lastPlanningDate = "2026-03-05",
+                completedSegments = listOf(
+                    TimerSegment(now.minusSeconds(35 * 60).toEpochMilli(), pausedAt.toEpochMilli()),
+                ),
+            ),
+        )
+
+        val timer = project(state = state, instant = now.plusSeconds(60 * 60)).activeTimer
+
+        assertTrue(timer?.paused ?: false)
+        // 暂停后时钟继续走，已投入仍停在暂停那一刻的 5 分钟。
+        assertEquals(5, timer?.elapsedMinutes)
+        assertEquals("已投入 5 分钟", timer?.elapsedLabel)
+        assertEquals("已暂停", timer?.statusLabel)
+        val hint = timer?.pendingHintLabel
+        assertNotNull("暂停时必须告诉用户下一步", hint)
+        assertTrue("提示要说明这 5 分钟尚未保存：" + hint, hint!!.contains("尚未保存"))
+        assertTrue("提示要给出恢复这条路：" + hint, hint.contains("恢复"))
+        assertTrue("提示要给出结束保存这条路：" + hint, hint.contains("结束并保存"))
+    }
+
+    @Test
+    fun a_running_timer_carries_no_pending_hint_and_its_target_id() {
+        // 运行中不需要「还没保存」提示；目标 id 供「切换计时目标」菜单标出当前目标。
+        val state = stateWith().copy(
+            targets = listOf(Target("t1", title = "写周报")),
+            activeTimer = ActiveTimer(
+                targetId = "t1",
+                startedAtEpochMillis = now.minusSeconds(120).toEpochMilli(),
+                lastPlanningDate = "2026-03-05",
+            ),
+        )
+
+        val timer = project(state = state).activeTimer
+
+        assertEquals("t1", timer?.targetId)
+        assertEquals("计时中", timer?.statusLabel)
+        assertEquals("已投入 2 分钟", timer?.elapsedLabel)
+        assertNull("运行中的计时没有待保存的投入", timer?.pendingHintLabel)
     }
 
     @Test
@@ -457,5 +575,529 @@ class AgendaScreenStateTest {
 
         assertEquals(selected, project(instant = later, selectedDate = selected).selectedDate)
         assertEquals(LocalDate.of(2026, 4, 1), project(instant = later).planningDate)
+    }
+
+    // ── 工作台首屏：固定区块顺序、时间轴与未安排时间分组、投入与容量的展示口径 ──
+
+    @Test
+    fun the_first_screen_sections_keep_one_fixed_order_in_every_view_and_across_the_boundary() {
+        // 首屏自上而下固定为：规划日与每日容量摘要、时间轴、进行中的计时状态、添加日程入口、事后补记，
+        // 重复日程作为折叠的次级入口排在最后。顺序由投影给出，因此它对注入的时间与时区是纯函数。
+        val expected = listOf(
+            AgendaWorkbenchSection.PLANNING_DAY_SUMMARY,
+            AgendaWorkbenchSection.TIMELINE,
+            AgendaWorkbenchSection.RUNNING_TIMER,
+            AgendaWorkbenchSection.ADD_SCHEDULE,
+            AgendaWorkbenchSection.BACKFILL,
+            AgendaWorkbenchSection.RECURRENCE,
+        )
+        val beforeBoundary = LocalDate.of(2026, 3, 6).atTime(2, 59).atZone(zone).toInstant()
+        val atBoundary = LocalDate.of(2026, 3, 6).atTime(3, 0).atZone(zone).toInstant()
+
+        assertEquals(expected, project(selectedDate = today).workbenchSections)
+        assertEquals(expected, project(selectedDate = today.plusDays(1), selectedScope = AgendaRangeScope.TOMORROW).workbenchSections)
+        assertEquals(expected, project(selectedScope = AgendaRangeScope.ALL_DATES).workbenchSections)
+        assertEquals(expected, project(instant = beforeBoundary, selectedDate = today).workbenchSections)
+        assertEquals(expected, project(instant = atBoundary, selectedDate = LocalDate.of(2026, 3, 6)).workbenchSections)
+        assertEquals(
+            expected,
+            project(instant = beforeBoundary, zone = ZoneId.of("America/Los_Angeles"), selectedDate = today).workbenchSections,
+        )
+    }
+
+    @Test
+    fun the_timeline_orders_entries_by_start_time_and_groups_the_rest_as_unscheduled() {
+        // 有具体时间的按开始/结束时间排列；没有具体时间的进入独立的「未安排时间」区域
+        val state = stateWith(
+            ScheduleEntry("late", "2026-03-05", "下午的", startMinute = 14 * 60, endMinute = 15 * 60),
+            ScheduleEntry("open", "2026-03-05", "没定时间的", estimatedMinutes = 20),
+            ScheduleEntry("early", "2026-03-05", "上午的", startMinute = 9 * 60, endMinute = 10 * 60),
+        )
+
+        val screenState = project(state = state, selectedDate = today)
+
+        assertEquals(listOf("early", "late"), screenState.timelineRows.map { it.entry.id })
+        assertEquals(listOf("open"), screenState.unscheduledRows.map { it.entry.id })
+        // 所有日期视图每一天各自有一份同样的分组
+        val allDates = project(state = state, selectedScope = AgendaRangeScope.ALL_DATES).dateSections.single()
+        assertEquals(listOf("early", "late"), allDates.timelineRows.map { it.entry.id })
+        assertEquals(listOf("open"), allDates.unscheduledRows.map { it.entry.id })
+    }
+
+    @Test
+    fun the_entry_being_timed_is_pinned_to_the_top_of_the_timeline() {
+        // 正在计时的条目固定在时间轴顶部，即使它的时段排在后面
+        val state = stateWith(
+            ScheduleEntry("early", "2026-03-05", "上午的", startMinute = 9 * 60, endMinute = 10 * 60),
+            ScheduleEntry("timing", "2026-03-05", "正在做的", startMinute = 13 * 60, endMinute = 14 * 60),
+        ).copy(
+            activeTimer = ActiveTimer(
+                targetId = null,
+                startedAtEpochMillis = now.minusSeconds(60).toEpochMilli(),
+                lastPlanningDate = "2026-03-05",
+                scheduleEntryId = "timing",
+            ),
+        )
+
+        val rows = project(state = state, selectedDate = today).timelineRows
+
+        assertEquals(listOf("timing", "early"), rows.map { it.entry.id })
+        assertTrue("置顶的行标明自己正在计时", rows.first().timing)
+        assertFalse("其余行不标正在计时", rows[1].timing)
+        // 自由计时没有日程来源，时间轴不会被置顶任何一行
+        val freeTimer = stateWith(ScheduleEntry("early", "2026-03-05", "上午的", startMinute = 9 * 60)).copy(
+            activeTimer = ActiveTimer(targetId = null, startedAtEpochMillis = now.toEpochMilli(), lastPlanningDate = "2026-03-05"),
+        )
+        assertTrue(project(state = freeTimer, selectedDate = today).timelineRows.none { it.timing })
+    }
+
+    @Test
+    fun timing_an_entry_without_a_start_time_puts_it_at_the_top_of_the_timeline() {
+        // 「未安排时间」里的日程也能起计时：一旦正在计时，它就出现在时间轴第一位
+        val state = stateWith(
+            ScheduleEntry("early", "2026-03-05", "上午的", startMinute = 9 * 60, endMinute = 10 * 60),
+            ScheduleEntry("open", "2026-03-05", "想到再做的", estimatedMinutes = 30),
+        ).copy(
+            activeTimer = ActiveTimer(
+                targetId = null,
+                startedAtEpochMillis = now.toEpochMilli(),
+                lastPlanningDate = "2026-03-05",
+                scheduleEntryId = "open",
+            ),
+        )
+
+        val screenState = project(state = state, selectedDate = today)
+
+        assertEquals(listOf("open", "early"), screenState.timelineRows.map { it.entry.id })
+        assertTrue(screenState.timelineRows.first().timing)
+        assertTrue("它不再留在未安排时间区域", screenState.unscheduledRows.isEmpty())
+    }
+
+    @Test
+    fun a_timeline_row_separates_planned_investment_from_actual_investment() {
+        // 预计时长是计划投入，永远不被当成实际投入展示；实际投入只来自与这条日程关联的记录
+        val state = stateWith(
+            ScheduleEntry("planned", "2026-03-05", "写周报", startMinute = 540, endMinute = 600, estimatedMinutes = 60, targetId = "t1"),
+        ).copy(
+            targets = listOf(Target("t1", title = "工作")),
+        )
+
+        val row = project(state = state, selectedDate = today).timelineRows.single()
+
+        assertEquals("计划投入 60 分钟 · 实际投入 0 分钟 · 未完成", row.investmentLabel)
+        assertEquals("工作", row.targetLabel)
+        assertFalse(row.completed)
+        assertNull("没有容量就不提示超载", row.capacityNotice)
+    }
+
+    @Test
+    fun a_timeline_row_sums_every_record_linked_to_that_entry_as_actual_investment() {
+        // 事后补记、日程确认与计时结算都算这条日程的实际投入，页面不按来源过滤
+        val state = stateWith(
+            ScheduleEntry("e1", "2026-03-05", "写周报", startMinute = 540, endMinute = 600, estimatedMinutes = 60),
+        ).copy(
+            timeEntries = listOf(
+                com.attention.domain.TimeEntry("t1", "2026-03-05", 15, source = com.attention.domain.TimeEntrySource.MANUAL, scheduleEntryId = "e1"),
+                com.attention.domain.TimeEntry("t2", "2026-03-05", 20, source = com.attention.domain.TimeEntrySource.TIMER, scheduleEntryId = "e1"),
+                com.attention.domain.TimeEntry("t3", "2026-03-05", 5, source = com.attention.domain.TimeEntrySource.SCHEDULE_CONFIRMED, scheduleEntryId = "e1"),
+                com.attention.domain.TimeEntry("t4", "2026-03-05", 99, source = com.attention.domain.TimeEntrySource.MANUAL, scheduleEntryId = "other"),
+                com.attention.domain.TimeEntry("t5", "2026-03-05", 7),
+            ),
+        )
+
+        val row = project(state = state, selectedDate = today).timelineRows.single()
+
+        assertEquals("计划投入 60 分钟 · 实际投入 40 分钟 · 未完成", row.investmentLabel)
+    }
+
+    @Test
+    fun a_timeline_row_marks_completion_once_the_actual_investment_reaches_the_plan() {
+        // 完成状态由领域按计划时长与实际投入判定，页面只显示结果
+        val state = stateWith(
+            ScheduleEntry("e1", "2026-03-05", "写周报", startMinute = 540, endMinute = 600, estimatedMinutes = 30),
+        ).copy(
+            timeEntries = listOf(
+                com.attention.domain.TimeEntry("t1", "2026-03-05", 45, source = com.attention.domain.TimeEntrySource.TIMER, scheduleEntryId = "e1"),
+            ),
+        )
+
+        val row = project(state = state, selectedDate = today).timelineRows.single()
+
+        assertTrue("实际投入达到计划时长即完成", row.completed)
+        assertEquals("计划投入 30 分钟 · 实际投入 45 分钟 · 已完成", row.investmentLabel)
+    }
+
+    @Test
+    fun an_entry_that_exceeds_the_daily_capacity_is_flagged_but_still_editable() {
+        // 容量超载只产生「已超出容量」提示，不阻止保存日程或实际投入
+        val state = stateWith(
+            ScheduleEntry("huge", "2026-03-05", "一整天的课", startMinute = 540, endMinute = 600, estimatedMinutes = 300),
+            ScheduleEntry("fits", "2026-03-05", "晨读", startMinute = 480, endMinute = 500, estimatedMinutes = 20),
+        ).let { it.copy(settings = StoredSettings(dailyCapacityMinutes = 120)) }
+
+        val rows = project(state = state, selectedDate = today).timelineRows
+
+        assertEquals("已超出容量", rows.first { it.entry.id == "huge" }.capacityNotice)
+        assertNull("没超载的条目不显示超载提示", rows.first { it.entry.id == "fits" }.capacityNotice)
+        assertEquals(2, rows.size)
+        assertTrue("超载条目仍然可以起计时", rows.first { it.entry.id == "huge" }.canStartTimer)
+    }
+
+    @Test
+    fun the_workbench_summarises_the_planning_day_boundary_week_start_and_daily_capacity_read_only() {
+        // 工作台只读展示规划日界线、周起始日与每日容量摘要，不提供完整设置表单
+        val state = stateWith(
+            ScheduleEntry("a", "2026-03-05", "晨读", estimatedMinutes = 45),
+        ).let {
+            it.copy(
+                settings = StoredSettings(
+                    planningDayBoundaryMinutes = 180,
+                    weekStartDay = 7,
+                    dailyCapacityMinutes = 120,
+                ),
+            )
+        }
+
+        val summary = project(state = state, selectedDate = today).workbenchSummary
+
+        assertEquals("规划日 2026-03-05", summary.planningDateLabel)
+        assertEquals("规划日界线 03:00", summary.boundaryLabel)
+        assertEquals("周起始日 周日", summary.weekStartLabel)
+        assertEquals("每日容量 120 分钟", summary.capacitySettingLabel)
+        assertEquals("已安排 45 / 120 分钟", summary.capacityUsageLabel)
+    }
+
+    @Test
+    fun the_daily_capacity_summary_says_so_when_no_capacity_is_set() {
+        val summary = project(
+            state = stateWith(ScheduleEntry("a", "2026-03-05", "晨读", estimatedMinutes = 45)),
+            selectedDate = today,
+        ).workbenchSummary
+
+        assertEquals("每日容量未设置", summary.capacitySettingLabel)
+        assertEquals("已安排 45 分钟（每日容量未设置）", summary.capacityUsageLabel)
+    }
+
+    @Test
+    fun the_compact_summary_projects_capacity_planned_actual_and_remaining_minutes() {
+        val state = AttentionState(
+            schedules = listOf(
+                ScheduleEntry("a", "2026-03-05", "晨读", estimatedMinutes = 45),
+                ScheduleEntry("b", "2026-03-05", "复盘", startMinute = 600, endMinute = 630),
+            ),
+            timeEntries = listOf(
+                com.attention.domain.TimeEntry(
+                    id = "actual-a",
+                    planningDate = "2026-03-05",
+                    durationMinutes = 20,
+                ),
+            ),
+            settings = StoredSettings(dailyCapacityMinutes = 120),
+        )
+
+        val summary = project(state = state, selectedDate = today).workbenchSummary
+
+        assertEquals(120, summary.capacityMinutes)
+        assertEquals(75, summary.plannedMinutes)
+        assertEquals(20, summary.actualMinutes)
+        assertEquals(45, summary.remainingMinutes)
+        assertFalse(summary.capacityOverloaded)
+        assertEquals("剩余 45 分钟", summary.capacityStatusLabel)
+        assertEquals(0.625f, summary.capacityProgress)
+    }
+
+    @Test
+    fun the_compact_summary_projects_overload_without_clamping_the_planned_fact() {
+        val state = stateWith(
+            ScheduleEntry("a", "2026-03-05", "长任务", estimatedMinutes = 150),
+            settings = StoredSettings(dailyCapacityMinutes = 120),
+        ).copy(
+            timeEntries = listOf(
+                com.attention.domain.TimeEntry(
+                    id = "actual-a",
+                    planningDate = "2026-03-05",
+                    durationMinutes = 30,
+                ),
+            ),
+        )
+
+        val summary = project(state = state, selectedDate = today).workbenchSummary
+
+        assertEquals(120, summary.capacityMinutes)
+        assertEquals(150, summary.plannedMinutes)
+        assertEquals(30, summary.actualMinutes)
+        assertNull(summary.remainingMinutes)
+        assertTrue(summary.capacityOverloaded)
+        assertEquals("超载 30 分钟", summary.capacityStatusLabel)
+        assertEquals(1f, summary.capacityProgress)
+    }
+
+    @Test
+    fun the_compact_summary_aggregates_capacity_and_actual_facts_without_a_selected_day() {
+        val summary = project(
+            state = stateWith(ScheduleEntry("a", "2026-03-05", "晨读", estimatedMinutes = 45)),
+        ).workbenchSummary
+
+        assertNull("没有每日容量时不伪造容量总和", summary.capacityMinutes)
+        assertEquals(45, summary.plannedMinutes)
+        assertEquals(0, summary.actualMinutes)
+        assertNull(summary.remainingMinutes)
+        assertEquals("已排 45 分钟（每日容量未设置）", summary.capacityStatusLabel)
+        assertNull(summary.capacityProgress)
+    }
+
+    @Test
+    fun the_all_dates_view_summarises_capacity_planned_and_actual_minutes() {
+        // 所有日期摘要显示跨规划日合计，时间轴仍保留每一天自己的容量分组
+        val state = stateWith(
+            ScheduleEntry("a", "2026-03-05", "晨读", estimatedMinutes = 45),
+            ScheduleEntry("b", "2026-03-06", "上课", estimatedMinutes = 90),
+        ).let { it.copy(settings = StoredSettings(dailyCapacityMinutes = 120)) }
+
+        val screenState = project(state = state, selectedScope = AgendaRangeScope.ALL_DATES)
+
+        assertEquals("所有日期", screenState.workbenchSummary.planningDateLabel)
+        assertEquals("已安排 135 / 240 分钟", screenState.workbenchSummary.capacityUsageLabel)
+        assertEquals(240, screenState.workbenchSummary.capacityMinutes)
+        assertEquals(135, screenState.workbenchSummary.plannedMinutes)
+        assertEquals(0, screenState.workbenchSummary.actualMinutes)
+        assertEquals(105, screenState.workbenchSummary.remainingMinutes)
+        assertEquals("剩余 105 分钟", screenState.workbenchSummary.capacityStatusLabel)
+        assertEquals(0.5625f, screenState.workbenchSummary.capacityProgress)
+        assertEquals(
+            listOf("已安排 45 / 120 分钟", "已安排 90 / 120 分钟"),
+            screenState.dateSections.map { it.capacityLabel },
+        )
+    }
+
+    @Test
+    fun an_empty_planning_day_invites_the_first_schedule_with_an_add_entry_point() {
+        // 当天没有日程时给出「安排今天第一件事」，页面据此直接给出添加日程入口
+        val todayEmpty = project(state = stateWith(), selectedDate = today, selectedScope = AgendaRangeScope.TODAY)
+        val tomorrowEmpty = project(
+            state = stateWith(),
+            selectedDate = today.plusDays(1),
+            selectedScope = AgendaRangeScope.TOMORROW,
+        )
+        val withEntries = project(
+            state = stateWith(ScheduleEntry("a", "2026-03-05", "晨读", estimatedMinutes = 20)),
+            selectedDate = today,
+        )
+
+        assertEquals("安排今天第一件事", todayEmpty.workbenchEmptyLabel)
+        assertEquals("安排今天第一件事", tomorrowEmpty.workbenchEmptyLabel)
+        assertNull("已经有安排时不显示空态引导", withEntries.workbenchEmptyLabel)
+        assertTrue("所有日期视图的空态仍走所有日期的文案", project(state = stateWith()).workbenchEmptyLabel == null)
+    }
+
+    @Test
+    fun the_free_timer_options_are_the_unowned_activity_and_the_unarchived_plans() {
+        // 自由计时不需要先建日程：能选的是未归属活动与未归档计划，归档计划不出现
+        val state = AttentionState(
+            targets = listOf(
+                Target(id = "t-active", title = "写作"),
+                Target(id = "t-archived", title = "旧计划", archived = true),
+            ),
+        )
+
+        val options = project(state = state).freeTimerOptions
+
+        assertEquals(
+            listOf(
+                AgendaFreeTimerOption(null, "未归属活动", false),
+                AgendaFreeTimerOption("t-active", "写作", false),
+            ),
+            options,
+        )
+    }
+
+    @Test
+    fun the_free_timer_option_marks_the_current_timer_target_in_words() {
+        // 选中态不靠颜色：正在计时的那个目标由投影标出来，页面原样展示。
+        val state = AttentionState(
+            targets = listOf(Target(id = "t1", title = "写作")),
+            activeTimer = ActiveTimer(
+                targetId = "t1",
+                startedAtEpochMillis = now.minusSeconds(300).toEpochMilli(),
+                lastPlanningDate = "2026-03-05",
+            ),
+        )
+
+        val options = project(state = state).freeTimerOptions
+
+        assertEquals(listOf(false, true), options.map { it.selected })
+    }
+
+    @Test
+    fun the_add_schedule_sheet_defaults_to_the_planning_day_in_view() {
+        // 底部面板打开时规划日已经填好：没选过就落在当前规划日，选了哪一天就用那一天
+        val allDates = project(state = stateWith(), selectedScope = AgendaRangeScope.ALL_DATES)
+        val tomorrow = project(
+            state = stateWith(),
+            selectedDate = today.plusDays(1),
+            selectedScope = AgendaRangeScope.TOMORROW,
+        )
+
+        assertEquals("2026-03-05", allDates.addScheduleDefaultDate)
+        assertEquals("规划日 2026-03-05", allDates.addScheduleDefaultDateLabel)
+        assertEquals("2026-03-06", tomorrow.addScheduleDefaultDate)
+        assertEquals("规划日 2026-03-06", tomorrow.addScheduleDefaultDateLabel)
+    }
+
+    // ---------------------------------------------------------------- 停止计时的结果面板
+
+    /** 停止计时后落下的那笔记录：领域命令已经把它写进状态，面板按 id 读回它。 */
+    private fun stoppedState(
+        entry: ScheduleEntry,
+        records: List<com.attention.domain.TimeEntry>,
+    ) = stateWith(entry).copy(
+        targets = listOf(Target("t1", title = "工作")),
+        timeEntries = records,
+    )
+
+    private fun timerRecord(
+        id: String,
+        date: String = "2026-03-05",
+        minutes: Int = 20,
+        scheduleEntryId: String? = "e1",
+    ) = com.attention.domain.TimeEntry(
+        id = id,
+        planningDate = date,
+        durationMinutes = minutes,
+        targetId = "t1",
+        source = com.attention.domain.TimeEntrySource.TIMER,
+        scheduleEntryId = scheduleEntryId,
+    )
+
+    @Test
+    fun there_is_no_result_panel_until_a_timer_is_stopped() {
+        // 没有刚停止的那一笔时页面不展示任何结果面板：它不是一段历史
+        assertNull(project(state = stateWith(ScheduleEntry("e1", "2026-03-05", "写周报", estimatedMinutes = 60))).stopResult)
+        assertNull(project(state = stoppedState(ScheduleEntry("e1", "2026-03-05", "写周报", estimatedMinutes = 60), listOf(timerRecord("t1")))).stopResult)
+    }
+
+    @Test
+    fun the_result_panel_reports_actual_planned_completion_and_attribution() {
+        // 面板的四个要素：实际投入、计划时长、完成结果与记录归属，全部来自领域读数
+        val entry = ScheduleEntry("e1", "2026-03-05", "写周报", startMinute = 540, endMinute = 600, estimatedMinutes = 60, targetId = "t1")
+        val state = stoppedState(entry, listOf(timerRecord("t1", minutes = 20)))
+
+        val result = project(state = state, selectedDate = today, stoppedEntryIds = listOf("t1")).stopResult!!
+
+        assertEquals("e1", result.scheduleEntryId)
+        assertEquals(20, result.actualMinutes)
+        assertEquals("实际投入 20 分钟", result.actualLabel)
+        assertEquals(60, result.plannedMinutes)
+        assertEquals("计划时长 60 分钟", result.plannedLabel)
+        // 不足计划：完成状态仍由用户决定，因此既不算完成也不自动跳过决策
+        assertFalse(result.completed)
+        assertEquals("未完成", result.completionLabel)
+        assertTrue("有计划且未达标时把完成决定交给用户", result.needsCompletionDecision)
+        assertEquals("工作", result.attributionLabel)
+    }
+
+    @Test
+    fun an_entry_without_a_planned_duration_reports_no_plan_and_leaves_completion_alone() {
+        // 没有计划时长的日程不自动改变完成状态，也不冒充「未达标」
+        val entry = ScheduleEntry("e1", "2026-03-05", "随手做的", targetId = "t1")
+        val state = stoppedState(entry, listOf(timerRecord("t1", minutes = 90)))
+
+        val result = project(state = state, selectedDate = today, stoppedEntryIds = listOf("t1")).stopResult!!
+
+        assertNull("没有计划就没有计划时长", result.plannedMinutes)
+        assertEquals("未设置计划时长", result.plannedLabel)
+        assertFalse(result.completed)
+        assertEquals("未完成", result.completionLabel)
+        assertFalse("没有计划就不存在「未达标」这回事", result.needsCompletionDecision)
+    }
+
+    @Test
+    fun reaching_the_plan_completes_the_entry_so_the_user_does_not_tick_it_again() {
+        // 实际投入达到计划时日程已由领域结算成完成，面板如实说完成、不再要求用户勾选
+        val entry = ScheduleEntry("e1", "2026-03-05", "写周报", startMinute = 540, endMinute = 600, estimatedMinutes = 30, targetId = "t1")
+        val state = stoppedState(entry, listOf(timerRecord("t1", minutes = 45)))
+
+        val result = project(state = state, selectedDate = today, stoppedEntryIds = listOf("t1")).stopResult!!
+
+        assertTrue("实际投入 45 分钟超过计划 30 分钟", result.completed)
+        assertEquals("已完成", result.completionLabel)
+        assertFalse("已经完成就不需要用户再决定一次", result.needsCompletionDecision)
+    }
+
+    @Test
+    fun a_stop_split_across_planning_days_is_reported_as_several_records() {
+        // 跨规划日界线的那次停止落成多笔，面板如实呈现多笔，不自行合成一笔
+        val entry = ScheduleEntry("e1", "2026-03-05", "夜间长跑", startMinute = 1320, endMinute = 1439, estimatedMinutes = 240, targetId = "t1")
+        val state = stoppedState(
+            entry,
+            listOf(
+                timerRecord("t1", date = "2026-03-05", minutes = 60),
+                timerRecord("t2", date = "2026-03-06", minutes = 30),
+            ),
+        )
+
+        val result = project(state = state, selectedDate = today, stoppedEntryIds = listOf("t1", "t2")).stopResult!!
+
+        assertEquals(2, result.records.size)
+        assertEquals(listOf("2026-03-05", "2026-03-06"), result.records.map { it.planningDate })
+        assertEquals(listOf(60, 30), result.records.map { it.minutes })
+        assertEquals("2026-03-05 · 60 分钟", result.records.first().label)
+        assertEquals("两笔合计才是这次停止的实际投入", 90, result.actualMinutes)
+    }
+
+    @Test
+    fun the_result_panel_disappears_once_its_records_are_consumed() {
+        // 组合根消费掉这次结果（清空 id 列表）后面板不再出现，陈旧数据不会被反复展示
+        val entry = ScheduleEntry("e1", "2026-03-05", "写周报", startMinute = 540, endMinute = 600, estimatedMinutes = 60, targetId = "t1")
+        val state = stoppedState(entry, listOf(timerRecord("t1", minutes = 20)))
+
+        assertNotNull(project(state = state, selectedDate = today, stoppedEntryIds = listOf("t1")).stopResult)
+        assertNull("消费之后不再展示", project(state = state, selectedDate = today, stoppedEntryIds = null).stopResult)
+        assertNull(project(state = state, selectedDate = today, stoppedEntryIds = emptyList()).stopResult)
+    }
+
+    @Test
+    fun stopping_without_a_schedule_still_reports_investment_and_attribution() {
+        // 自由计时没有日程来源：面板仍然如实呈现投入与归属，只是不谎称某条日程完成了
+        val state = AttentionState(
+            targets = listOf(Target("t1", title = "阅读")),
+            timeEntries = listOf(
+                com.attention.domain.TimeEntry(
+                    id = "t1",
+                    planningDate = "2026-03-05",
+                    durationMinutes = 15,
+                    targetId = "t1",
+                    source = com.attention.domain.TimeEntrySource.TIMER,
+                ),
+            ),
+        )
+
+        val result = project(state = state, selectedDate = today, stoppedEntryIds = listOf("t1")).stopResult!!
+
+        assertNull("自由计时没有关联日程", result.scheduleEntryId)
+        assertEquals(15, result.actualMinutes)
+        assertEquals("阅读", result.attributionLabel)
+        assertFalse(result.completed)
+        assertFalse(result.needsCompletionDecision)
+    }
+
+    @Test
+    fun a_stale_result_id_that_no_longer_exists_does_not_resurrect_the_panel() {
+        // 记录已被删除时，面板不凭一个失效的 id 重建已经消失的事实
+        val entry = ScheduleEntry("e1", "2026-03-05", "写周报", estimatedMinutes = 60, targetId = "t1")
+        val state = stoppedState(entry, listOf(timerRecord("t1", minutes = 20)))
+
+        assertNull(project(state = state, selectedDate = today, stoppedEntryIds = listOf("gone")).stopResult)
+    }
+
+    @Test
+    fun every_timeline_row_offers_a_visible_completion_check_and_a_more_menu() {
+        // 完成勾选框与更多菜单是行上并存的可见入口；长按只能作为额外的熟练操作快捷方式
+        val entry = ScheduleEntry("e1", "2026-03-05", "写周报", startMinute = 540, endMinute = 600, estimatedMinutes = 60, targetId = "t1")
+        val row = project(state = stoppedState(entry, listOf(timerRecord("t1", minutes = 20))), selectedDate = today).timelineRows.single()
+
+        assertEquals("e1", row.entry.id)
+        assertTrue("行上给出可见的完成勾选框", row.offersCompletionCheck)
+        assertTrue("行上给出可见的更多菜单", row.offersMoreMenu)
     }
 }

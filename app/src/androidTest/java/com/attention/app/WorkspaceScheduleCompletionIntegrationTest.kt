@@ -57,7 +57,8 @@ class WorkspaceScheduleCompletionIntegrationTest {
         // 「所有日期」现在是日程页里的一个日期范围，不再是底部的顶级入口
         composeRule.onNode(hasText("日程") and hasClickAction()).performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-date-menu", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithText(SCHEDULE_TITLE).assertExists()
     }

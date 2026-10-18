@@ -77,8 +77,8 @@ internal fun SettingsScreen(
 /**
  * 引导：设置页是重新打开首次使用引导的唯一入口。
  *
- * 引导是说明式的，重看它同样只解释日程、目标树与统计的职责，不写任何业务数据，
- * 因此这里只有一个按钮——真正打开全屏引导由组合根完成。
+ * 首次设置由工作台内的渐进流程承载；设置页只提供重新打开入口，具体步骤和写入 intent
+ * 由组合根与 onboarding 页面共同完成。
  */
 @Composable
 private fun OnboardingSection(actions: SettingsActions) {
@@ -86,11 +86,11 @@ private fun OnboardingSection(actions: SettingsActions) {
     Card(Modifier.fillMaxWidth().testTag("settings-onboarding-section")) {
         Column(Modifier.padding(tokens.spacing.medium), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("引导", style = tokens.typography.title)
-            Text("重新打开首次使用引导，再看一遍日程、目标树与统计分别负责什么。")
+            Text("重新打开首次设置，按步骤调整规划日、容量、计划与日程。")
             AttentionButton(
                 modifier = Modifier.fillMaxWidth().testTag("settings-open-onboarding"),
                 onClick = actions::openOnboarding,
-            ) { Text("重新打开引导") }
+            ) { Text("重新打开首次设置") }
         }
     }
 }

@@ -43,13 +43,13 @@ class WorkspaceCapacityIntegrationTest {
      */
     @Test
     fun the_agenda_page_keeps_showing_the_planning_day_capacity_across_recreation() {
-        var summary = composeRule.onNodeWithTag("agenda-capacity-summary", useUnmergedTree = true).performScrollTo()
+        var summary = composeRule.onNodeWithTag("agenda-open-settings", useUnmergedTree = true).performScrollTo()
         summary.assert(hasText("已安排 90 / 60 分钟（超载）", substring = true))
 
         composeRule.activityRule.scenario.recreate()
         composeRule.waitForIdle()
         waitForText("已安排 90 / 60 分钟（超载）")
-        summary = composeRule.onNodeWithTag("agenda-capacity-summary", useUnmergedTree = true).performScrollTo()
+        summary = composeRule.onNodeWithTag("agenda-open-settings", useUnmergedTree = true).performScrollTo()
         summary.assert(hasText("已安排 90 / 60 分钟（超载）", substring = true))
 
         runBlocking {
@@ -59,7 +59,7 @@ class WorkspaceCapacityIntegrationTest {
         }
         composeRule.waitForIdle()
         waitForText("已安排 90 分钟（每日容量未设置）")
-        composeRule.onNodeWithTag("agenda-capacity-summary", useUnmergedTree = true)
+        composeRule.onNodeWithTag("agenda-open-settings", useUnmergedTree = true)
             .performScrollTo()
             .assert(hasText("已安排 90 分钟", substring = true))
             .assert(hasText("未设置", substring = true))

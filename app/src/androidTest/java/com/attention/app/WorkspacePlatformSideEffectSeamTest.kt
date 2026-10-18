@@ -14,12 +14,14 @@ import com.attention.app.settings.SettingsScreen
 import com.attention.app.ui.theme.AttentionTheme
 import com.attention.domain.LaunchDestination
 import com.attention.domain.ScheduleEntry
+import com.attention.workspace.state.AgendaBackfillDraft
 import com.attention.workspace.state.AgendaActions
 import com.attention.workspace.state.AgendaRecurrenceDraft
 import com.attention.workspace.state.AgendaScheduleDraft
 import com.attention.workspace.state.AgendaScheduleRow
 import com.attention.workspace.state.AgendaScreenState
 import com.attention.workspace.state.AgendaTargetOption
+import com.attention.workspace.state.AgendaWorkbenchSummary
 import com.attention.workspace.state.LaunchDestinationOption
 import com.attention.workspace.state.SettingsActions
 import com.attention.workspace.state.SettingsScreenState
@@ -60,17 +62,29 @@ class WorkspacePlatformSideEffectSeamTest {
         }
 
         // 提醒权限：页面只发出申请意图，权限对话框由组合根 adapter 负责
+        // 添加日程的表单住在底部面板里：从常驻的「调整计划」菜单打开，
+        // 提醒属于低频字段，因此还要展开「更多设置」。
+        composeRule.onNodeWithTag("agenda-plan-action", useUnmergedTree = true).performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("agenda-plan-menu-add", useUnmergedTree = true).performClick()
+        composeRule.waitForIdle()
         composeRule.onNodeWithTag("agenda-title-input", useUnmergedTree = true).performScrollTo()
             .performTextReplacement("带提醒的日程")
+        composeRule.onNodeWithTag("agenda-add-more-toggle", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.waitForIdle()
         composeRule.onNodeWithTag("agenda-reminder-input", useUnmergedTree = true).performScrollTo()
             .performTextReplacement("09:00")
         composeRule.onNodeWithTag("agenda-add-submit", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.waitForIdle()
 
         assertEquals(540, agenda.addedSchedules.single().reminderMinuteOfDay)
         assertEquals(1, agenda.permissionRequests)
 
         // 计时器：页面只发出带来源关联的 intent，前台服务由组合根 adapter 启动
-        composeRule.onNodeWithTag("schedule-start-timer-e1", useUnmergedTree = true).performScrollTo().performClick()
+        composeRule.onNodeWithTag("schedule-more-e1", useUnmergedTree = true)
+            .performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("schedule-more-start-timer-e1", useUnmergedTree = true).performClick()
         assertEquals(listOf("e1"), agenda.startedTimerEntries.map { it.id })
     }
 
@@ -132,7 +146,14 @@ class WorkspacePlatformSideEffectSeamTest {
             filterLabel = "规划日 $day",
             availableDates = emptyList(),
             selectedCapacityLabel = null,
-            selectedRows = listOf(row),
+            workbenchSummary = AgendaWorkbenchSummary(
+                planningDateLabel = "规划日 $day",
+                boundaryLabel = "规划日界线 03:00",
+                weekStartLabel = "周起始日 周一",
+                capacitySettingLabel = "每日容量未设置",
+                capacityUsageLabel = null,
+            ),
+            timelineRows = listOf(row),
             dateSections = emptyList(),
             emptyLabel = null,
             recurrenceRules = emptyList(),
@@ -162,22 +183,34 @@ class WorkspacePlatformSideEffectSeamTest {
     private class RecordingAgendaActions : AgendaActions {
         val addedSchedules = mutableListOf<AgendaScheduleDraft>()
         val startedTimerEntries = mutableListOf<ScheduleEntry>()
+        val startedFreeTimerTargets = mutableListOf<String?>()
         var permissionRequests = 0
 
         override fun selectPlanningDate(date: LocalDate?) = Unit
         override fun selectAllDates() = Unit
         override fun shiftPlanningDay(days: Long) = Unit
         override fun addSchedule(draft: AgendaScheduleDraft) { addedSchedules += draft }
+        override fun addScheduleWithBackfill(draft: AgendaScheduleDraft, backfill: AgendaBackfillDraft) = Unit
         override fun updateSchedule(entry: ScheduleEntry, reminderMinuteOfDay: Int?) = Unit
+        override fun updateScheduleWithBackfill(entry: ScheduleEntry, reminderMinuteOfDay: Int?, backfill: AgendaBackfillDraft) = Unit
         override fun confirmScheduleCompleted(entryId: String) = Unit
         override fun toggleScheduleCompleted(entryId: String) = Unit
+        override fun markStoppedScheduleCompleted(entryId: String) = Unit
+        override fun dismissStopResult() = Unit
         override fun startTimerFromEntry(entry: ScheduleEntry) { startedTimerEntries += entry }
+        override fun startFreeTimer(targetId: String?) { startedFreeTimerTargets += targetId }
         override fun stopRunningTimer() = Unit
+        override fun pauseRunningTimer() = Unit
+        override fun resumeRunningTimer() = Unit
+        override fun recoverRunningTimerFromNow() = Unit
+        override fun switchRunningTimerTarget(targetId: String?) = Unit
         override fun editTime(entryId: String, minutes: Int, targetId: String?, note: String) = Unit
         override fun deleteTime(entryId: String) = Unit
         override fun addRecurrenceAndMaterialize(draft: AgendaRecurrenceDraft) = Unit
         override fun stopRecurrence(ruleId: String) = Unit
         override fun requestReminderPermission() { permissionRequests += 1 }
+        override fun retryLoad() = Unit
+        override fun openSettings() = Unit
     }
 
     /** 设置页 adapter 的替身：同样只记录 intent，不触达 SAF、权限与 ViewModel。 */

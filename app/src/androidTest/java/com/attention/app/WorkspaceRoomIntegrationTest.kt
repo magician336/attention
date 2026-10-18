@@ -74,13 +74,18 @@ class WorkspaceRoomIntegrationTest {
     @Test
     fun agenda_screen_is_available_from_room_backed_workspace() {
         composeRule.onNodeWithTag("nav-agenda", useUnmergedTree = true).performClick()
-        composeRule.onNodeWithText("日程条目可带预计时长；它不会自动变成实际投入。").assertExists()
+        // Prototype A keeps the compact date filter as the agenda entry point;
+        // the former hero explanation is intentionally absent.
+        composeRule.onNodeWithTag("agenda-filter", useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithText("日程条目可带预计时长；它不会自动变成实际投入。").assertDoesNotExist()
     }
 
     @Test
     fun the_merged_agenda_page_replaces_the_workbench_with_date_ranges() {
         // 今天工作台的计时卡、快速记录与每日容量卡片本次下线：日程页只有日期范围与日程时间轴
         composeRule.onNodeWithTag("nav-agenda", useUnmergedTree = true).performClick()
+        // 三个范围收在日期菜单里：展开之后才存在。
+        composeRule.onNodeWithTag("agenda-date-menu", useUnmergedTree = true).performClick()
         composeRule.onNodeWithTag("agenda-range-today", useUnmergedTree = true).assertExists()
         composeRule.onNodeWithTag("agenda-range-tomorrow", useUnmergedTree = true).assertExists()
         composeRule.onNodeWithTag("agenda-range-all-dates", useUnmergedTree = true).assertExists()

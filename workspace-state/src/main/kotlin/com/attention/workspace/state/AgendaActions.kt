@@ -21,6 +21,16 @@ data class AgendaScheduleDraft(
 )
 
 /**
+ * 添加或编辑日程时由用户明确确认的一笔事后补记。
+ * 页面只提交分钟、归属和备注，实际投入的来源与日程关联由领域 command 固定为 MANUAL。
+ */
+data class AgendaBackfillDraft(
+    val durationMinutes: Int,
+    val targetId: String?,
+    val note: String = "",
+)
+
+/**
  * 日程页创建重复日程规则时提交的一份表单内容。规则展开仍由 `:domain` 完成。
  */
 data class AgendaRecurrenceDraft(
@@ -49,24 +59,70 @@ interface AgendaActions {
 
     fun addSchedule(draft: AgendaScheduleDraft)
 
+    /** 保存日程并在同一个 typed command 中可选地产生一笔事后补记。 */
+    fun addScheduleWithBackfill(draft: AgendaScheduleDraft, backfill: AgendaBackfillDraft)
+
     /**
  * 日程页保存一条被编辑的日程条目。[reminderMinuteOfDay] 是提醒在规划日当天的分钟数；
  * 它的绝对时刻由组合根 adapter 用领域规则与注入的时区换算，页面因此不需要读系统时区。
  */
 fun updateSchedule(entry: ScheduleEntry, reminderMinuteOfDay: Int?)
 
+    /** 编辑日程并在同一个 typed command 中可选地产生一笔事后补记。 */
+    fun updateScheduleWithBackfill(entry: ScheduleEntry, reminderMinuteOfDay: Int?, backfill: AgendaBackfillDraft)
+
     fun confirmScheduleCompleted(entryId: String)
 
     fun toggleScheduleCompleted(entryId: String)
 
+    /**
+     * 在结果面板上选择「标记为完成」。
+     *
+     * 它与时间轴行上的完成走同一条既有路径（完成标记与投入经验、里程碑仍由 `:domain` 计算），
+     * 不新造命令。面板只负责让「不足计划」与「标记为完成」成为两个可以分别决定的动作。
+     */
+    fun markStoppedScheduleCompleted(entryId: String)
+
+    /**
+     * 在结果面板上选择「结束并保留未完成」。
+     *
+     * 它只是关闭这一次结果面板：实际投入已经记下，完成状态保持用户原来的判断，
+     * 不写入任何完成标记。面板因此需要一个独立的「看过了」出口。
+     */
+    fun dismissStopResult()
+
     /** 从日程条目起计时。[targetId] 与条目一起带出，产出的时间记录保留同一来源上下文。 */
     fun startTimerFromEntry(entry: ScheduleEntry)
+
+    /**
+     * 就地开始一次自由计时：不先建日程，[targetId] 为 null 表示记在未归属活动下。
+     *
+     * 它与 [startTimerFromEntry] 是两条不同的 intent，因为产出的时间记录来源不同：
+     * 自由计时的 `scheduleEntryId` 必须为 null，不能拿某条日程冒充来源。
+     * 前台计时服务与恢复提示仍由组合根 adapter 处理。
+     */
+    fun startFreeTimer(targetId: String?)
 
     /**
      * 结束并保存运行中的计时。计时卡下线之后，这是日程页上唯一能停掉一次计时的入口，
      * 因此它必须留在同一页；结算、经验与里程碑仍由 `:domain` 计算，前台服务由组合根停掉。
      */
     fun stopRunningTimer()
+
+    /** 暂停运行中的计时。暂停只是冻结已投入，还没有保存。 */
+    fun pauseRunningTimer()
+
+    /** 恢复被暂停的计时，从暂停那一刻继续累计。 */
+    fun resumeRunningTimer()
+
+    /**
+     * 从此刻继续：把计时的起点重置到现在的这一刻。用于计时被系统打断、
+     * 上次会话结束时不确定该怎么接着算的情况；恢复提示的撤除由组合根完成。
+     */
+    fun recoverRunningTimerFromNow()
+
+    /** 把运行中的计时切到另一个目标；[targetId] 为 null 表示切到未归属活动。 */
+    fun switchRunningTimerTarget(targetId: String?)
 
     /**
      * 编辑一条实际投入，只调整时长、目标归属与备注。
@@ -83,6 +139,22 @@ fun updateSchedule(entry: ScheduleEntry, reminderMinuteOfDay: Int?)
 
     /** 页面请求申请提醒权限；权限检查与申请由组合根 adapter 完成。 */
     fun requestReminderPermission()
+
+    /**
+     * 本地数据读取失败之后，用户点「重试」。
+     *
+     * 重新读取由组合根 adapter 完成（它持有仓储与持久化句柄），页面因此不需要知道
+     * 数据是从哪里来的，也不会自己调仓储（ADR-0005 第 1 节）。
+     */
+    fun retryLoad()
+
+    /**
+     * 打开完整设置。
+     *
+     * 工作台顶部只读展示每日容量，因此容量摘要就是通往完整设置的入口；设置本身仍然住在
+     * 统计页底部的「设置与数据」，页面只发出这一条意图，实际跳转由组合根完成。
+     */
+    fun openSettings()
 }
 
 /** 把重复日程草稿落成领域规则；物化仍然由 `:domain` 按规则展开。 */

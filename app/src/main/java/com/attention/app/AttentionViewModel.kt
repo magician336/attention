@@ -14,6 +14,7 @@ import com.attention.domain.FutureGoalRule
 import com.attention.domain.GoalCadence
 import com.attention.domain.LaunchDestination
 import com.attention.domain.RecurrenceRule
+import com.attention.domain.ScheduleBackfill
 import com.attention.domain.ScheduleEntry
 import com.attention.domain.StoredSettings
 import com.attention.domain.TargetMove
@@ -65,7 +66,10 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -86,11 +90,34 @@ class AttentionViewModel(
         val schedules: String,
     )
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val loadedState: StateFlow<AttentionState> = repository.state.stateIn(
-        scope,
-        SharingStarted.WhileSubscribed(5_000),
-        AttentionState(),
-    )
+
+    /**
+     * 重新订阅本地数据的信号。
+     *
+     * 「重试」因此是一次真正的重新读取，而不是把同一份已经失败的数据再渲染一遍。
+     * 它只影响读取这一侧：写命令走 [repository]，不经过这里。
+     */
+    private val reloadSignals = MutableStateFlow(0)
+
+    private val _loadError = MutableStateFlow<String?>(null)
+
+    /**
+     * 本地数据**读取**失败时的说明；null 表示读取正常。
+     *
+     * 它与 [error] 分开：那条是某一次操作没保存成功（写失败），这条是「还没读上来」。
+     * 页面据此渲染带「重试」的读取失败状态，而不是把一个空工作台留给用户。
+     */
+    val loadError: StateFlow<String?> = _loadError
+
+    private val loadedState: StateFlow<AttentionState> = reloadSignals
+        // 每次重试都重新订阅仓储的状态流；读取失败只作为事实记下来，不让它把整条流拆掉。
+        .flatMapLatest { repository.state.onStart { _loadError.value = null } }
+        .catch { cause -> _loadError.value = cause.message ?: "读取本地数据失败" }
+        .stateIn(
+            scope,
+            SharingStarted.WhileSubscribed(5_000),
+            AttentionState(),
+        )
     val state: StateFlow<AttentionState> = loadedState
 
     /**
@@ -107,10 +134,26 @@ class AttentionViewModel(
         .stateIn(scope, SharingStarted.WhileSubscribed(5_000), false)
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
+
+    /**
+     * 重新读取本地数据。
+     *
+     * [state] 派生自 `repository.state`，重读就是重新订阅它：先清掉读取失败的事实，
+     * 让页面回到加载骨架，读上来之后 [stateLoaded] 与 [state] 自然跟上（#195 验收标准 2）。
+     */
+    fun retryLoad() {
+        _loadError.value = null
+        reloadSignals.value += 1
+    }
     private val _backupResult = MutableStateFlow<BackupCommitResult?>(null)
     /** Last typed commit/restore result, including stale and no-backup outcomes. */
     val backupResult: StateFlow<BackupCommitResult?> = _backupResult
     private val _backupError = MutableStateFlow<BackupViewModelError?>(null)
+    /**
+     * 最近一次停止计时产出的记录 id。面板按它从领域状态读回「刚刚那一笔」，
+     * 因此它必须来自命令结果，而不是页面临时记下的一段历史。
+     */
+    private val _stoppedEntryIds = MutableStateFlow<List<String>>(emptyList())
     /** Structured backup errors for callers that do not want to parse [error]. */
     val backupError: StateFlow<BackupViewModelError?> = _backupError
 
@@ -194,12 +237,34 @@ class AttentionViewModel(
 
     fun addSchedule(entry: ScheduleEntry) = runCommand { it.addSchedule(entry) }
     fun updateSchedule(entry: ScheduleEntry) = runCommand { it.updateSchedule(entry) }
+
+    /**
+     * 保存一条日程条目，并可选地顺带补记一笔已经发生的时间。
+     *
+     * 日程条目与那笔事后补记由同一个 typed command 提交，因此要么都保存、要么都不保存；
+     * 补记的来源、关联、投入经验与达成里程碑仍由 `:domain` 计算，ViewModel 只提交命令。
+     */
+    fun saveSchedule(entry: ScheduleEntry, backfill: ScheduleBackfill? = null) =
+        runTypedCommand(AttentionCommand.SaveSchedule(entry, backfill))
     fun toggleScheduleCompleted(entryId: String) {
         scope.launch(Dispatchers.IO) {
             runCatching { repository.toggleScheduleCompleted(entryId) }
                 .onFailure { _error.value = it.message ?: "操作未保存" }
         }
     }
+
+    /**
+     * 把用户「标记为完成」的决定落到领域命令上。
+     *
+     * 走 [AttentionCommand.MarkScheduleCompleted] 而不是结算命令：结算命令只回答
+     * 「投入是否达到计划」，不足计划时它不动状态，于是用户明明说了「做完了」却看不到变化。
+     * 这里由用户的决定驱动，幂等，且不新建第二笔投入——那一笔在停止计时时已经写过。
+     */
+    fun markStoppedScheduleCompleted(entryId: String) =
+        runTypedCommand(
+            AttentionCommand.MarkScheduleCompleted(entryId),
+            errorMessage = "无法标记完成",
+        )
     fun addRecurrence(rule: RecurrenceRule) = runCommand { it.addRecurrence(rule) }
     fun addRecurrenceAndMaterialize(rule: RecurrenceRule, through: LocalDate) = runCommand {
         it.addRecurrenceAndMaterialize(rule, through, zone)
@@ -235,7 +300,29 @@ class AttentionViewModel(
     fun resumeTimer() = runCommand { it.resumeTimer(Instant.now()) }
     fun recoverTimer(onSuccess: () -> Unit = {}) = runCommand(onSuccess = onSuccess) { it.recoverTimer(Instant.now()) }
     fun stopTimer(onSuccess: () -> Unit = {}) =
-        runTypedCommand(AttentionCommand.StopTimer, onSuccess = { onSuccess() }, errorMessage = "无法结束计时")
+        runTypedCommand(
+            AttentionCommand.StopTimer,
+            onSuccess = { result ->
+                // 结果面板只认这一次停止产出的记录 id：面板按 id 从状态读回事实，
+                // 而不是页面自己缓存一段历史。新的停止会覆盖上一次的结果。
+                _stoppedEntryIds.value = result.generatedTimeEntries.map { it.id }
+                onSuccess()
+            },
+            errorMessage = "无法结束计时",
+        )
+
+    /**
+     * 最近一次停止计时产出的记录 id；空列表表示此刻没有待核对的那一笔。
+     *
+     * 它的生命周期只有三段：停止成功时写入、用户消费结果时清空、下一次停止时覆盖。
+     * 它不写入任何持久化，因此重新启动后不会有一块陈旧的结果面板等着被误读。
+     */
+    val stoppedEntryIds: StateFlow<List<String>> = _stoppedEntryIds
+
+    /** 用户已经看过结果面板：清空 id，面板随之消失。 */
+    fun clearStoppedEntryIds() {
+        _stoppedEntryIds.value = emptyList()
+    }
 
     /** Internal repair path for reconciling imported or legacy data. */
     internal fun awardMilestones() = runCommand { it.awardEligibleMilestones(java.time.LocalDate.now(zone)) }

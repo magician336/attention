@@ -27,9 +27,11 @@ import org.junit.BeforeClass
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.performSemanticsAction
 import com.attention.app.ui.components.AttentionFeedbackTags
 
 @RunWith(AndroidJUnit4::class)
@@ -47,6 +49,7 @@ class WorkspaceGoalSummaryCorrectionIntegrationTest {
         private const val OWNED_ENTRY_ID = "ui-summary-correction-owned"
         private const val UNOWNED_ENTRY_ID = "ui-summary-correction-unowned"
         private const val TARGET_TITLE = "UI-汇总纠错"
+        private const val TIMEOUT = 10_000L
         private lateinit var planningDate: String
 
         @JvmStatic
@@ -94,17 +97,31 @@ class WorkspaceGoalSummaryCorrectionIntegrationTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("edit-time-$OWNED_ENTRY_ID").performScrollTo().performClick()
         composeRule.onNodeWithTag("edit-time-minutes-$OWNED_ENTRY_ID", useUnmergedTree = true).performScrollTo().performTextReplacement("20")
-        composeRule.onNodeWithTag("save-time-$OWNED_ENTRY_ID").performClick()
-        composeRule.waitForIdle()
+        // 分钟输入框会把软键盘带起来，保存按钮可能正好被键盘盖住；
+        // 坐标点击落在 IME 上时对话框不会关闭。直接触发保存按钮自己的点击语义。
+        composeRule.onNodeWithTag("save-time-$OWNED_ENTRY_ID")
+            .performSemanticsAction(SemanticsActions.OnClick)
+        // 保存先关闭对话框、再异步写库；对话框关闭不等于写入已经落地，
+        // 慢设备上直接切页会让目标树读到保存前的汇总。等库里的分钟数真的变了再走。
+        composeRule.waitUntil(TIMEOUT) {
+            composeRule.onAllNodesWithTag("save-time-$OWNED_ENTRY_ID").fetchSemanticsNodes().isEmpty()
+        }
+        awaitOwnedMinutes(20)
         openTargetDetails()
         assertSummary(25)
 
         composeRule.onNodeWithTag("nav-agenda", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
+        // 刚保存过时间记录，那条短时提示还浮在页面底部；它会盖住删除入口并吞掉这次点击。
+        composeRule.waitUntil(TIMEOUT) {
+            composeRule.onAllNodesWithTag("attention.feedback.snackbar").fetchSemanticsNodes().isEmpty()
+        }
         composeRule.onNodeWithTag("delete-time-$OWNED_ENTRY_ID").performScrollTo().performClick()
         composeRule.waitForIdle()
         // Deleting a time record is destructive, so it is confirmed before anything changes.
-        composeRule.onNodeWithTag(AttentionFeedbackTags.CONFIRM_DIALOG, useUnmergedTree = true).assertIsDisplayed()
+        // 确认弹窗住在独立窗口里：节点先出现在语义树上，窗口完成布局之后才谈得上「显示出来」。
+        // 这里等的是同一个断言成立，而不是换一个更弱的断言。
+        waitUntilDisplayed(AttentionFeedbackTags.CONFIRM_DIALOG)
         composeRule.onNodeWithTag(AttentionFeedbackTags.CONFIRM_DIALOG_CONFIRM, useUnmergedTree = true).performClick()
         composeRule.waitUntil(5_000) {
             composeRule.onAllNodesWithTag("delete-time-$OWNED_ENTRY_ID").fetchSemanticsNodes().isEmpty()
@@ -113,9 +130,23 @@ class WorkspaceGoalSummaryCorrectionIntegrationTest {
         assertSummary(5)
     }
 
+    /**
+     * 等带 [tag] 的节点真的显示出来。
+     *
+     * 弹窗与底部提示都住在各自的宿主窗口里：节点进入语义树与它在屏幕内完成布局
+     * 是两件事，因此这里重试的是同一条 [assertIsDisplayed] 断言本身，超时仍然失败。
+     */
+    private fun waitUntilDisplayed(tag: String) {
+        composeRule.waitUntil(TIMEOUT) {
+            runCatching {
+                composeRule.onNodeWithTag(tag, useUnmergedTree = true).assertIsDisplayed()
+            }.isSuccess
+        }
+    }
+
     private fun assertSummary(actualMinutes: Int) {
         val summary = "一次性阶段汇总：实际 $actualMinutes/30 分钟"
-        composeRule.waitUntil(5_000) {
+        composeRule.waitUntil(TIMEOUT) {
             composeRule.onAllNodesWithText(summary, substring = true).fetchSemanticsNodes().size == 2
         }
         composeRule.onAllNodesWithText(summary, substring = true).assertCountEquals(2)
@@ -126,5 +157,32 @@ class WorkspaceGoalSummaryCorrectionIntegrationTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithText("添加子计划").performClick()
         composeRule.waitForIdle()
+        // 「添加子计划」把父目标详情展开，汇总在列表行与详情里各出现一次。
+        // 等详情标题出现再继续：这样汇总读的是展开后的两处，而不是列表里的一处。
+        composeRule.waitUntil(TIMEOUT) {
+            composeRule.onAllNodesWithText("当前父目标：$TARGET_TITLE").fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    /** 等编辑后的分钟数真的写进库里：对话框关闭只说明保存被点了，不说明写入已经落地。 */
+    private fun awaitOwnedMinutes(minutes: Int) {
+        composeRule.waitUntil(TIMEOUT) {
+            readState().timeEntries.firstOrNull { it.id == OWNED_ENTRY_ID }?.durationMinutes == minutes
+        }
+    }
+
+    private fun readState(): AttentionState {
+        val database = AttentionDatabase.create(ApplicationProvider.getApplicationContext())
+        return try {
+            runBlocking {
+                RoomAttentionStateRepository(
+                    business = RoomBusinessDataRepository(database),
+                    settings = ApplicationProvider.getApplicationContext<android.content.Context>()
+                        .createSettingsStore(),
+                ).read()
+            }
+        } finally {
+            database.close()
+        }
     }
 }

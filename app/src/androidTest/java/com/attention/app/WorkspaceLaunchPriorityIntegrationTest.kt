@@ -119,7 +119,7 @@ class WorkspaceLaunchPriorityIntegrationTest {
 
         awaitSelected("nav-agenda")
         // 指定规划日：第三个规划日被打开，当天的条目可见
-        awaitText("规划日 $FAR_DATE")
+        awaitText("筛选：规划日 $FAR_DATE")
         awaitText(FAR_ENTRY_TITLE)
         // 指定规划日之外的那一天不出现，条目确实被定位到了
         composeRule.onNodeWithText(TODAY_ENTRY_TITLE).assertDoesNotExist()
@@ -244,7 +244,9 @@ class WorkspaceLaunchPriorityIntegrationTest {
     }
 
     companion object {
-        private const val TIMEOUT = 10_000L
+        // 每条用例都冷启动一次真实 Activity：CI 的软件渲染模拟器在内存紧张时
+        // 首帧与设置读取会明显变慢，10 秒偶尔不够导航出现并落到保存的入口。
+        private const val TIMEOUT = 30_000L
         private const val TARGET_ID = "launch-target"
         private const val TODAY_ENTRY_ID = "launch-today"
         private const val FAR_ENTRY_ID = "launch-far"
