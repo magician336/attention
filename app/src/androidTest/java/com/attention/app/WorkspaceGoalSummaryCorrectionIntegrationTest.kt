@@ -27,9 +27,11 @@ import org.junit.BeforeClass
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.performSemanticsAction
 import com.attention.app.ui.components.AttentionFeedbackTags
 
 @RunWith(AndroidJUnit4::class)
@@ -95,7 +97,10 @@ class WorkspaceGoalSummaryCorrectionIntegrationTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("edit-time-$OWNED_ENTRY_ID").performScrollTo().performClick()
         composeRule.onNodeWithTag("edit-time-minutes-$OWNED_ENTRY_ID", useUnmergedTree = true).performScrollTo().performTextReplacement("20")
-        composeRule.onNodeWithTag("save-time-$OWNED_ENTRY_ID").performClick()
+        // 分钟输入框会把软键盘带起来，保存按钮可能正好被键盘盖住；
+        // 坐标点击落在 IME 上时对话框不会关闭。直接触发保存按钮自己的点击语义。
+        composeRule.onNodeWithTag("save-time-$OWNED_ENTRY_ID")
+            .performSemanticsAction(SemanticsActions.OnClick)
         // 保存先关闭对话框、再异步写库；对话框关闭不等于写入已经落地，
         // 慢设备上直接切页会让目标树读到保存前的汇总。等库里的分钟数真的变了再走。
         composeRule.waitUntil(TIMEOUT) {
