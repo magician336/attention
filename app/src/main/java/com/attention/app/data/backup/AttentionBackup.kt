@@ -1,16 +1,13 @@
 package com.attention.app.data.backup
 
-import com.attention.domain.ActiveTimer
 import com.attention.domain.AttentionState
 import com.attention.domain.FutureGoalRule
 import com.attention.domain.GoalStage
-import com.attention.domain.LaunchDestination
 import com.attention.domain.Migration
 import com.attention.domain.Milestone
 import com.attention.domain.PeriodSnapshot
 import com.attention.domain.RecurrenceRule
 import com.attention.domain.ScheduleEntry
-import com.attention.domain.StoredSettings
 import com.attention.domain.Target
 import com.attention.domain.TargetMove
 import com.attention.domain.TimeEntry
@@ -21,52 +18,52 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 
-/** Stable, versioned JSON protocol. Domain objects are never serialized directly for backups. */
+/**
+ * 稳定、带版本的 JSON 协议文档（version 1）。
+ *
+ * 陈述实情：这份文档由**备份协议自己的模型**承载——字段类型是 [BackupStoredSettings]、
+ * [BackupTarget]、[BackupTimeEntry]、[BackupScheduleEntry] 等 `Backup*` 数据类（见
+ * [BackupProtocolModels]），不再直接引用 `:domain` 的领域类型。曾经这里写着「领域对象从不直接
+ * 参与备份序列化」，与代码相反，并因此把一次反序列化缺陷的排查带偏——去找一层并不存在的
+ * 映射层。映射层现在存在了：它在 [BackupDomainMapping]，是领域状态与协议模型之间唯一、集中的
+ * 转换处。
+ *
+ * `launchDestination` 与 `lastOpenedDestination` 由协议自己的枚举 [BackupLaunchDestination] 承载
+ * （见 [BackupProtocolEnums]）：它们在线上是字符串，按名解析与未知值容错因此属于协议的知识，
+ * 而不是在领域类型上留一层只为备份服务的标注。字段外形与 v1 一致，用户可见行为不变。
+ *
+ * 协议的顶层字段之间只通过字符串外键（`targetId`、`scheduleEntryId` 等）互相引用，
+ * 没有任何顶层类型直接嵌套另一个，所以每个集合都是一个扁平行列。协议内部唯一的
+ * 嵌套是活动计时器里的计时片段列表（[BackupTimerSegment]）。
+ *
+ * 协议到底承载了哪些东西，由 [BackupProtocolPayloads] 这份显式清单陈述；清单与协议实际字段的
+ * 一致性、以及协议字段与领域字段的一一对应，分别由单元测试保证。
+ */
 @Serializable
 data class AttentionBackup(
     val version: Int = CURRENT_VERSION,
-    val settings: StoredSettings = StoredSettings(),
-    val targets: List<Target> = emptyList(),
-    val goalStages: List<GoalStage> = emptyList(),
-    val timeEntries: List<TimeEntry> = emptyList(),
-    val schedules: List<ScheduleEntry> = emptyList(),
-    val recurrenceRules: List<RecurrenceRule> = emptyList(),
-    val migrations: List<Migration> = emptyList(),
-    val futureGoalRules: List<FutureGoalRule> = emptyList(),
-    val periodSnapshots: List<PeriodSnapshot> = emptyList(),
-    val targetMoves: List<TargetMove> = emptyList(),
-    val milestones: List<Milestone> = emptyList(),
+    val settings: BackupStoredSettings = BackupStoredSettings(),
+    val targets: List<BackupTarget> = emptyList(),
+    val goalStages: List<BackupGoalStage> = emptyList(),
+    val timeEntries: List<BackupTimeEntry> = emptyList(),
+    val schedules: List<BackupScheduleEntry> = emptyList(),
+    val recurrenceRules: List<BackupRecurrenceRule> = emptyList(),
+    val migrations: List<BackupMigration> = emptyList(),
+    val futureGoalRules: List<BackupFutureGoalRule> = emptyList(),
+    val periodSnapshots: List<BackupPeriodSnapshot> = emptyList(),
+    val targetMoves: List<BackupTargetMove> = emptyList(),
+    val milestones: List<BackupMilestone> = emptyList(),
     val experience: Long = 0,
-    val activeTimer: ActiveTimer? = null,
+    val activeTimer: BackupActiveTimer? = null,
     val onboardingCompleted: Boolean = false,
     // 缺这两个字段的历史备份按「日程」解释，与 DataStore 侧的有效偏好回退保持一致：
     // 旧值 TODAY / ALL_DATES 仍按兼容映射读成日程，但不再作为默认值被写回新备份。
-    val launchDestination: LaunchDestination = LaunchDestination.AGENDA,
-    val lastOpenedDestination: LaunchDestination = LaunchDestination.AGENDA,
+    val launchDestination: BackupLaunchDestination = BackupLaunchDestination.AGENDA,
+    val lastOpenedDestination: BackupLaunchDestination = BackupLaunchDestination.AGENDA,
     val notificationsEnabled: Boolean = true,
 ) {
-    fun toDomain(): AttentionState = AttentionState(
-        settings = settings,
-        targets = targets,
-        goalStages = goalStages,
-        timeEntries = timeEntries,
-        schedules = schedules,
-        recurrenceRules = recurrenceRules,
-        migrations = migrations,
-        futureGoalRules = futureGoalRules,
-        periodSnapshots = periodSnapshots,
-        targetMoves = targetMoves,
-        // The instance key is the domain ledger identity. Backups may have
-        // been produced by older versions that retained duplicate rows, so
-        // normalize them at the import boundary before deriving experience.
-        milestones = milestones.distinctBy { it.instanceKey },
-        experience = experience,
-        activeTimer = activeTimer,
-        onboardingCompleted = onboardingCompleted,
-        launchDestination = launchDestination,
-        lastOpenedDestination = lastOpenedDestination,
-        notificationsEnabled = notificationsEnabled,
-    ).recalculateExperience()
+    /** 协议模型 → 领域状态。转换本体在 [BackupDomainMapping]，这里只是既有调用点的入口。 */
+    fun toDomain(): AttentionState = toDomainState()
 
     companion object {
         const val CURRENT_VERSION = 1
@@ -91,37 +88,7 @@ data class AttentionBackup(
         private fun fromDomain(
             state: AttentionState,
             deduplicateMilestones: Boolean,
-        ): AttentionBackup {
-            // Normalize the milestone ledger before deriving experience so the
-            // serialized rows and the saved total are computed from the same
-            // canonical set of instance keys.
-            val canonical = state.copy(
-                milestones = if (deduplicateMilestones) {
-                    state.milestones.distinctBy { it.instanceKey }
-                } else {
-                    state.milestones
-                },
-            ).recalculateExperience()
-            return AttentionBackup(
-                settings = canonical.settings,
-                targets = canonical.targets,
-                goalStages = canonical.goalStages,
-                timeEntries = canonical.timeEntries,
-                schedules = canonical.schedules,
-                recurrenceRules = canonical.recurrenceRules,
-                migrations = canonical.migrations,
-                futureGoalRules = canonical.futureGoalRules,
-                periodSnapshots = canonical.periodSnapshots,
-                targetMoves = canonical.targetMoves,
-                milestones = canonical.milestones,
-                experience = canonical.experience,
-                activeTimer = canonical.activeTimer,
-                onboardingCompleted = canonical.onboardingCompleted,
-                launchDestination = canonical.launchDestination,
-                lastOpenedDestination = canonical.lastOpenedDestination,
-                notificationsEnabled = canonical.notificationsEnabled,
-            )
-        }
+        ): AttentionBackup = state.toProtocol(deduplicateMilestones)
     }
 }
 
@@ -320,7 +287,7 @@ object AttentionBackupCodec {
      * before an import reaches Room. This keeps malformed segments from being
      * treated as zero-duration work when the restored timer is stopped.
      */
-    private fun ActiveTimer.validate() {
+    private fun BackupActiveTimer.validate() {
         require(accumulatedMillis >= 0) { "活动计时器累计时长不能为负数" }
         completedSegments.forEach { segment ->
             require(segment.startedAtEpochMillis <= segment.endedAtEpochMillis) {
