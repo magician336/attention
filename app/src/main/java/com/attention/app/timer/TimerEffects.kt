@@ -98,6 +98,13 @@ class AndroidTimerEffects internal constructor(
 
     private fun ensureForegroundService() {
         if (foregroundServiceRequested) return
+        if (platform.foregroundServiceRunning()) {
+            // A new composition can observe a timer after START_STICKY has
+            // already restored the service. Mark the local adapter as live
+            // without issuing a second start request.
+            foregroundServiceRequested = true
+            return
+        }
         if (!platform.notificationsEnabled()) {
             onFeedback("通知权限未开启，计时仍会保存；通知栏控制不可用。")
         }
@@ -129,6 +136,7 @@ internal interface TimerPlatform {
     fun startForegroundService()
     fun stopForegroundService()
     fun notificationsEnabled(): Boolean
+    fun foregroundServiceRunning(): Boolean = false
 }
 
 private class AndroidTimerPlatform(
@@ -149,6 +157,14 @@ private class AndroidTimerPlatform(
     override fun notificationsEnabled(): Boolean =
         (BuildVersion.isNotificationPermissionGranted(context) &&
             NotificationManagerCompat.from(context).areNotificationsEnabled())
+
+    @Suppress("DEPRECATION")
+    override fun foregroundServiceRunning(): Boolean {
+        val services = context.getSystemService(android.app.ActivityManager::class.java)
+            ?.getRunningServices(Int.MAX_VALUE)
+            ?: return false
+        return services.any { it.service.className == AttentionTimerService::class.java.name }
+    }
 }
 
 /** Isolated API check so the adapter remains easy to exercise with a fake port. */

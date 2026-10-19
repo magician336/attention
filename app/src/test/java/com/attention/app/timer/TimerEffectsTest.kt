@@ -74,6 +74,16 @@ class TimerEffectsTest {
     }
 
     @Test
+    fun synchronization_does_not_request_a_second_start_when_service_is_already_running() {
+        val platform = RecordingTimerPlatform(foregroundServiceRunning = true)
+        val effects = AndroidTimerEffects(platform, {})
+
+        effects.synchronize(AttentionState(activeTimer = ActiveTimer(targetId = null, startedAtEpochMillis = 10L, lastPlanningDate = "2026-10-19")))
+
+        assertEquals(emptyList<String>(), platform.events)
+    }
+
+    @Test
     fun platform_failure_is_reported_without_changing_domain_state() {
         val platform = RecordingTimerPlatform(startFailure = IllegalStateException("blocked"))
         val messages = mutableListOf<String>()
@@ -89,6 +99,7 @@ class TimerEffectsTest {
 private class RecordingTimerPlatform(
     private val notificationsEnabled: Boolean = true,
     private val startFailure: Throwable? = null,
+    private val foregroundServiceRunning: Boolean = false,
 ) : TimerPlatform {
     val events = mutableListOf<String>()
 
@@ -106,4 +117,6 @@ private class RecordingTimerPlatform(
     }
 
     override fun notificationsEnabled(): Boolean = notificationsEnabled
+
+    override fun foregroundServiceRunning(): Boolean = foregroundServiceRunning
 }

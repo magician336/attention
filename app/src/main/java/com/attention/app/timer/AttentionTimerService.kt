@@ -102,7 +102,7 @@ class AttentionTimerService : Service() {
                 // The observer normally handles this transition. Reading once
                 // here makes auto-stop deterministic during process teardown.
                 val state = repository.state.first()
-                if (state.activeTimer == null) stopService(startId)
+                if (state.activeTimer == null) timerEffects.stopped()
             }
         }
         // A process restart is useful while a persisted timer is active. The
@@ -114,9 +114,9 @@ class AttentionTimerService : Service() {
         if (stateJob?.isActive == true) return
         stateJob = scope.launch {
             repository.state
-                .catch { stopService() }
+                .catch { timerEffects.stopped() }
                 .collectLatest { state ->
-                    if (state.activeTimer == null) stopService()
+                    if (state.activeTimer == null) timerEffects.stopped()
                     else notifyState(state)
                 }
         }
@@ -132,11 +132,6 @@ class AttentionTimerService : Service() {
         runCatching {
             NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, notification(state))
         }
-    }
-
-    private fun stopService(startId: Int? = null) {
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        if (startId == null) stopSelf() else stopSelfResult(startId)
     }
 
     private fun notification(state: AttentionState?): Notification {
