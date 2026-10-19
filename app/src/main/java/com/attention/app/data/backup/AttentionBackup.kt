@@ -125,6 +125,108 @@ data class AttentionBackup(
     }
 }
 
+/** A single record category and its count in a backup or candidate state. */
+data class BackupRecordCount(
+    val label: String,
+    val count: Int,
+)
+
+/** Counts for every record category owned by the versioned backup protocol. */
+data class BackupRecordSummary(
+    val targets: Int,
+    val goalStages: Int,
+    val timeEntries: Int,
+    val schedules: Int,
+    val recurrenceRules: Int,
+    val migrations: Int,
+    val futureGoalRules: Int,
+    val periodSnapshots: Int,
+    val targetMoves: Int,
+    val milestones: Int,
+) {
+    val totalRecords: Int
+        get() = targets + goalStages + timeEntries + schedules + recurrenceRules + migrations +
+            futureGoalRules + periodSnapshots + targetMoves + milestones
+
+    /** Presentation rows keep protocol-field knowledge inside the backup module. */
+    val rows: List<BackupRecordCount>
+        get() = listOf(
+            BackupRecordCount("目标", targets),
+            BackupRecordCount("阶段", goalStages),
+            BackupRecordCount("时间记录", timeEntries),
+            BackupRecordCount("日程", schedules),
+            BackupRecordCount("重复规则", recurrenceRules),
+            BackupRecordCount("迁移", migrations),
+            BackupRecordCount("未来目标规则", futureGoalRules),
+            BackupRecordCount("周期快照", periodSnapshots),
+            BackupRecordCount("目标移动", targetMoves),
+            BackupRecordCount("里程碑", milestones),
+        )
+
+    /** Existing three-line grouping, kept as presentation data rather than root logic. */
+    val displayLines: List<List<BackupRecordCount>>
+        get() = listOf(rows.take(4), rows.drop(4).take(3), rows.drop(7))
+
+    companion object {
+        fun fromState(state: AttentionState): BackupRecordSummary = BackupRecordSummary(
+            targets = state.targets.size,
+            goalStages = state.goalStages.size,
+            timeEntries = state.timeEntries.size,
+            schedules = state.schedules.size,
+            recurrenceRules = state.recurrenceRules.size,
+            migrations = state.migrations.size,
+            futureGoalRules = state.futureGoalRules.size,
+            periodSnapshots = state.periodSnapshots.size,
+            targetMoves = state.targetMoves.size,
+            milestones = state.milestones.distinctBy { it.instanceKey }.size,
+        )
+
+        internal fun fromBackup(backup: AttentionBackup): BackupRecordSummary = BackupRecordSummary(
+            targets = backup.targets.size,
+            goalStages = backup.goalStages.size,
+            timeEntries = backup.timeEntries.size,
+            schedules = backup.schedules.size,
+            recurrenceRules = backup.recurrenceRules.size,
+            migrations = backup.migrations.size,
+            futureGoalRules = backup.futureGoalRules.size,
+            periodSnapshots = backup.periodSnapshots.size,
+            targetMoves = backup.targetMoves.size,
+            milestones = backup.milestones.distinctBy { it.instanceKey }.size,
+        )
+    }
+}
+
+/** State facts needed to render an import preview without exposing the state itself. */
+data class BackupStateSummary(
+    val records: BackupRecordSummary,
+    val hasActiveTimer: Boolean,
+    val hasSettings: Boolean,
+) {
+    val totalRecords: Int
+        get() = records.totalRecords
+
+    companion object {
+        fun fromState(state: AttentionState): BackupStateSummary = BackupStateSummary(
+            records = BackupRecordSummary.fromState(state),
+            hasActiveTimer = state.activeTimer != null,
+            // AttentionState always has a settings value, including after a v1
+            // backup omitted the optional wire field and decoding supplied its default.
+            hasSettings = true,
+        )
+    }
+}
+
+/** Current and candidate facts captured by one immutable [ImportPlan]. */
+data class BackupImportSummary(
+    val incoming: BackupStateSummary,
+    val current: BackupStateSummary,
+    val candidate: BackupStateSummary,
+) {
+    /** The same difference previously shown by the import confirmation dialog. */
+    val possibleNewRecords: Int
+        get() = candidate.totalRecords - current.totalRecords
+}
+
 /** Lightweight, validated metadata shown before an import is committed. */
 data class BackupPreview(
     val version: Int,
@@ -140,10 +242,81 @@ data class BackupPreview(
     val milestones: Int,
     val hasActiveTimer: Boolean,
     val hasSettings: Boolean,
+    /** Filled by [BackupWorkflow] after it builds the immutable import plan. */
+    val importSummary: BackupImportSummary? = null,
 ) {
+    val recordSummary: BackupRecordSummary
+        get() = BackupRecordSummary(
+            targets = targets,
+            goalStages = goalStages,
+            timeEntries = timeEntries,
+            schedules = schedules,
+            recurrenceRules = recurrenceRules,
+            migrations = migrations,
+            futureGoalRules = futureGoalRules,
+            periodSnapshots = periodSnapshots,
+            targetMoves = targetMoves,
+            milestones = milestones,
+        )
+
     val totalRecords: Int
-        get() = targets + goalStages + timeEntries + schedules + recurrenceRules + migrations +
-            futureGoalRules + periodSnapshots + targetMoves + milestones
+        get() = recordSummary.totalRecords
+
+    /** The raw preview API remains usable without a current state snapshot. */
+    val records: BackupRecordSummary
+        get() = recordSummary
+
+    /** Short aliases for callers that do not need to know the summary container name. */
+    val currentSummary: BackupStateSummary?
+        get() = importSummary?.current
+    val candidateSummary: BackupStateSummary?
+        get() = importSummary?.candidate
+    val possibleNewRecords: Int?
+        get() = importSummary?.possibleNewRecords
+
+    fun withImportStates(current: AttentionState, candidate: AttentionState): BackupPreview = copy(
+        importSummary = BackupImportSummary(
+            incoming = BackupStateSummary(
+                records = recordSummary,
+                hasActiveTimer = hasActiveTimer,
+                hasSettings = hasSettings,
+            ),
+            current = BackupStateSummary.fromState(current),
+            candidate = BackupStateSummary.fromState(candidate),
+        ),
+    )
+
+    fun withCandidateState(candidate: AttentionState): BackupPreview = importSummary?.let { summary ->
+        copy(importSummary = summary.copy(candidate = BackupStateSummary.fromState(candidate)))
+    } ?: this
+
+    /**
+     * Renders the existing confirmation text from facts owned by this module.
+     * Workspace only supplies the mode and displays the result.
+     */
+    fun render(mode: ImportMode): String = buildString {
+        val incoming = importSummary?.incoming ?: BackupStateSummary(
+            records = recordSummary,
+            hasActiveTimer = hasActiveTimer,
+            hasSettings = hasSettings,
+        )
+        val counts = incoming.records
+        append("版本 $version，共 $totalRecords 条记录\n")
+        append(
+            counts.displayLines.joinToString("\n") { rowGroup ->
+                rowGroup.joinToString("，") { row -> "${row.label} ${row.count}" }
+            },
+        )
+        append("\n")
+        append(if (incoming.hasSettings) "包含设置。" else "不包含设置。")
+        append(" ")
+        append(if (incoming.hasActiveTimer) "包含活动计时器。" else "不包含活动计时器。")
+        importSummary?.let { summary ->
+            val label = if (mode == ImportMode.REPLACE) "恢复后预计" else "合并后预计"
+            append("\n${label} ${summary.candidate.totalRecords} 条，可能新增约 ${summary.possibleNewRecords} 条。")
+        }
+        append("\n导入前会自动备份当前数据。")
+    }
 }
 
 object AttentionBackupCodec {
@@ -171,18 +344,19 @@ object AttentionBackupCodec {
     fun preview(encoded: String): BackupPreview {
         val root = json.parseToJsonElement(encoded).jsonObject
         val backup = parseValidated(encoded)
+        val records = BackupRecordSummary.fromBackup(backup)
         return BackupPreview(
             version = backup.version,
-            targets = backup.targets.size,
-            goalStages = backup.goalStages.size,
-            timeEntries = backup.timeEntries.size,
-            schedules = backup.schedules.size,
-            recurrenceRules = backup.recurrenceRules.size,
-            migrations = backup.migrations.size,
-            futureGoalRules = backup.futureGoalRules.size,
-            periodSnapshots = backup.periodSnapshots.size,
-            targetMoves = backup.targetMoves.size,
-            milestones = backup.milestones.distinctBy { it.instanceKey }.size,
+            targets = records.targets,
+            goalStages = records.goalStages,
+            timeEntries = records.timeEntries,
+            schedules = records.schedules,
+            recurrenceRules = records.recurrenceRules,
+            migrations = records.migrations,
+            futureGoalRules = records.futureGoalRules,
+            periodSnapshots = records.periodSnapshots,
+            targetMoves = records.targetMoves,
+            milestones = records.milestones,
             hasActiveTimer = backup.activeTimer != null,
             hasSettings = "settings" in root,
         )

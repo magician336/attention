@@ -94,12 +94,6 @@ internal class StateCommitCoordinator(
         }
     }
 
-    suspend fun preserveImportBackupIfAbsent() = mutex.withLock {
-        if (backupStore.read() == null) {
-            backupStore.write(AttentionBackupCodec.encode(readState()))
-        }
-    }
-
     suspend fun restoreReminders() = mutex.withLock {
         reminderCoordinator.restore(readState())
     }

@@ -18,8 +18,9 @@ class BackupBoundaryRegressionTest {
 
         assertFalse(workspace.contains("AttentionBackupCodec"))
         assertFalse(Regex("AttentionBackupCodec\\s*\\.").containsMatchIn(workspace))
-        assertTrue(workspace.contains("viewModel.prepareImport"))
-        assertTrue(workspace.contains("viewModel.commitImport"))
+        assertTrue(workspace.contains("backupActions.prepareImport"))
+        assertTrue(workspace.contains("backupActions.commitImport"))
+        assertTrue(workspace.contains("backupActions.restoreLastImportBackupResult"))
     }
 
     @Test

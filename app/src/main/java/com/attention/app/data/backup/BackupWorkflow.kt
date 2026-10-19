@@ -45,6 +45,7 @@ data class ImportPlan(
     fun forReplacement(): ImportPlan = copy(
         mode = ImportMode.REPLACE,
         candidateState = incomingState ?: candidateState,
+        preview = preview.withCandidateState(incomingState ?: candidateState),
     )
 }
 
@@ -111,13 +112,6 @@ typealias StateSubmissionResult = BackupCommitResult
 interface BackupStateSubmissionPort : BackupStateReader {
     suspend fun submit(expectedFingerprint: String, next: AttentionState): BackupCommitResult
 
-    /**
-     * Compatibility imports call this when parsing fails before a plan exists.
-     * Production ports perform the read/write under the same serialized
-     * boundary as [submit]; test and non-persistent ports may leave it empty.
-     */
-    suspend fun preserveImportBackupIfAbsent() = Unit
-
     suspend fun commit(expectedFingerprint: String, next: AttentionState): BackupCommitResult =
         submit(expectedFingerprint, next)
 
@@ -166,33 +160,25 @@ class BackupWorkflow(
         // Decode and preview are both delegated to the protocol authority. The
         // state read is deliberately performed once and is shared by the plan
         // fingerprint and merge candidate.
-        return try {
-            val current = stateReader()
-            val incoming = AttentionBackupCodec.decode(encoded)
-            val preview = AttentionBackupCodec.preview(encoded)
-            val candidate = if (mode == ImportMode.MERGE) {
-                AttentionBackupCodec.merge(current, incoming)
-            } else {
-                incoming
-            }
-            // Merge can combine references from two independently valid states;
-            // validate the resulting candidate before exposing it to a caller.
-            AttentionBackupCodec.validate(candidate)
-            ImportPlan(
-                mode = mode,
-                preview = preview,
-                candidateState = candidate,
-                inputVersion = preview.version,
-                currentStateFingerprint = stateFingerprint(current),
-                incomingState = incoming,
-            )
-        } catch (error: Throwable) {
-            stateSubmissionPort?.let { port ->
-                runCatching { port.preserveImportBackupIfAbsent() }
-                    .onFailure(error::addSuppressed)
-            }
-            throw error
+        val current = stateReader()
+        val incoming = AttentionBackupCodec.decode(encoded)
+        val preview = AttentionBackupCodec.preview(encoded)
+        val candidate = if (mode == ImportMode.MERGE) {
+            AttentionBackupCodec.merge(current, incoming)
+        } else {
+            incoming
         }
+        // Merge can combine references from two independently valid states;
+        // validate the resulting candidate before exposing it to a caller.
+        AttentionBackupCodec.validate(candidate)
+        return ImportPlan(
+            mode = mode,
+            preview = preview.withImportStates(current, candidate),
+            candidateState = candidate,
+            inputVersion = preview.version,
+            currentStateFingerprint = stateFingerprint(current),
+            incomingState = incoming,
+        )
     }
 
     /** Transitional overload for adapters that still expose the old boolean flag. */

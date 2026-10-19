@@ -56,7 +56,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.attention.app.data.AttentionStateRepository
 import com.attention.app.data.RoomAttentionStateRepository
-import com.attention.app.data.backup.BackupPreview
 import com.attention.app.data.backup.BackupCommitResult
 import com.attention.app.data.backup.ExportBundle
 import com.attention.app.data.backup.ExportDocument
@@ -66,8 +65,8 @@ import com.attention.app.data.backup.FileImportBackupStore
 import com.attention.app.data.room.AttentionDatabase
 import com.attention.app.data.room.RoomBusinessDataRepository
 import com.attention.app.data.settings.createSettingsStore
-import com.attention.app.timer.AttentionTimerService
-import com.attention.app.timer.AttentionBootReceiver
+import com.attention.app.timer.AndroidTimerEffects
+import com.attention.app.timer.TimerEffects
 import com.attention.app.reminder.AlarmReminderCoordinator
 import com.attention.app.reminder.ReminderScheduler
 import com.attention.app.ui.components.AttentionButton
@@ -152,7 +151,7 @@ internal fun agendaLoadFacts(stateLoaded: Boolean, loadError: String?): AgendaLo
  * ViewModel、Room、DataStore 与平台能力因此只出现在组合根侧，页面拿不到它们（ADR-0005 第 1、4 节）。
  */
 private class SettingsActionsAdapter(
-    private val viewModel: AttentionViewModel,
+    private val planningActions: SettingsPlanningActions,
     private val currentWeekStartDay: () -> Int,
     private val onRequestReminderPermission: () -> Unit,
     private val onPreviewJsonBackup: () -> Unit,
@@ -166,16 +165,16 @@ private class SettingsActionsAdapter(
     private val onClose: () -> Unit,
 ) : SettingsActions {
     override fun selectLaunchDestination(destination: LaunchDestination) {
-        viewModel.setLaunchDestination(destination)
+        planningActions.setLaunchDestination(destination)
     }
 
     // 界线与容量一起写进同一份规划设置；周起始日当前的值由组合根读出来一起提交。
     override fun savePlanningDaySettings(boundaryMinutes: Int, dailyCapacityMinutes: Int?) {
-        viewModel.setSettings(StoredSettings(boundaryMinutes, currentWeekStartDay(), dailyCapacityMinutes))
+        planningActions.setSettings(StoredSettings(boundaryMinutes, currentWeekStartDay(), dailyCapacityMinutes))
     }
 
     override fun selectWeekStartDay(day: Int) {
-        viewModel.setWeekStart(day)
+        planningActions.setWeekStart(day)
     }
 
     override fun requestNotificationPermission() = onRequestReminderPermission()
@@ -209,11 +208,11 @@ private class SettingsActionsAdapter(
  * `completeOnboarding()` 再更新引导状态并把用户送回当前规划日的日程页。
  */
 private class OnboardingActionsAdapter(
-    private val viewModel: AttentionViewModel,
+    private val planningActions: OnboardingPlanningActions,
     private val onCompleted: () -> Unit,
 ) : OnboardingActions {
     override fun savePlanningDaySettings(boundaryMinutes: Int, weekStartDay: Int, dailyCapacityMinutes: Int?) {
-        viewModel.setSettings(
+        planningActions.setSettings(
             StoredSettings(
                 planningDayBoundaryMinutes = boundaryMinutes,
                 weekStartDay = weekStartDay,
@@ -223,15 +222,15 @@ private class OnboardingActionsAdapter(
     }
 
     override fun selectWeekStartDay(day: Int) {
-        viewModel.setWeekStart(day)
+        planningActions.setWeekStart(day)
     }
 
     override fun addFirstTarget(title: String) {
-        viewModel.addTarget(title)
+        planningActions.addTarget(title)
     }
 
     override fun addFirstSchedule(draft: AgendaScheduleDraft) {
-        viewModel.saveSchedule(
+        planningActions.saveSchedule(
             ScheduleEntry(
                 planningDate = draft.planningDate,
                 title = draft.title,
@@ -246,7 +245,7 @@ private class OnboardingActionsAdapter(
     }
 
     override fun completeOnboarding() {
-        viewModel.finishOnboarding()
+        planningActions.finishOnboarding()
         onCompleted()
     }
 }
@@ -257,7 +256,8 @@ private class OnboardingActionsAdapter(
  * 因此只出现在组合根侧（ADR-0005 第 4 节「Android adapter 归属组合根」）。
  */
 private class AgendaActionsAdapter(
-    private val viewModel: AttentionViewModel,
+    private val investmentActions: InvestmentActions,
+    private val planningActions: AgendaPlanningActions,
     private val selection: AgendaSelection,
     private val currentDate: () -> LocalDate,
     private val currentPlanningDay: () -> LocalDate,
@@ -266,7 +266,10 @@ private class AgendaActionsAdapter(
     private val onStartFreeTimer: (String?) -> Unit,
     private val onRequestReminderPermission: () -> Unit,
     private val onStopTimer: () -> Unit,
+    private val onPauseTimer: () -> Unit,
+    private val onResumeTimer: () -> Unit,
     private val onRecoverTimerFromNow: () -> Unit,
+    private val onSwitchTimer: (String?) -> Unit,
     private val onTimeRecordDeleted: (TimeEntry) -> Unit,
     private val onOpenSettings: () -> Unit,
     /**
@@ -305,13 +308,13 @@ private class AgendaActionsAdapter(
 
     override fun addSchedule(draft: AgendaScheduleDraft) {
         val date = LocalDate.parse(draft.planningDate)
-        viewModel.saveSchedule(scheduleEntryFrom(draft, date))
+        planningActions.saveSchedule(scheduleEntryFrom(draft, date))
         onFeedback(AgendaOperationFeedback.SCHEDULE_ADDED)
     }
 
     override fun addScheduleWithBackfill(draft: AgendaScheduleDraft, backfill: AgendaBackfillDraft) {
         val date = LocalDate.parse(draft.planningDate)
-        viewModel.saveSchedule(
+        planningActions.saveSchedule(
             scheduleEntryFrom(draft, date),
             ScheduleBackfill(
                 durationMinutes = backfill.durationMinutes,
@@ -323,7 +326,7 @@ private class AgendaActionsAdapter(
     }
 
     override fun updateSchedule(entry: ScheduleEntry, reminderMinuteOfDay: Int?) {
-        viewModel.saveSchedule(entry.copy(reminderEpochMillis = reminderMinuteOfDay?.let { minute ->
+        planningActions.saveSchedule(entry.copy(reminderEpochMillis = reminderMinuteOfDay?.let { minute ->
             reminderEpochMillis(LocalDate.parse(entry.planningDate), minute, zone)
         }))
         onFeedback(AgendaOperationFeedback.SCHEDULE_UPDATED)
@@ -334,7 +337,7 @@ private class AgendaActionsAdapter(
         reminderMinuteOfDay: Int?,
         backfill: AgendaBackfillDraft,
     ) {
-        viewModel.saveSchedule(
+        planningActions.saveSchedule(
             entry.copy(reminderEpochMillis = reminderMinuteOfDay?.let { minute ->
                 reminderEpochMillis(LocalDate.parse(entry.planningDate), minute, zone)
             }),
@@ -349,12 +352,12 @@ private class AgendaActionsAdapter(
     }
 
     override fun confirmScheduleCompleted(entryId: String) {
-        viewModel.confirmScheduleCompleted(entryId)
+        planningActions.confirmScheduleCompleted(entryId)
         onFeedback(AgendaOperationFeedback.SCHEDULE_COMPLETED)
     }
 
     override fun toggleScheduleCompleted(entryId: String) {
-        viewModel.toggleScheduleCompleted(entryId)
+        planningActions.toggleScheduleCompleted(entryId)
         // 切换完成与取消完成走同一条命令，确认因此只说「完成状态已更新」，
         // 不去猜这一次到底是切到了哪一侧——结论由时间轴上的那一行自己说。
         onFeedback(AgendaOperationFeedback.SCHEDULE_COMPLETION_TOGGLED)
@@ -363,13 +366,13 @@ private class AgendaActionsAdapter(
     // 结果面板上的「标记为完成」与行上的完成是同一件事：走同一条既有完成路径，
     // 完成标记与投入经验、里程碑仍由领域计算，不新造命令。
     override fun markStoppedScheduleCompleted(entryId: String) {
-        viewModel.markStoppedScheduleCompleted(entryId)
-        viewModel.clearStoppedEntryIds()
+        planningActions.markStoppedScheduleCompleted(entryId)
+        planningActions.clearStoppedEntryIds()
     }
 
     // 「结束并保留未完成」只是关闭这一次结果面板：投入已经记下，完成状态保持原样。
     override fun dismissStopResult() {
-        viewModel.clearStoppedEntryIds()
+        planningActions.clearStoppedEntryIds()
     }
 
     // 条目一起带出，因此产出的时间记录保留同一个来源关联。
@@ -391,38 +394,38 @@ private class AgendaActionsAdapter(
     // 暂停、恢复、切换与从此刻继续都只是领域命令：通知栏是持久化状态的投影，
     // 因此这些动作不需要页面自己去碰前台服务（ADR-0005 第 4 节）。
     override fun pauseRunningTimer() {
-        viewModel.pauseTimer()
+        onPauseTimer()
     }
 
     override fun resumeRunningTimer() {
-        viewModel.resumeTimer()
+        onResumeTimer()
     }
 
     // 从此刻继续意味着用户已经对上一次被打断的计时做了决定，恢复提示要一并撤掉。
     override fun recoverRunningTimerFromNow() = onRecoverTimerFromNow()
 
     override fun switchRunningTimerTarget(targetId: String?) {
-        viewModel.switchTimer(targetId)
+        onSwitchTimer(targetId)
     }
 
     override fun editTime(entryId: String, minutes: Int, targetId: String?, note: String) {
-        viewModel.editTime(entryId, minutes, targetId, note)
+        investmentActions.editTime(entryId, minutes, targetId, note)
         onFeedback(AgendaOperationFeedback.TIME_RECORDED)
     }
 
     // 删除的可撤销提示由组合根展示：撤销要用回被删掉的那条记录本身。
     override fun deleteTime(entryId: String) {
-        viewModel.deleteTimeWithUndo(entryId, onTimeRecordDeleted)
+        investmentActions.deleteTimeWithUndo(entryId, onTimeRecordDeleted)
     }
 
     override fun addRecurrenceAndMaterialize(draft: AgendaRecurrenceDraft) {
         val rule = draft.toRecurrenceRule()
-        viewModel.addRecurrenceAndMaterialize(rule, LocalDate.parse(rule.startDate).plusDays(30))
+        planningActions.addRecurrenceAndMaterialize(rule, LocalDate.parse(rule.startDate).plusDays(30))
         onFeedback(AgendaOperationFeedback.RECURRENCE_ADDED)
     }
 
     override fun stopRecurrence(ruleId: String) {
-        viewModel.stopRecurrence(ruleId)
+        planningActions.stopRecurrence(ruleId)
         onFeedback(AgendaOperationFeedback.RECURRENCE_STOPPED)
     }
 
@@ -430,7 +433,7 @@ private class AgendaActionsAdapter(
 
     // 重试就是重新读一次本地数据：重新订阅发生在组合根持有的仓储上，页面不碰持久化。
     override fun retryLoad() {
-        viewModel.retryLoad()
+        planningActions.retryLoad()
         onFeedback(AgendaOperationFeedback.LOAD_RETRYING)
     }
 
@@ -450,7 +453,7 @@ private class WorkspaceViewModelFactory(
  * ViewModel 与平台能力因此只出现在组合根侧。
  */
 private class StatisticsActionsAdapter(
-    private val viewModel: AttentionViewModel,
+    private val planningActions: StatisticsPlanningActions,
     private val selection: StatisticsSelection,
     private val currentDate: () -> LocalDate,
     private val onOpenSettings: () -> Unit,
@@ -468,15 +471,15 @@ private class StatisticsActionsAdapter(
     }
 
     override fun settlePeriodSnapshots() {
-        viewModel.settlePeriodSnapshots()
+        planningActions.settlePeriodSnapshots()
     }
 
     override fun cancelMigration(migrationId: String) {
-        viewModel.cancelMigration(migrationId)
+        planningActions.cancelMigration(migrationId)
     }
 
     override fun awardMilestones() {
-        viewModel.awardMilestones()
+        planningActions.awardMilestones()
     }
 
     // 设置页从统计页进入：顶级页面仍然是统计，因此这里不改变 destination。
@@ -489,15 +492,15 @@ private class StatisticsActionsAdapter(
  * ViewModel、Room 与 id 生成器因此只出现在组合根侧。
  */
 private class TargetsActionsAdapter(
-    private val viewModel: AttentionViewModel,
+    private val planningActions: TargetPlanningActions,
     private val currentState: () -> AttentionState,
 ) : TargetsActions {
     override fun addTarget(title: String, parentId: String?) {
-        viewModel.addTarget(title, parentId)
+        planningActions.addTarget(title, parentId)
     }
 
     override fun renameTarget(targetId: String, title: String) {
-        viewModel.renameTarget(targetId, title)
+        planningActions.renameTarget(targetId, title)
     }
 
     override fun addGoal(
@@ -507,11 +510,11 @@ private class TargetsActionsAdapter(
         startDate: String,
         dueDate: String?,
     ) {
-        viewModel.addGoal(targetId, cadence, targetMinutes, startDate, dueDate)
+        planningActions.addGoal(targetId, cadence, targetMinutes, startDate, dueDate)
     }
 
     override fun assignUnowned(timeEntryIds: Set<String>, targetId: String) {
-        viewModel.assignUnowned(timeEntryIds, targetId)
+        planningActions.assignUnowned(timeEntryIds, targetId)
     }
 
     override fun saveFutureGoal(
@@ -531,11 +534,11 @@ private class TargetsActionsAdapter(
             effectiveFrom = effectiveFrom,
             dueDate = dueDate,
         )
-        if (ruleId == null) viewModel.addFutureGoal(rule, onDate) else viewModel.updateFutureGoal(rule, onDate)
+        if (ruleId == null) planningActions.addFutureGoal(rule, onDate) else planningActions.updateFutureGoal(rule, onDate)
     }
 
     override fun cancelFutureGoal(ruleId: String, onDate: LocalDate) {
-        viewModel.cancelFutureGoal(ruleId, onDate)
+        planningActions.cancelFutureGoal(ruleId, onDate)
     }
 
     override fun appendOneTimeGoal(
@@ -545,7 +548,7 @@ private class TargetsActionsAdapter(
         dueDate: String?,
         onSuccess: () -> Unit,
     ) {
-        viewModel.appendOneTimeGoal(targetId, targetMinutes, startDate, dueDate, onSuccess)
+        planningActions.appendOneTimeGoal(targetId, targetMinutes, startDate, dueDate, onSuccess)
     }
 
     override fun saveMigration(
@@ -566,44 +569,44 @@ private class TargetsActionsAdapter(
             destinationEndDate = destinationEndDate,
             cancelled = false,
         )
-        if (migrationId == null) viewModel.addMigration(migration, onDate) else viewModel.updateMigration(migration, onDate)
+        if (migrationId == null) planningActions.addMigration(migration, onDate) else planningActions.updateMigration(migration, onDate)
     }
 
     override fun cancelMigration(migrationId: String) {
-        viewModel.cancelMigration(migrationId)
+        planningActions.cancelMigration(migrationId)
     }
 
     override fun toggleTarget(targetId: String, expanded: Boolean) {
-        viewModel.toggleTarget(targetId, expanded)
+        planningActions.toggleTarget(targetId, expanded)
     }
 
     override fun reorderTarget(targetId: String, newIndex: Int) {
-        viewModel.reorderTarget(targetId, newIndex)
+        planningActions.reorderTarget(targetId, newIndex)
     }
 
     override fun archiveTarget(targetId: String) {
-        viewModel.archiveTarget(targetId)
+        planningActions.archiveTarget(targetId)
     }
 
     override fun restoreTargets(targetIds: Set<String>) {
-        viewModel.restoreTargets(targetIds)
+        planningActions.restoreTargets(targetIds)
     }
 
     override fun deleteTargetRelations(targetIds: Set<String>) {
-        viewModel.deleteTargetRelations(targetIds)
+        planningActions.deleteTargetRelations(targetIds)
     }
 
     override fun moveTargetFrom(targetId: String, parentId: String?, effectiveFrom: String) {
-        viewModel.moveTargetFrom(targetId, parentId, effectiveFrom)
+        planningActions.moveTargetFrom(targetId, parentId, effectiveFrom)
     }
 
     override fun updateFutureTargetMove(moveId: String, parentId: String?, effectiveFrom: String) {
         val existing = currentState().targetMoves.firstOrNull { it.id == moveId } ?: return
-        viewModel.updateFutureTargetMove(existing.copy(parentId = parentId, effectiveFrom = effectiveFrom))
+        planningActions.updateFutureTargetMove(existing.copy(parentId = parentId, effectiveFrom = effectiveFrom))
     }
 
     override fun cancelFutureTargetMove(moveId: String) {
-        viewModel.cancelFutureTargetMove(moveId)
+        planningActions.cancelFutureTargetMove(moveId)
     }
 }
 
@@ -621,6 +624,13 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         )
     }
     val viewModel: AttentionViewModel = viewModel(factory = WorkspaceViewModelFactory(repository))
+    val investmentActions: InvestmentActions = viewModel
+    val settingsPlanningActions: SettingsPlanningActions = viewModel
+    val onboardingPlanningActions: OnboardingPlanningActions = viewModel
+    val targetPlanningActions: TargetPlanningActions = viewModel
+    val agendaPlanningActions: AgendaPlanningActions = viewModel
+    val statisticsPlanningActions: StatisticsPlanningActions = viewModel
+    val backupActions: BackupActions = viewModel
     val state by viewModel.state.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val tokens = attentionTokens()
@@ -716,7 +726,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             }
             result.onSuccess { encoded ->
                 if (encoded.isNotBlank()) {
-                    viewModel.prepareImport(
+                    backupActions.prepareImport(
                         encoded = encoded,
                         clearExisting = false,
                         onResult = { plan -> pendingImport = plan },
@@ -838,41 +848,29 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     val injectedNow = Instant.now()
     val injectedZone = ZoneId.systemDefault()
 
-    // 从日程条目起计时：日程页的「今日安排」与所有日期范围共用这一份实现，
-    // 因此产出同样的时间记录与同样的平台行为（保留 scheduleEntryId 来源关联）。
-    fun startTimerFromSchedule(entry: ScheduleEntry) {
-        viewModel.startTimer(
-            targetId = entry.targetId,
-            onSuccess = {
-                AttentionBootReceiver.cancelRecoveryPrompt(context)
-                if (!notificationsEnabled(context)) {
-                    feedbackScope.launch {
-                        feedback.showMessage("通知权限未开启，计时仍会保存；通知栏控制不可用。")
-                    }
-                }
-                ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
-            },
-            scheduleEntryId = entry.id,
+    // 所有计时入口共用同一个平台效果 seam。领域命令先提交，ViewModel 的成功回调
+    // 再触发这里；因此平台失败不会撤销已保存的时间记录，页面也不需要知道 Android API。
+    val timerEffects: TimerEffects = remember(context) {
+        AndroidTimerEffects(context) { message ->
+            feedbackScope.launch { feedback.showMessage(message) }
+        }
+    }
+    androidx.compose.runtime.LaunchedEffect(stateLoaded, state.activeTimer) {
+        if (stateLoaded) timerEffects.synchronize(state)
+    }
+
+    // 两个启动入口只传不同的领域来源参数，平台效果走同一条路径。
+    fun startTimer(targetId: String?, scheduleEntryId: String?) {
+        investmentActions.startTimer(
+            targetId = targetId,
+            onSuccess = { timerEffects.started() },
+            scheduleEntryId = scheduleEntryId,
         )
     }
 
-    // 自由计时：不带日程来源，只带一个计划（或未归属活动）。平台动作与上面同一条路径，
-    // 差别只在产出的时间记录没有 scheduleEntryId。
-    fun startFreeTimer(targetId: String?) {
-        viewModel.startTimer(
-            targetId = targetId,
-            onSuccess = {
-                AttentionBootReceiver.cancelRecoveryPrompt(context)
-                if (!notificationsEnabled(context)) {
-                    feedbackScope.launch {
-                        feedback.showMessage("通知权限未开启，计时仍会保存；通知栏控制不可用。")
-                    }
-                }
-                ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
-            },
-            scheduleEntryId = null,
-        )
-    }
+    // 从日程条目起计时保留来源关联；自由计时明确不带日程来源。
+    fun startTimerFromSchedule(entry: ScheduleEntry) = startTimer(entry.targetId, entry.id)
+    fun startFreeTimer(targetId: String?) = startTimer(targetId, null)
 
     val currentWeekStartDay by androidx.compose.runtime.rememberUpdatedState(state.settings.weekStartDay)
     // 日程页的选中范围由页面 module 提供类型与迁移语义，组合根只持有一个实例来喂投影。
@@ -917,7 +915,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     val currentStatisticsDate by androidx.compose.runtime.rememberUpdatedState(statisticsState.selectedDate)
     val statisticsActions: StatisticsActions = remember(viewModel) {
         StatisticsActionsAdapter(
-            viewModel = viewModel,
+            planningActions = statisticsPlanningActions,
             selection = statisticsSelection,
             currentDate = { currentStatisticsDate },
             // 设置页只是统计页底部的一个去处：顶级页面不变，因此「上次打开」不受影响。
@@ -929,12 +927,12 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     // 但落地的 SAF 文件选择器、导入预览与恢复确认一个都没变，因此 workflow 与迁移前一致。
     val settingsActions: SettingsActions = remember(viewModel) {
         SettingsActionsAdapter(
-            viewModel = viewModel,
+            planningActions = settingsPlanningActions,
             currentWeekStartDay = { currentWeekStartDay },
             onRequestReminderPermission = { requestReminderPermission(context) },
             onPreviewJsonBackup = {
                 jsonExportMessage = null
-                viewModel.exportJsonDocument { document ->
+                backupActions.exportJsonDocument { document ->
                     jsonPreview = document.content.take(800)
                     pendingJsonBackup = document
                     jsonExportLauncher.launch(document.suggestedFileName)
@@ -942,26 +940,26 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             },
             onImportJson = { importLauncher.launch(arrayOf("application/json", "text/plain")) },
             onExportTimeEntriesCsv = {
-                viewModel.exportTimeEntriesCsvDocument { document ->
+                backupActions.exportTimeEntriesCsvDocument { document ->
                     pendingTimeEntriesCsv = document
                     timeEntriesCsvLauncher.launch(document.suggestedFileName)
                 }
             },
             onPreviewCsv = {
-                viewModel.exportCsvBundleDocument { bundle ->
+                backupActions.exportCsvBundleDocument { bundle ->
                     csvPreview = "时间记录\n${bundle.timeEntries.content}\n日程\n${bundle.schedules.content}"
                 }
             },
             onExportSchedulesCsv = {
                 scheduleExportMessage = null
-                viewModel.exportSchedulesCsvDocument { document ->
+                backupActions.exportSchedulesCsvDocument { document ->
                     pendingScheduleCsv = document
                     scheduleExportLauncher.launch(document.suggestedFileName)
                 }
             },
             onExportCsvBundle = {
                 csvBundleMessage = null
-                viewModel.exportCsvBundleDocument { bundle ->
+                backupActions.exportCsvBundleDocument { bundle ->
                     pendingCsvBundle = bundle
                     combinedTimeExportLauncher.launch(bundle.timeEntries.suggestedFileName)
                 }
@@ -989,7 +987,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     val currentAttentionState by androidx.compose.runtime.rememberUpdatedState(state)
     val targetsActions: TargetsActions = remember(viewModel) {
         TargetsActionsAdapter(
-            viewModel = viewModel,
+            planningActions = targetPlanningActions,
             currentState = { currentAttentionState },
         )
     }
@@ -1001,7 +999,8 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     val currentAgendaPlanningDay by androidx.compose.runtime.rememberUpdatedState(agendaState.planningDate)
     val agendaActions: AgendaActions = remember(viewModel) {
         AgendaActionsAdapter(
-            viewModel = viewModel,
+            investmentActions = investmentActions,
+            planningActions = agendaPlanningActions,
             selection = agendaSelection,
             currentDate = { currentAgendaDate },
             currentPlanningDay = { currentAgendaPlanningDay },
@@ -1010,22 +1009,26 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             onStartFreeTimer = ::startFreeTimer,
             onRequestReminderPermission = { requestReminderPermission(context) },
             onStopTimer = {
-                viewModel.stopTimer(onSuccess = {
-                    AttentionBootReceiver.cancelRecoveryPrompt(context)
-                    context.stopService(AttentionTimerService.intent(context))
+                investmentActions.stopTimer(onSuccess = {
+                    timerEffects.stopped()
                 })
             },
+            onPauseTimer = { investmentActions.pauseTimer(onSuccess = timerEffects::paused) },
+            onResumeTimer = { investmentActions.resumeTimer(onSuccess = timerEffects::resumed) },
             onRecoverTimerFromNow = {
-                viewModel.recoverTimer(onSuccess = {
-                    AttentionBootReceiver.cancelRecoveryPrompt(context)
+                investmentActions.recoverTimer(onSuccess = {
+                    timerEffects.recovered()
                 })
+            },
+            onSwitchTimer = { targetId ->
+                investmentActions.switchTimer(targetId, onSuccess = timerEffects::resumed)
             },
             onTimeRecordDeleted = { removed ->
                 feedbackScope.launch {
                     feedback.showUndoableMessage(
                         message = agendaFeedbackMessage(AgendaOperationFeedback.TIME_DELETED),
                         undoLabel = AGENDA_UNDO_LABEL,
-                        onUndo = { viewModel.restoreTimeEntry(removed) },
+                        onUndo = { investmentActions.restoreTimeEntry(removed) },
                     )
                 }
             },
@@ -1053,7 +1056,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     )
     val onboardingActions: OnboardingActions = remember(viewModel) {
         OnboardingActionsAdapter(
-            viewModel = viewModel,
+            planningActions = onboardingPlanningActions,
             onCompleted = {
                 // 完成或跳过都落到当前规划日的日程：离开引导、离开设置页，并把日程页的
                 // 日期范围交回给当前规划日（页面侧的语义由页面 module 提供）。
@@ -1168,12 +1171,12 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             title = { Text("导入预览") },
             text = {
                 Text(
-                    backupPreviewText(plan.preview, state, plan.candidateState, plan.mode),
+                    plan.preview.render(plan.mode),
                 )
             },
             confirmButton = {
                 AttentionTextButton(onClick = {
-                    viewModel.commitImport(
+                    backupActions.commitImport(
                         plan,
                         onResult = { result ->
                             if (result is BackupCommitResult.Committed || result is BackupCommitResult.StalePlan) {
@@ -1204,13 +1207,13 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             title = { Text("确认清空后恢复") },
             text = {
                 Text(
-                    backupPreviewText(plan.preview, state, plan.candidateState, plan.mode) +
+                    plan.preview.render(plan.mode) +
                         "\n这会清空当前全部数据，并在导入前保存保护性备份。确定继续吗？",
                 )
             },
             confirmButton = {
                 AttentionTextButton(onClick = {
-                    viewModel.commitImport(
+                    backupActions.commitImport(
                         plan,
                         onResult = { result ->
                             if (result is BackupCommitResult.Committed || result is BackupCommitResult.StalePlan) {
@@ -1237,7 +1240,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                     modifier = Modifier.testTag("restore-import-confirm"),
                     onClick = {
                         restoreImportPromptVisible = false
-                        viewModel.restoreLastImportBackupResult(onResult = { result ->
+                        backupActions.restoreLastImportBackupResult(onResult = { result ->
                             if (result is BackupCommitResult.NoImportBackup) {
                                 jsonExportMessage = "没有可恢复的导入前备份"
                             }
@@ -1288,32 +1291,6 @@ private fun WorkspaceNavigationItem(
             Text(label)
         }
     }
-}
-
-private fun backupPreviewText(
-    preview: BackupPreview,
-    current: AttentionState,
-    candidate: AttentionState?,
-    mode: ImportMode,
-): String = buildString {
-    append("版本 ${preview.version}，共 ${preview.totalRecords} 条记录\n")
-    append("目标 ${preview.targets}，阶段 ${preview.goalStages}，时间记录 ${preview.timeEntries}，日程 ${preview.schedules}\n")
-    append("重复规则 ${preview.recurrenceRules}，迁移 ${preview.migrations}，未来目标规则 ${preview.futureGoalRules}\n")
-    append("周期快照 ${preview.periodSnapshots}，目标移动 ${preview.targetMoves}，里程碑 ${preview.milestones}\n")
-    append(if (preview.hasSettings) "包含设置。" else "不包含设置。")
-    append(" ")
-    append(if (preview.hasActiveTimer) "包含活动计时器。" else "不包含活动计时器。")
-    if (candidate != null) {
-        val currentCount = current.targets.size + current.goalStages.size + current.timeEntries.size + current.schedules.size +
-            current.recurrenceRules.size + current.migrations.size + current.futureGoalRules.size + current.periodSnapshots.size +
-            current.targetMoves.size + current.milestones.size
-        val candidateCount = candidate.targets.size + candidate.goalStages.size + candidate.timeEntries.size + candidate.schedules.size +
-            candidate.recurrenceRules.size + candidate.migrations.size + candidate.futureGoalRules.size + candidate.periodSnapshots.size +
-            candidate.targetMoves.size + candidate.milestones.size
-        val label = if (mode == ImportMode.REPLACE) "恢复后预计" else "合并后预计"
-        append("\n${label} ${candidateCount} 条，可能新增约 ${candidateCount - currentCount} 条。")
-    }
-    append("\n导入前会自动备份当前数据。")
 }
 
 private fun requestReminderPermission(context: Context) {

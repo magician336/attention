@@ -59,6 +59,13 @@ class AttentionTimerService : Service() {
         )
     }
     private var stateJob: Job? = null
+    private val timerEffects by lazy {
+        AndroidTimerEffects(
+            context = this,
+            onFeedback = {},
+            serviceAlreadyRunning = true,
+        )
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -74,21 +81,28 @@ class AttentionTimerService : Service() {
         scope.launch {
             commandMutex.withLock {
                 when (intent?.action) {
-                    ACTION_PAUSE -> repository.updateBusiness { it.pauseTimer(Instant.now()) }
-                    ACTION_RESUME -> repository.updateBusiness { it.resumeTimer(Instant.now()) }
-                    ACTION_STOP -> repository.executeCommand(
-                        AttentionCommand.StopTimer,
-                        now = Instant.now(),
-                        zone = ZoneId.systemDefault(),
-                    )
+                    ACTION_PAUSE -> {
+                        repository.updateBusiness { it.pauseTimer(Instant.now()) }
+                        timerEffects.paused()
+                    }
+                    ACTION_RESUME -> {
+                        repository.updateBusiness { it.resumeTimer(Instant.now()) }
+                        timerEffects.resumed()
+                    }
+                    ACTION_STOP -> {
+                        repository.executeCommand(
+                            AttentionCommand.StopTimer,
+                            now = Instant.now(),
+                            zone = ZoneId.systemDefault(),
+                        )
+                        timerEffects.stopped()
+                    }
                 }
-
-                if (intent?.action == ACTION_STOP) AttentionBootReceiver.cancelRecoveryPrompt(this@AttentionTimerService)
 
                 // The observer normally handles this transition. Reading once
                 // here makes auto-stop deterministic during process teardown.
                 val state = repository.state.first()
-                if (state.activeTimer == null) stopService(startId)
+                if (state.activeTimer == null) timerEffects.stopped()
             }
         }
         // A process restart is useful while a persisted timer is active. The
@@ -100,9 +114,9 @@ class AttentionTimerService : Service() {
         if (stateJob?.isActive == true) return
         stateJob = scope.launch {
             repository.state
-                .catch { stopService() }
+                .catch { timerEffects.stopped() }
                 .collectLatest { state ->
-                    if (state.activeTimer == null) stopService()
+                    if (state.activeTimer == null) timerEffects.stopped()
                     else notifyState(state)
                 }
         }
@@ -118,11 +132,6 @@ class AttentionTimerService : Service() {
         runCatching {
             NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, notification(state))
         }
-    }
-
-    private fun stopService(startId: Int? = null) {
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        if (startId == null) stopSelf() else stopSelfResult(startId)
     }
 
     private fun notification(state: AttentionState?): Notification {

@@ -313,7 +313,9 @@ class RoomBackupIntegrationTest {
 
         assertFalse(runCatching { repository.importJson(incoming, clearExisting = true) }.isSuccess)
         assertEquals(current, repository.state.first())
-        assertEquals(AttentionBackupCodec.encode(current), backupStore.read())
+        // Candidate validation fails during preview, before a commit plan
+        // exists; invalid input must not create or rotate the import snapshot.
+        assertEquals(null, backupStore.read())
     }
 
     @Test
