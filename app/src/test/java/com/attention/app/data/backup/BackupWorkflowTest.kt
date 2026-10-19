@@ -108,15 +108,16 @@ class BackupWorkflowTest {
     }
 
     @Test
-    fun invalid_prepare_import_routes_snapshot_preservation_through_submission_port() = runBlocking {
+    fun invalid_prepare_import_does_not_mutate_import_snapshot() = runBlocking {
         val port = RecordingSubmissionPort(AttentionState(targets = listOf(Target("current", title = "已有"))))
+        val backupStore = CountingBackupStore()
         val workflow = BackupWorkflow(
             stateSubmissionPort = port,
-            importBackupStore = InMemoryImportBackupStore(),
+            importBackupStore = backupStore,
         )
 
         assertTrue(runCatching { workflow.prepareImport("{not-json", ImportMode.REPLACE) }.isFailure)
-        assertEquals(1, port.preserveCalls)
+        assertEquals(0, backupStore.writes)
     }
 
     @Test
@@ -318,14 +319,7 @@ class BackupWorkflowTest {
     private class RecordingSubmissionPort(
         private val current: AttentionState,
     ) : BackupStateSubmissionPort {
-        var preserveCalls: Int = 0
-            private set
-
         override suspend fun read(): AttentionState = current
-
-        override suspend fun preserveImportBackupIfAbsent() {
-            preserveCalls += 1
-        }
 
         override suspend fun submit(
             expectedFingerprint: String,

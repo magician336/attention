@@ -129,13 +129,6 @@ class RoomAttentionStateRepository(
         next: AttentionState,
     ): BackupCommitResult = commitCoordinator.submit(expectedFingerprint, next)
 
-    /**
-     * Compatibility import preparation can fail before a typed plan exists.
-     * Keep its historical recovery guarantee inside the same mutex and port
-     * boundary used by successful submissions.
-     */
-    override suspend fun preserveImportBackupIfAbsent() = commitCoordinator.preserveImportBackupIfAbsent()
-
     override suspend fun restoreReminders() {
         commitCoordinator.restoreReminders()
     }

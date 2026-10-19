@@ -32,13 +32,25 @@ interface TimerEffects {
 class AndroidTimerEffects internal constructor(
     private val platform: TimerPlatform,
     private val onFeedback: (String) -> Unit,
+    private var foregroundServiceRequested: Boolean = false,
 ) : TimerEffects {
-    private var foregroundServiceRequested = false
-
+    private var hasSynchronized = false
     constructor(
         context: Context,
         onFeedback: (String) -> Unit = {},
     ) : this(AndroidTimerPlatform(context.applicationContext), onFeedback)
+
+    /**
+     * Adapter used by the already-running foreground service for notification
+     * actions. The service itself owns the process, so the adapter must not
+     * request a second service start; it still owns the shared clear/stop
+     * lifecycle path after the domain command commits.
+     */
+    internal constructor(
+        context: Context,
+        onFeedback: (String) -> Unit,
+        serviceAlreadyRunning: Boolean,
+    ) : this(AndroidTimerPlatform(context.applicationContext), onFeedback, serviceAlreadyRunning)
 
     override fun started() {
         if (foregroundServiceRequested) return
@@ -67,10 +79,14 @@ class AndroidTimerEffects internal constructor(
 
     override fun synchronize(state: AttentionState) {
         if (state.activeTimer == null) {
-            stopForegroundService()
+            // The first sync after process recreation must clear a stale
+            // service request even though this adapter has no in-memory flag;
+            // subsequent null snapshots remain idempotent.
+            stopForegroundService(force = !hasSynchronized)
         } else {
             ensureForegroundService()
         }
+        hasSynchronized = true
     }
 
     private fun clearRecoveryPrompt() {
@@ -92,8 +108,8 @@ class AndroidTimerEffects internal constructor(
         if (started) foregroundServiceRequested = true
     }
 
-    private fun stopForegroundService() {
-        if (!foregroundServiceRequested) return
+    private fun stopForegroundService(force: Boolean = false) {
+        if (!force && !foregroundServiceRequested) return
         val stopped = runPlatformEffect(
             failureMessage = "计时已结束，但前台计时服务停止失败。",
             effect = platform::stopForegroundService,

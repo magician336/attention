@@ -59,6 +59,13 @@ class AttentionTimerService : Service() {
         )
     }
     private var stateJob: Job? = null
+    private val timerEffects by lazy {
+        AndroidTimerEffects(
+            context = this,
+            onFeedback = {},
+            serviceAlreadyRunning = true,
+        )
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -74,16 +81,23 @@ class AttentionTimerService : Service() {
         scope.launch {
             commandMutex.withLock {
                 when (intent?.action) {
-                    ACTION_PAUSE -> repository.updateBusiness { it.pauseTimer(Instant.now()) }
-                    ACTION_RESUME -> repository.updateBusiness { it.resumeTimer(Instant.now()) }
-                    ACTION_STOP -> repository.executeCommand(
-                        AttentionCommand.StopTimer,
-                        now = Instant.now(),
-                        zone = ZoneId.systemDefault(),
-                    )
+                    ACTION_PAUSE -> {
+                        repository.updateBusiness { it.pauseTimer(Instant.now()) }
+                        timerEffects.paused()
+                    }
+                    ACTION_RESUME -> {
+                        repository.updateBusiness { it.resumeTimer(Instant.now()) }
+                        timerEffects.resumed()
+                    }
+                    ACTION_STOP -> {
+                        repository.executeCommand(
+                            AttentionCommand.StopTimer,
+                            now = Instant.now(),
+                            zone = ZoneId.systemDefault(),
+                        )
+                        timerEffects.stopped()
+                    }
                 }
-
-                if (intent?.action == ACTION_STOP) AttentionBootReceiver.cancelRecoveryPrompt(this@AttentionTimerService)
 
                 // The observer normally handles this transition. Reading once
                 // here makes auto-stop deterministic during process teardown.

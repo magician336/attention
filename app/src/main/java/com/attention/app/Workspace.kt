@@ -151,7 +151,7 @@ internal fun agendaLoadFacts(stateLoaded: Boolean, loadError: String?): AgendaLo
  * ViewModel、Room、DataStore 与平台能力因此只出现在组合根侧，页面拿不到它们（ADR-0005 第 1、4 节）。
  */
 private class SettingsActionsAdapter(
-    private val planningActions: PlanningActions,
+    private val planningActions: SettingsPlanningActions,
     private val currentWeekStartDay: () -> Int,
     private val onRequestReminderPermission: () -> Unit,
     private val onPreviewJsonBackup: () -> Unit,
@@ -208,7 +208,7 @@ private class SettingsActionsAdapter(
  * `completeOnboarding()` 再更新引导状态并把用户送回当前规划日的日程页。
  */
 private class OnboardingActionsAdapter(
-    private val planningActions: PlanningActions,
+    private val planningActions: OnboardingPlanningActions,
     private val onCompleted: () -> Unit,
 ) : OnboardingActions {
     override fun savePlanningDaySettings(boundaryMinutes: Int, weekStartDay: Int, dailyCapacityMinutes: Int?) {
@@ -257,7 +257,7 @@ private class OnboardingActionsAdapter(
  */
 private class AgendaActionsAdapter(
     private val investmentActions: InvestmentActions,
-    private val planningActions: PlanningActions,
+    private val planningActions: AgendaPlanningActions,
     private val selection: AgendaSelection,
     private val currentDate: () -> LocalDate,
     private val currentPlanningDay: () -> LocalDate,
@@ -453,7 +453,7 @@ private class WorkspaceViewModelFactory(
  * ViewModel 与平台能力因此只出现在组合根侧。
  */
 private class StatisticsActionsAdapter(
-    private val planningActions: PlanningActions,
+    private val planningActions: StatisticsPlanningActions,
     private val selection: StatisticsSelection,
     private val currentDate: () -> LocalDate,
     private val onOpenSettings: () -> Unit,
@@ -492,7 +492,7 @@ private class StatisticsActionsAdapter(
  * ViewModel、Room 与 id 生成器因此只出现在组合根侧。
  */
 private class TargetsActionsAdapter(
-    private val planningActions: PlanningActions,
+    private val planningActions: TargetPlanningActions,
     private val currentState: () -> AttentionState,
 ) : TargetsActions {
     override fun addTarget(title: String, parentId: String?) {
@@ -625,7 +625,11 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     }
     val viewModel: AttentionViewModel = viewModel(factory = WorkspaceViewModelFactory(repository))
     val investmentActions: InvestmentActions = viewModel
-    val planningActions: PlanningActions = viewModel
+    val settingsPlanningActions: SettingsPlanningActions = viewModel
+    val onboardingPlanningActions: OnboardingPlanningActions = viewModel
+    val targetPlanningActions: TargetPlanningActions = viewModel
+    val agendaPlanningActions: AgendaPlanningActions = viewModel
+    val statisticsPlanningActions: StatisticsPlanningActions = viewModel
     val backupActions: BackupActions = viewModel
     val state by viewModel.state.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
@@ -911,7 +915,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     val currentStatisticsDate by androidx.compose.runtime.rememberUpdatedState(statisticsState.selectedDate)
     val statisticsActions: StatisticsActions = remember(viewModel) {
         StatisticsActionsAdapter(
-            planningActions = planningActions,
+            planningActions = statisticsPlanningActions,
             selection = statisticsSelection,
             currentDate = { currentStatisticsDate },
             // 设置页只是统计页底部的一个去处：顶级页面不变，因此「上次打开」不受影响。
@@ -923,7 +927,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     // 但落地的 SAF 文件选择器、导入预览与恢复确认一个都没变，因此 workflow 与迁移前一致。
     val settingsActions: SettingsActions = remember(viewModel) {
         SettingsActionsAdapter(
-            planningActions = planningActions,
+            planningActions = settingsPlanningActions,
             currentWeekStartDay = { currentWeekStartDay },
             onRequestReminderPermission = { requestReminderPermission(context) },
             onPreviewJsonBackup = {
@@ -983,7 +987,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     val currentAttentionState by androidx.compose.runtime.rememberUpdatedState(state)
     val targetsActions: TargetsActions = remember(viewModel) {
         TargetsActionsAdapter(
-            planningActions = planningActions,
+            planningActions = targetPlanningActions,
             currentState = { currentAttentionState },
         )
     }
@@ -996,7 +1000,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     val agendaActions: AgendaActions = remember(viewModel) {
         AgendaActionsAdapter(
             investmentActions = investmentActions,
-            planningActions = planningActions,
+            planningActions = agendaPlanningActions,
             selection = agendaSelection,
             currentDate = { currentAgendaDate },
             currentPlanningDay = { currentAgendaPlanningDay },
@@ -1052,7 +1056,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     )
     val onboardingActions: OnboardingActions = remember(viewModel) {
         OnboardingActionsAdapter(
-            planningActions = planningActions,
+            planningActions = onboardingPlanningActions,
             onCompleted = {
                 // 完成或跳过都落到当前规划日的日程：离开引导、离开设置页，并把日程页的
                 // 日期范围交回给当前规划日（页面侧的语义由页面 module 提供）。
