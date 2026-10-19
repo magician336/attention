@@ -294,10 +294,14 @@ class AttentionViewModel(
     }
     fun confirmScheduleCompleted(entryId: String, durationMinutes: Int? = null) =
         runTypedCommand(AttentionCommand.ConfirmSchedule(entryId, durationMinutes))
-    fun switchTimer(targetId: String?) =
-        runTypedCommand(AttentionCommand.SwitchTimer(targetId), errorMessage = "无法切换计时目标")
-    fun pauseTimer() = runCommand { it.pauseTimer(Instant.now()) }
-    fun resumeTimer() = runCommand { it.resumeTimer(Instant.now()) }
+    fun switchTimer(targetId: String?, onSuccess: () -> Unit = {}) =
+        runTypedCommand(
+            AttentionCommand.SwitchTimer(targetId),
+            onSuccess = { onSuccess() },
+            errorMessage = "无法切换计时目标",
+        )
+    fun pauseTimer(onSuccess: () -> Unit = {}) = runCommand(onSuccess = onSuccess) { it.pauseTimer(Instant.now()) }
+    fun resumeTimer(onSuccess: () -> Unit = {}) = runCommand(onSuccess = onSuccess) { it.resumeTimer(Instant.now()) }
     fun recoverTimer(onSuccess: () -> Unit = {}) = runCommand(onSuccess = onSuccess) { it.recoverTimer(Instant.now()) }
     fun stopTimer(onSuccess: () -> Unit = {}) =
         runTypedCommand(

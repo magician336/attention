@@ -56,7 +56,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.attention.app.data.AttentionStateRepository
 import com.attention.app.data.RoomAttentionStateRepository
-import com.attention.app.data.backup.BackupPreview
 import com.attention.app.data.backup.BackupCommitResult
 import com.attention.app.data.backup.ExportBundle
 import com.attention.app.data.backup.ExportDocument
@@ -66,8 +65,8 @@ import com.attention.app.data.backup.FileImportBackupStore
 import com.attention.app.data.room.AttentionDatabase
 import com.attention.app.data.room.RoomBusinessDataRepository
 import com.attention.app.data.settings.createSettingsStore
-import com.attention.app.timer.AttentionTimerService
-import com.attention.app.timer.AttentionBootReceiver
+import com.attention.app.timer.AndroidTimerEffects
+import com.attention.app.timer.TimerEffects
 import com.attention.app.reminder.AlarmReminderCoordinator
 import com.attention.app.reminder.ReminderScheduler
 import com.attention.app.ui.components.AttentionButton
@@ -266,7 +265,10 @@ private class AgendaActionsAdapter(
     private val onStartFreeTimer: (String?) -> Unit,
     private val onRequestReminderPermission: () -> Unit,
     private val onStopTimer: () -> Unit,
+    private val onPauseTimer: () -> Unit,
+    private val onResumeTimer: () -> Unit,
     private val onRecoverTimerFromNow: () -> Unit,
+    private val onSwitchTimer: (String?) -> Unit,
     private val onTimeRecordDeleted: (TimeEntry) -> Unit,
     private val onOpenSettings: () -> Unit,
     /**
@@ -391,18 +393,18 @@ private class AgendaActionsAdapter(
     // 暂停、恢复、切换与从此刻继续都只是领域命令：通知栏是持久化状态的投影，
     // 因此这些动作不需要页面自己去碰前台服务（ADR-0005 第 4 节）。
     override fun pauseRunningTimer() {
-        viewModel.pauseTimer()
+        onPauseTimer()
     }
 
     override fun resumeRunningTimer() {
-        viewModel.resumeTimer()
+        onResumeTimer()
     }
 
     // 从此刻继续意味着用户已经对上一次被打断的计时做了决定，恢复提示要一并撤掉。
     override fun recoverRunningTimerFromNow() = onRecoverTimerFromNow()
 
     override fun switchRunningTimerTarget(targetId: String?) {
-        viewModel.switchTimer(targetId)
+        onSwitchTimer(targetId)
     }
 
     override fun editTime(entryId: String, minutes: Int, targetId: String?, note: String) {
@@ -838,41 +840,29 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     val injectedNow = Instant.now()
     val injectedZone = ZoneId.systemDefault()
 
-    // 从日程条目起计时：日程页的「今日安排」与所有日期范围共用这一份实现，
-    // 因此产出同样的时间记录与同样的平台行为（保留 scheduleEntryId 来源关联）。
-    fun startTimerFromSchedule(entry: ScheduleEntry) {
+    // 所有计时入口共用同一个平台效果 seam。领域命令先提交，ViewModel 的成功回调
+    // 再触发这里；因此平台失败不会撤销已保存的时间记录，页面也不需要知道 Android API。
+    val timerEffects: TimerEffects = remember(context) {
+        AndroidTimerEffects(context) { message ->
+            feedbackScope.launch { feedback.showMessage(message) }
+        }
+    }
+    androidx.compose.runtime.LaunchedEffect(stateLoaded, state.activeTimer) {
+        if (stateLoaded) timerEffects.synchronize(state)
+    }
+
+    // 两个启动入口只传不同的领域来源参数，平台效果走同一条路径。
+    fun startTimer(targetId: String?, scheduleEntryId: String?) {
         viewModel.startTimer(
-            targetId = entry.targetId,
-            onSuccess = {
-                AttentionBootReceiver.cancelRecoveryPrompt(context)
-                if (!notificationsEnabled(context)) {
-                    feedbackScope.launch {
-                        feedback.showMessage("通知权限未开启，计时仍会保存；通知栏控制不可用。")
-                    }
-                }
-                ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
-            },
-            scheduleEntryId = entry.id,
+            targetId = targetId,
+            onSuccess = { timerEffects.started() },
+            scheduleEntryId = scheduleEntryId,
         )
     }
 
-    // 自由计时：不带日程来源，只带一个计划（或未归属活动）。平台动作与上面同一条路径，
-    // 差别只在产出的时间记录没有 scheduleEntryId。
-    fun startFreeTimer(targetId: String?) {
-        viewModel.startTimer(
-            targetId = targetId,
-            onSuccess = {
-                AttentionBootReceiver.cancelRecoveryPrompt(context)
-                if (!notificationsEnabled(context)) {
-                    feedbackScope.launch {
-                        feedback.showMessage("通知权限未开启，计时仍会保存；通知栏控制不可用。")
-                    }
-                }
-                ContextCompat.startForegroundService(context, AttentionTimerService.intent(context))
-            },
-            scheduleEntryId = null,
-        )
-    }
+    // 从日程条目起计时保留来源关联；自由计时明确不带日程来源。
+    fun startTimerFromSchedule(entry: ScheduleEntry) = startTimer(entry.targetId, entry.id)
+    fun startFreeTimer(targetId: String?) = startTimer(targetId, null)
 
     val currentWeekStartDay by androidx.compose.runtime.rememberUpdatedState(state.settings.weekStartDay)
     // 日程页的选中范围由页面 module 提供类型与迁移语义，组合根只持有一个实例来喂投影。
@@ -1011,14 +1001,18 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             onRequestReminderPermission = { requestReminderPermission(context) },
             onStopTimer = {
                 viewModel.stopTimer(onSuccess = {
-                    AttentionBootReceiver.cancelRecoveryPrompt(context)
-                    context.stopService(AttentionTimerService.intent(context))
+                    timerEffects.stopped()
                 })
             },
+            onPauseTimer = { viewModel.pauseTimer(onSuccess = timerEffects::paused) },
+            onResumeTimer = { viewModel.resumeTimer(onSuccess = timerEffects::resumed) },
             onRecoverTimerFromNow = {
                 viewModel.recoverTimer(onSuccess = {
-                    AttentionBootReceiver.cancelRecoveryPrompt(context)
+                    timerEffects.recovered()
                 })
+            },
+            onSwitchTimer = { targetId ->
+                viewModel.switchTimer(targetId, onSuccess = timerEffects::resumed)
             },
             onTimeRecordDeleted = { removed ->
                 feedbackScope.launch {
@@ -1168,7 +1162,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             title = { Text("导入预览") },
             text = {
                 Text(
-                    backupPreviewText(plan.preview, state, plan.candidateState, plan.mode),
+                    plan.preview.render(plan.mode),
                 )
             },
             confirmButton = {
@@ -1204,7 +1198,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
             title = { Text("确认清空后恢复") },
             text = {
                 Text(
-                    backupPreviewText(plan.preview, state, plan.candidateState, plan.mode) +
+                    plan.preview.render(plan.mode) +
                         "\n这会清空当前全部数据，并在导入前保存保护性备份。确定继续吗？",
                 )
             },
@@ -1288,32 +1282,6 @@ private fun WorkspaceNavigationItem(
             Text(label)
         }
     }
-}
-
-private fun backupPreviewText(
-    preview: BackupPreview,
-    current: AttentionState,
-    candidate: AttentionState?,
-    mode: ImportMode,
-): String = buildString {
-    append("版本 ${preview.version}，共 ${preview.totalRecords} 条记录\n")
-    append("目标 ${preview.targets}，阶段 ${preview.goalStages}，时间记录 ${preview.timeEntries}，日程 ${preview.schedules}\n")
-    append("重复规则 ${preview.recurrenceRules}，迁移 ${preview.migrations}，未来目标规则 ${preview.futureGoalRules}\n")
-    append("周期快照 ${preview.periodSnapshots}，目标移动 ${preview.targetMoves}，里程碑 ${preview.milestones}\n")
-    append(if (preview.hasSettings) "包含设置。" else "不包含设置。")
-    append(" ")
-    append(if (preview.hasActiveTimer) "包含活动计时器。" else "不包含活动计时器。")
-    if (candidate != null) {
-        val currentCount = current.targets.size + current.goalStages.size + current.timeEntries.size + current.schedules.size +
-            current.recurrenceRules.size + current.migrations.size + current.futureGoalRules.size + current.periodSnapshots.size +
-            current.targetMoves.size + current.milestones.size
-        val candidateCount = candidate.targets.size + candidate.goalStages.size + candidate.timeEntries.size + candidate.schedules.size +
-            candidate.recurrenceRules.size + candidate.migrations.size + candidate.futureGoalRules.size + candidate.periodSnapshots.size +
-            candidate.targetMoves.size + candidate.milestones.size
-        val label = if (mode == ImportMode.REPLACE) "恢复后预计" else "合并后预计"
-        append("\n${label} ${candidateCount} 条，可能新增约 ${candidateCount - currentCount} 条。")
-    }
-    append("\n导入前会自动备份当前数据。")
 }
 
 private fun requestReminderPermission(context: Context) {

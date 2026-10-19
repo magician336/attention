@@ -39,6 +39,38 @@ class BackupWorkflowTest {
     }
 
     @Test
+    fun import_preview_summary_uses_the_same_candidate_for_merge_and_replacement() = runBlocking {
+        val current = AttentionState(
+            targets = listOf(Target("current", title = "已有")),
+            timeEntries = listOf(TimeEntry("current-entry", "2026-10-01", 15)),
+        )
+        val incoming = AttentionState(
+            targets = listOf(Target("incoming", title = "导入")),
+            schedules = listOf(ScheduleEntry("incoming-schedule", "2026-10-02", "阅读")),
+        )
+        val mergePlan = BackupWorkflow { current }
+            .prepareImport(AttentionBackupCodec.encode(incoming), ImportMode.MERGE)
+
+        val mergeSummary = requireNotNull(mergePlan.preview.importSummary)
+        assertEquals(2, mergeSummary.incoming.records.totalRecords)
+        assertEquals(2, mergeSummary.current.records.totalRecords)
+        assertEquals(4, mergeSummary.candidate.records.totalRecords)
+        assertEquals(2, mergeSummary.possibleNewRecords)
+        assertEquals(2, mergeSummary.candidate.records.targets)
+        assertEquals(1, mergeSummary.candidate.records.timeEntries)
+        assertEquals(1, mergeSummary.candidate.records.schedules)
+
+        val replacement = mergePlan.forReplacement()
+        val replacementSummary = requireNotNull(replacement.preview.importSummary)
+        assertEquals(2, replacementSummary.current.records.totalRecords)
+        assertEquals(2, replacementSummary.candidate.records.totalRecords)
+        assertEquals(0, replacementSummary.possibleNewRecords)
+        assertEquals(1, replacementSummary.candidate.records.targets)
+        assertEquals(0, replacementSummary.candidate.records.timeEntries)
+        assertEquals(1, replacementSummary.candidate.records.schedules)
+    }
+
+    @Test
     fun fingerprint_is_stable_for_reordered_collections_and_changes_for_content() = runBlocking {
         val first = AttentionState(
             targets = listOf(Target("b", title = "B"), Target("a", title = "A")),
@@ -113,7 +145,11 @@ class BackupWorkflowTest {
         assertEquals(1, reads)
         assertEquals(ImportMode.REPLACE, replacement.mode)
         assertEquals(incoming.targets, replacement.candidateState.targets)
-        assertEquals(mergePlan.preview, replacement.preview)
+        assertEquals(mergePlan.preview.recordSummary, replacement.preview.recordSummary)
+        assertNotEquals(
+            mergePlan.preview.importSummary?.candidate,
+            replacement.preview.importSummary?.candidate,
+        )
         assertEquals(mergePlan.currentStateFingerprint, replacement.currentStateFingerprint)
     }
 

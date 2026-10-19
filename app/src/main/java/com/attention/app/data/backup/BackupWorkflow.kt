@@ -45,6 +45,7 @@ data class ImportPlan(
     fun forReplacement(): ImportPlan = copy(
         mode = ImportMode.REPLACE,
         candidateState = incomingState ?: candidateState,
+        preview = preview.withCandidateState(incomingState ?: candidateState),
     )
 }
 
@@ -180,7 +181,7 @@ class BackupWorkflow(
             AttentionBackupCodec.validate(candidate)
             ImportPlan(
                 mode = mode,
-                preview = preview,
+                preview = preview.withImportStates(current, candidate),
                 candidateState = candidate,
                 inputVersion = preview.version,
                 currentStateFingerprint = stateFingerprint(current),
