@@ -12,5 +12,9 @@
     -->
     <application>
         <activity android:name="androidx.activity.ComponentActivity" />
+        <activity
+            android:name=".chat.ChatPreviewActivity"
+            android:exported="true"
+            android:label="浮光对话预览" />
     </application>
 </manifest>
