@@ -14,6 +14,7 @@ val topLevelWorkspaces = setOf(
     LaunchDestination.AGENDA,
     LaunchDestination.TARGETS,
     LaunchDestination.STATISTICS,
+    LaunchDestination.CHAT,
 )
 
 /**
@@ -35,7 +36,7 @@ fun launchDestinationFromPersistedName(name: String?): LaunchDestination =
     LaunchDestinationSerializer.fromPersistedName(name).asAgendaEntry()
 
 /**
- * 「上次打开」只解析出日程、目标树、统计三者之一；解析到自身、旧入口值或无效历史时
+ * 「上次打开」只解析出日程、目标树、统计、对话四者之一；解析到自身、旧入口值或无效历史时
  * 回退到日程。其它入口解析为自身，旧入口值仍按旧页面直达。
  */
 fun resolveLaunchDestination(
