@@ -37,7 +37,7 @@ enum class ScheduleFrequency { DAILY, WEEKLY, MONTHLY }
  * 四个按名持久化的枚举都走 [PersistedEnumSerializer]：名字认不出来时读成声明过的默认值，
  * 而不是让整份备份被拒。
  */
-enum class LaunchDestination { TODAY, TARGETS, ALL_DATES, STATISTICS, LAST_OPENED, AGENDA }
+enum class LaunchDestination { TODAY, TARGETS, ALL_DATES, STATISTICS, LAST_OPENED, AGENDA, CHAT }
 
 @Serializable
 data class Target(
