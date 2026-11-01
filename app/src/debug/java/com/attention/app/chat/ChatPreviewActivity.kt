@@ -13,27 +13,40 @@ import androidx.compose.runtime.setValue
 import com.attention.app.ui.theme.AttentionTheme
 
 internal enum class ChatPreviewScreen {
+    DAY,
+    WEEK,
     HUB,
     MAIN,
-    ASSISTANT;
+    ASSISTANT,
+    INPUT,
+    LEARNING,
+    AUTHORIZATION,
+    RULES,
+    CREATE,
+    PLAN,
+    CONFIRM,
+    RESPONSIBILITY;
 
     companion object {
         fun from(value: String?): ChatPreviewScreen = when (value?.lowercase()) {
+            "day" -> DAY
+            "week" -> WEEK
             "hub" -> HUB
             "assistant" -> ASSISTANT
+            "input" -> INPUT
+            "learning" -> LEARNING
+            "authorization" -> AUTHORIZATION
+            "rules" -> RULES
+            "create" -> CREATE
+            "plan" -> PLAN
+            "confirm" -> CONFIRM
+            "responsibility" -> RESPONSIBILITY
             else -> MAIN
         }
     }
 }
 
-/**
- * 仅 Debug 变体使用的静态页面入口，方便设计评审和 1b 截图验收。
- *
- * adb 启动：
- * adb shell am start -n com.attention.app/.chat.ChatPreviewActivity
- * adb shell am start -n com.attention.app/.chat.ChatPreviewActivity --es screen hub
- * adb shell am start -n com.attention.app/.chat.ChatPreviewActivity --es screen assistant
- */
+/** Debug-only manifest activity for visual review of all 13 design boards. */
 class ChatPreviewActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,53 +68,147 @@ class ChatPreviewActivity : ComponentActivity() {
 
 @Composable
 private fun ChatPreviewApp(initialScreen: ChatPreviewScreen) {
+    val demo = FuguangAppPreviewData.appState
     var screen by rememberSaveable { mutableStateOf(initialScreen) }
     var mainInput by rememberSaveable { mutableStateOf("") }
     var assistantInput by rememberSaveable { mutableStateOf("") }
-    var mainEntries by remember { mutableStateOf(FuguangChatPreviewData.mainChat.entries) }
+    var creationInput by rememberSaveable { mutableStateOf("") }
+    var planInput by rememberSaveable { mutableStateOf("") }
+    var confirmInput by rememberSaveable { mutableStateOf("") }
+    var creationHours by rememberSaveable { mutableStateOf(demo.assistantCreation.selectedHours) }
+    var planChoice by rememberSaveable { mutableStateOf(demo.agentConfirmation.selectedChoice) }
+    var mainEntries by remember { mutableStateOf(demo.mainAgentChat.entries) }
 
-    val mainState = FuguangChatPreviewData.mainChat.copy(
-        input = mainInput,
-        entries = mainEntries,
-    )
+    val actions = object : FuguangAppActions {
+        override fun onNavigate(destination: FuguangBottomDestination) {
+            screen = when (destination) {
+                FuguangBottomDestination.AGENDA -> ChatPreviewScreen.DAY
+                FuguangBottomDestination.CHAT -> ChatPreviewScreen.HUB
+                FuguangBottomDestination.STUDY -> ChatPreviewScreen.LEARNING
+                FuguangBottomDestination.PROFILE -> ChatPreviewScreen.RESPONSIBILITY
+            }
+        }
+
+        override fun onBack() {
+            screen = ChatPreviewScreen.HUB
+        }
+
+        override fun onOpenAgent(agentId: String) {
+            screen = if (agentId == "main") ChatPreviewScreen.MAIN else ChatPreviewScreen.ASSISTANT
+        }
+
+        override fun onOpenWeeklyReport() {
+            screen = ChatPreviewScreen.LEARNING
+        }
+
+        override fun onSelectWeeklyHours(hours: Int) {
+            creationHours = hours
+        }
+
+        override fun onCreateAssistant() {
+            screen = ChatPreviewScreen.PLAN
+        }
+
+        override fun onSelectPlanChoice(index: Int) {
+            planChoice = index
+        }
+
+        override fun onConfirmPlan() {
+            screen = ChatPreviewScreen.MAIN
+        }
+
+        override fun onCancelPlan() {
+            screen = ChatPreviewScreen.MAIN
+        }
+
+        override fun onChatInputChange(value: String) {
+            when (screen) {
+                ChatPreviewScreen.MAIN, ChatPreviewScreen.INPUT -> mainInput = value
+                ChatPreviewScreen.ASSISTANT -> assistantInput = value
+                ChatPreviewScreen.CREATE -> creationInput = value
+                ChatPreviewScreen.PLAN -> planInput = value
+                ChatPreviewScreen.CONFIRM -> confirmInput = value
+                else -> Unit
+            }
+        }
+
+        override fun onSendChat() {
+            val text = when (screen) {
+                ChatPreviewScreen.MAIN, ChatPreviewScreen.INPUT -> mainInput
+                ChatPreviewScreen.ASSISTANT -> assistantInput
+                ChatPreviewScreen.CREATE -> creationInput
+                ChatPreviewScreen.PLAN -> planInput
+                ChatPreviewScreen.CONFIRM -> confirmInput
+                else -> ""
+            }.trim()
+            if (text.isNotEmpty()) {
+                mainEntries = mainEntries + listOf(
+                    FuguangChatEntry.UserText("demo-user-" + mainEntries.size, text),
+                    FuguangChatEntry.AssistantText(
+                        "demo-ai-" + mainEntries.size,
+                        "收到。我先按当前课程、目标和可用时间检查，再把结果交给你确认。",
+                    ),
+                )
+                screen = ChatPreviewScreen.MAIN
+                mainInput = ""
+            }
+        }
+
+        override fun onSuggestionClick(suggestion: FuguangChatSuggestion) {
+            when (screen) {
+                ChatPreviewScreen.MAIN, ChatPreviewScreen.INPUT -> mainInput = suggestion.label
+                ChatPreviewScreen.ASSISTANT -> assistantInput = suggestion.label
+                ChatPreviewScreen.CREATE -> creationInput = suggestion.label
+                ChatPreviewScreen.PLAN -> planInput = suggestion.label
+                ChatPreviewScreen.CONFIRM -> confirmInput = suggestion.label
+                else -> Unit
+            }
+        }
+    }
 
     when (screen) {
+        ChatPreviewScreen.DAY -> FuguangDayScheduleScreen(demo.daySchedule, actions)
+        ChatPreviewScreen.WEEK -> FuguangWeekScheduleScreen(demo.weekSchedule, actions)
+        ChatPreviewScreen.INPUT -> FuguangInputSpecScreen(demo.mainAgentChat.copy(input = mainInput), actions)
+        ChatPreviewScreen.LEARNING -> FuguangLearningScreen(demo.learning, actions)
+        ChatPreviewScreen.AUTHORIZATION -> FuguangAuthorizationScreen(demo.authorization, actions)
+        ChatPreviewScreen.RULES -> FuguangSchedulingRulesScreen(demo.schedulingRules)
+        ChatPreviewScreen.RESPONSIBILITY -> FuguangResponsibilityScreen(demo.responsibility)
+        ChatPreviewScreen.CREATE -> FuguangAssistantCreationScreen(
+            demo.assistantCreation.copy(selectedHours = creationHours, input = creationInput),
+            actions,
+        )
+        ChatPreviewScreen.PLAN -> FuguangAssistantPlanScreen(
+            demo.assistantPlan.copy(input = planInput),
+            actions,
+        )
+        ChatPreviewScreen.CONFIRM -> FuguangAgentConfirmationScreen(
+            demo.agentConfirmation.copy(selectedChoice = planChoice, input = confirmInput),
+            actions,
+        )
         ChatPreviewScreen.HUB -> FuguangConversationHubScreen(
-            state = FuguangChatPreviewData.hub,
+            state = demo.conversationHub,
             onOpenMainAgent = { screen = ChatPreviewScreen.MAIN },
             onOpenAssistant = { screen = ChatPreviewScreen.ASSISTANT },
-            onBottomDestination = { destination ->
-                if (destination == FuguangBottomDestination.CHAT) {
-                    screen = ChatPreviewScreen.HUB
-                }
-            },
+            onBottomDestination = actions::onNavigate,
         )
         ChatPreviewScreen.MAIN -> FuguangAgentChatScreen(
-            state = mainState,
+            state = demo.mainAgentChat.copy(input = mainInput, entries = mainEntries),
             onInputChange = { mainInput = it },
-            onSend = {
-                val text = mainInput.trim()
-                if (text.isNotEmpty()) {
-                    mainEntries = mainEntries + listOf(
-                        FuguangChatEntry.UserText("demo-user-${mainEntries.size}", text),
-                        FuguangChatEntry.AssistantText(
-                            "demo-ai-${mainEntries.size}",
-                            "收到。我先按今天的课程和可用时间检查冲突，再把调整结果给你确认。",
-                        ),
-                    )
-                    mainInput = ""
-                }
-            },
-            onSuggestionClick = { suggestion -> mainInput = suggestion.label },
-            onBack = { screen = ChatPreviewScreen.HUB },
+            onSend = actions::onSendChat,
+            onSuggestionClick = actions::onSuggestionClick,
+            onBack = actions::onBack,
+            onPrimaryAction = { screen = ChatPreviewScreen.CONFIRM },
+            onSecondaryAction = { screen = ChatPreviewScreen.MAIN },
         )
         ChatPreviewScreen.ASSISTANT -> FuguangAssistantDetailScreen(
-            state = FuguangChatPreviewData.assistantDetail,
+            state = demo.assistantDetail,
             input = assistantInput,
             onInputChange = { assistantInput = it },
-            onSend = { assistantInput = "" },
-            onSuggestionClick = { suggestion -> assistantInput = suggestion.label },
-            onBack = { screen = ChatPreviewScreen.HUB },
+            onSend = actions::onSendChat,
+            onSuggestionClick = actions::onSuggestionClick,
+            onBack = actions::onBack,
         )
     }
 }
+
