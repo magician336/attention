@@ -29,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Event
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -79,6 +80,7 @@ import com.attention.app.ui.theme.attentionTokens
 import com.attention.app.agenda.AgendaScreen
 import com.attention.app.agenda.AgendaSelection
 import com.attention.app.agenda.rememberAgendaSelection
+import com.attention.app.chat.ChatScreen
 import com.attention.app.onboarding.OnboardingScreen
 import com.attention.app.settings.SettingsScreen
 import com.attention.app.statistics.StatisticsScreen
@@ -634,7 +636,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     val state by viewModel.state.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val tokens = attentionTokens()
-    // 短时提示的宿主状态只创建一次，挂在页面切换之上，因此五个页面共用同一个提示出口。
+    // 短时提示的宿主状态只创建一次，挂在页面切换之上，因此六个页面共用同一个提示出口。
     val feedback = rememberAttentionFeedbackHostState()
     val feedbackScope = rememberCoroutineScope()
     val hasExternalScheduleRequest = openScheduleDate != null || openScheduleId != null
@@ -817,7 +819,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
     // 把它抢先写回去会永久覆盖用户上次真正停留的页面（#174、#179 设备实跑间歇失败）。
     val stateLoaded by viewModel.stateLoaded.collectAsStateWithLifecycle()
     androidx.compose.runtime.LaunchedEffect(destination, settingsOpen, persistedSettingsLoaded, stateLoaded, destinationSettled) {
-        // 底部导航只有三项，因此「上次打开」写入的永远是它自己：旧入口值先按领域兼容映射落成日程。
+        // 底部导航是四项顶级入口，因此「上次打开」写入的永远是它自己：旧入口值先按领域兼容映射落成日程。
         if (shouldPersistLastOpened(
                 LastOpenedWriteBackFacts(
                     settingsLoaded = persistedSettingsLoaded,
@@ -1074,7 +1076,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
         // Material top bar added a large empty brand band above the date controls.
         bottomBar = {
             if (!onboardingVisible) {
-                // 主工作区收敛为日程、目标树、统计三个入口：今天/明天/所有日期是日程页里的范围，
+                // 主工作区收敛为日程、目标树、统计、对话四个入口：今天/明天/所有日期是日程页里的范围，
                 // 设置不再是顶级入口——它从统计页底部的「设置与数据」进入，返回时回到统计页。
                 // 每一项同时有 Material 图标与中文标签，选中态带可访问语义。
                 // 活动是 edge-to-edge 的，而这里是自定义底栏（不是自带 insets 的 NavigationBar）：
@@ -1087,6 +1089,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                         Triple(LaunchDestination.AGENDA, "日程", Icons.Filled.Event),
                         Triple(LaunchDestination.TARGETS, "目标树", Icons.Filled.AccountTree),
                         Triple(LaunchDestination.STATISTICS, "统计", Icons.Filled.Insights),
+                        Triple(LaunchDestination.CHAT, "对话", Icons.Filled.Forum),
                     ).forEach { (item, label, icon) ->
                         WorkspaceNavigationItem(
                             label = label,
@@ -1107,7 +1110,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                 }
             }
         },
-    // 短时提示宿主挂在 Scaffold 上，因此五个页面共用同一个出口，流程不被打断。
+    // 短时提示宿主挂在 Scaffold 上，因此六个页面共用同一个出口，流程不被打断。
         snackbarHost = { AttentionSnackbarHost(state = feedback) },
     ) { padding ->
         if (onboardingVisible) {
@@ -1146,6 +1149,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                     state = statisticsState,
                     actions = statisticsActions,
                 )
+                LaunchDestination.CHAT -> ChatScreen()
                 // 「日程」与兜底落在同一页：「日程」是合并后的页面，它承载当前规划日、今天、
                 // 明天、所有日期与任意规划日；旧入口值 TODAY / ALL_DATES 由领域的兼容映射折进来
                 // （枚举值本身保留），LAST_OPENED 这类不是顶级工作区的值由 [toTopLevelWorkspace]
