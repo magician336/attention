@@ -12,5 +12,20 @@
     -->
     <application>
         <activity android:name="androidx.activity.ComponentActivity" />
+
+        <!--
+          屏 01「她先开口」纯文字对话页的 debug 入口。带 LAUNCHER filter，装 debug 包后
+          桌面会多一个图标，用来在真机上验收组件拼装结果。发布变体不含此 Activity。
+        -->
+        <activity
+            android:name=".fuguang.specpreview.FuguangChatPageActivity"
+            android:exported="true"
+            android:label="新·浮光对话页"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
     </application>
 </manifest>
