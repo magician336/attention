@@ -27,6 +27,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.Insights
@@ -58,6 +59,9 @@ import com.attention.app.agent.rememberWorkspaceAgentRuntime
 import com.attention.app.data.AttentionStateRepository
 import com.attention.app.data.RoomAttentionStateRepository
 import com.attention.app.data.backup.BackupCommitResult
+import com.attention.app.fuguang.chat.FuguangChatPage
+import com.attention.app.fuguang.components.FuguangTheme
+import com.attention.app.fuguang.components.FuguangThemeName
 import com.attention.app.data.backup.ExportBundle
 import com.attention.app.data.backup.ExportDocument
 import com.attention.app.data.backup.ImportMode
@@ -1091,6 +1095,7 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                         Triple(LaunchDestination.AGENDA, "日程", Icons.Filled.Event),
                         Triple(LaunchDestination.TARGETS, "目标树", Icons.Filled.AccountTree),
                         Triple(LaunchDestination.STATISTICS, "统计", Icons.Filled.Insights),
+                        Triple(LaunchDestination.CHAT, "对话", Icons.Filled.ChatBubbleOutline),
                     ).forEach { (item, label, icon) ->
                         WorkspaceNavigationItem(
                             label = label,
@@ -1150,6 +1155,14 @@ fun WorkspaceApp(openScheduleDate: String? = null, openScheduleId: String? = nul
                     state = statisticsState,
                     actions = statisticsActions,
                 )
+                // 对话是与日程并列的顶级工作区：它自己就是工作区，不挂在别的页面下面。
+                // 浮光那套有自己的角色色系统，因此在这里再包一层 FuguangTheme——
+                // 页面外层的 AttentionTheme 继续服务于对话框、系统栏等宿主元素。
+                LaunchDestination.CHAT -> FuguangTheme(theme = FuguangThemeName.GILDED) {
+                    // 外壳已经提供底部导航与系统栏内边距，页面不再自带：
+                    // 否则会出现两条底栏和上下各多一块空白。
+                    FuguangChatPage(showTabBar = false, applyWindowInsets = false)
+                }
                 // 「日程」与兜底落在同一页：「日程」是合并后的页面，它承载当前规划日、今天、
                 // 明天、所有日期与任意规划日；旧入口值 TODAY / ALL_DATES 由领域的兼容映射折进来
                 // （枚举值本身保留），LAST_OPENED 这类不是顶级工作区的值由 [toTopLevelWorkspace]

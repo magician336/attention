@@ -9,11 +9,12 @@ import java.time.LocalDate
  * 页面投影与组合根不各自实现一份解析。
  */
 
-/** 「上次打开」能够恢复、也是组合根唯一能渲染的顶级工作区：日程、目标树、统计。 */
+/** 「上次打开」能够恢复、也是组合根唯一能渲染的顶级工作区：日程、目标树、统计、对话。 */
 val topLevelWorkspaces = setOf(
     LaunchDestination.AGENDA,
     LaunchDestination.TARGETS,
     LaunchDestination.STATISTICS,
+    LaunchDestination.CHAT,
 )
 
 /**
