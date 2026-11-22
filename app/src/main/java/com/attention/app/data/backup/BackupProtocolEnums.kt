@@ -102,15 +102,15 @@ object BackupScheduleFrequencySerializer :
 
 /**
  * 启动入口。[AGENDA] 是「日程」的正式语义；[TODAY] 与 [ALL_DATES] 是旧版本持久化的入口值，
- * 它们仍然解码成各自的枚举值，由 [asAgendaEntry] 做兼容映射。
+ * 它们仍然解码成各自的枚举值，由 [asAgendaEntry] 做兼容映射。[CHAT] 是「对话」工作区。
  *
  * 未知入口按 [BackupLaunchDestination.AGENDA] 处理：日程是主入口，认不出上次落在哪儿时回到主入口，
- * 而不是回到一块已经不存在的工作区。
+ * 而不是回到一块已经不存在的工作区。旧版本 App 读到 [CHAT] 也走这条容错，落回日程。
  *
  * 「写什么名字」（这里）与「旧名字还读不读得出来」（[asAgendaEntry]）是两件独立的事。
  */
 @Serializable(with = BackupLaunchDestinationSerializer::class)
-enum class BackupLaunchDestination { TODAY, TARGETS, ALL_DATES, STATISTICS, LAST_OPENED, AGENDA }
+enum class BackupLaunchDestination { TODAY, TARGETS, ALL_DATES, STATISTICS, LAST_OPENED, AGENDA, CHAT }
 
 /** 启动入口。默认值理由见 [BackupLaunchDestination]。 */
 object BackupLaunchDestinationSerializer :

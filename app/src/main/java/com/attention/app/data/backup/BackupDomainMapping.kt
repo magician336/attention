@@ -415,6 +415,7 @@ internal fun LaunchDestination.toProtocol(): BackupLaunchDestination = when (thi
     LaunchDestination.STATISTICS -> BackupLaunchDestination.STATISTICS
     LaunchDestination.LAST_OPENED -> BackupLaunchDestination.LAST_OPENED
     LaunchDestination.AGENDA -> BackupLaunchDestination.AGENDA
+    LaunchDestination.CHAT -> BackupLaunchDestination.CHAT
 }
 
 internal fun BackupLaunchDestination.toDomain(): LaunchDestination = when (this) {
@@ -424,4 +425,5 @@ internal fun BackupLaunchDestination.toDomain(): LaunchDestination = when (this)
     BackupLaunchDestination.STATISTICS -> LaunchDestination.STATISTICS
     BackupLaunchDestination.LAST_OPENED -> LaunchDestination.LAST_OPENED
     BackupLaunchDestination.AGENDA -> LaunchDestination.AGENDA
+    BackupLaunchDestination.CHAT -> LaunchDestination.CHAT
 }
