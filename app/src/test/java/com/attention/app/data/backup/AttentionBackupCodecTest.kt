@@ -235,7 +235,9 @@ class AttentionBackupCodecTest {
 
     @Test
     fun decoder_requires_explicit_supported_version() {
-        val legacy = Json.Default.encodeToString(AttentionState())
+        // 版本字段带默认值，默认的 Json 不写它，所以这里得到的是一份「没有声明版本」的历史文档。
+        // 协议模型才是文档的载体：直接拿领域状态去序列化会重新让备份格式跟着领域字段走。
+        val legacy = Json.Default.encodeToString(AttentionBackup.fromDomain(AttentionState()))
         val unsupported = legacy.replaceFirst("{", "{\"version\":99,")
 
         assertFalse(runCatching { AttentionBackupCodec.decode(legacy) }.isSuccess)
