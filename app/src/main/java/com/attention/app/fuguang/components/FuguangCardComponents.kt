@@ -22,12 +22,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -79,44 +79,36 @@ private fun FuguangK1AdjustmentRow(
 ) {
     val roles = fuguangRoles()
     val type = fuguangType()
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 13.dp, vertical = 9.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    Surface(
+        onClick = onToggle,
+        modifier = Modifier.fillMaxWidth().testTag("k1-toggle-${item.id}"),
+        color = Color.Transparent,
     ) {
-        Box(
-            Modifier.width(3.dp).height(34.dp).background(
-                if (item.accepted) roles.mainDeep else roles.line,
-                RoundedCornerShape(2.dp),
-            ),
-        )
-        Spacer(Modifier.width(8.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = item.title,
-                style = type.t125.copy(fontWeight = FontWeight.Medium),
-                color = roles.ink,
-                textDecoration = if (item.accepted) TextDecoration.None else TextDecoration.LineThrough,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(item.detail, style = type.t11, color = roles.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        }
-        Spacer(Modifier.width(8.dp))
-        Surface(
-            onClick = onToggle,
-            modifier = Modifier.height(28.dp).testTag("k1-toggle-${item.id}"),
-            shape = CircleShape,
-            color = if (item.accepted) roles.mainDeep else roles.surface,
-            border = if (item.accepted) null else BorderStroke(1.dp, roles.line),
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 13.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(contentAlignment = Alignment.Center) {
+            Box(
+                Modifier.width(3.dp).height(34.dp).background(
+                    if (item.accepted) roles.mainDeep else roles.line,
+                    RoundedCornerShape(2.dp),
+                ),
+            )
+            Spacer(Modifier.width(8.dp))
+            Column(
+                modifier = Modifier.weight(1f).alpha(if (item.accepted) 1f else 0.55f),
+            ) {
                 Text(
-                    text = if (item.accepted) "采纳" else "原样",
-                    style = type.t95,
-                    color = if (item.accepted) roles.surface else roles.ink3,
-                    modifier = Modifier.padding(horizontal = 10.dp),
+                    text = item.title,
+                    style = type.t125.copy(fontWeight = FontWeight.Medium),
+                    color = roles.ink,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
+                Text(item.detail, style = type.t11, color = roles.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
+            Spacer(Modifier.width(8.dp))
+            FuguangAdjustmentBadge(item.change)
         }
     }
 }

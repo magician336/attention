@@ -2,7 +2,6 @@ package com.attention.app.fuguang.components
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,10 +12,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -49,7 +48,7 @@ fun FuguangC4ThinkingBlock(
             } else {
                 Icon(Icons.Filled.Check, null, tint = roles.mainDeep, modifier = Modifier.size(10.dp))
             }
-            Text(text, style = type.t11, color = roles.ink3, maxLines = 1)
+            Text(text, style = type.t11, color = roles.ink2, maxLines = 1)
         }
     }
 }
@@ -78,7 +77,7 @@ fun FuguangC5ReceiptRow(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(Modifier.size(13.dp).background(roles.mainDeep, CircleShape), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Filled.Check, null, tint = roles.surface, modifier = Modifier.size(9.dp))
+                    Icon(Icons.Filled.Check, null, tint = roles.onMain, modifier = Modifier.size(9.dp))
                 }
                 Spacer(Modifier.width(6.dp))
                 Text(text, style = type.t11.copy(fontWeight = FontWeight.Medium), color = roles.mainDeep, modifier = Modifier.weight(1f))
@@ -87,7 +86,7 @@ fun FuguangC5ReceiptRow(
         }
         if (expanded) {
             Column(modifier = Modifier.padding(start = 20.dp, top = 5.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                details.take(4).forEach { detail -> Text("↳ $detail", style = type.t95, color = roles.ink3) }
+                details.take(4).forEach { detail -> Text("↳ $detail", style = type.t95, color = roles.ink2) }
             }
         }
     }
@@ -98,28 +97,55 @@ fun FuguangC6SuggestionCapsules(
     suggestions: List<String>,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
+    selectedSuggestion: String? = null,
+    onExpand: (() -> Unit)? = null,
 ) {
     val roles = fuguangRoles()
     val type = fuguangType()
-    Row(
-        modifier = modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         suggestions.take(3).forEach { suggestion ->
+            val selected = suggestion == selectedSuggestion
             Surface(
                 onClick = { onSelect(suggestion) },
-                modifier = Modifier.height(28.dp).testTag("suggestion-$suggestion"),
-                shape = CircleShape,
-                color = roles.surface,
-                border = BorderStroke(1.dp, roles.main),
+                modifier = Modifier.fillMaxWidth().height(34.dp).testTag("suggestion-$suggestion"),
+                shape = RoundedCornerShape(8.dp),
+                color = if (selected) roles.accentTint else roles.surface,
+                border = BorderStroke(1.dp, if (selected) roles.accentDeep else roles.line),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = suggestion,
+                        style = type.t11,
+                        color = roles.ink2,
+                        maxLines = 1,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = roles.ink2,
+                        modifier = Modifier.size(15.dp),
+                    )
+                }
+            }
+        }
+        if (suggestions.size > 3) {
+            Surface(
+                onClick = { onExpand?.invoke() },
+                enabled = onExpand != null,
+                modifier = Modifier.fillMaxWidth().height(32.dp),
+                shape = RoundedCornerShape(8.dp),
+                color = roles.surface.copy(alpha = 0.55f),
+                border = BorderStroke(1.dp, roles.line),
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Text(
-                        text = suggestion.take(14),
-                        style = type.t125,
-                        color = roles.mainDeep,
-                        maxLines = 1,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        text = "还有 ${suggestions.size - 3} 条 · 展开",
+                        style = type.t95,
+                        color = roles.ink2,
                     )
                 }
             }

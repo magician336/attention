@@ -55,11 +55,11 @@ fun FuguangT1DateCapsuleBar(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            Text(day.weekday, style = type.t95.copy(fontSize = 9.sp), color = if (day.selected) roles.surface else roles.ink3)
+                            Text(day.weekday, style = type.t95.copy(fontSize = 9.sp), color = if (day.selected) roles.onMain else roles.ink3)
                             Text(
                                 day.date,
                                 style = type.t125.copy(fontSize = 11.5.sp, fontWeight = FontWeight.Medium),
-                                color = if (day.selected) roles.surface else roles.ink,
+                                color = if (day.selected) roles.onMain else roles.ink,
                             )
                         }
                         when {

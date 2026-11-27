@@ -27,5 +27,33 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          前端同学的「一周重排」六屏可交互原型。只在 debug 变体注册，用来对照
+          Compose 实现与离线网页的差异。注意：交付包里原版清单把主应用入口
+          （.MainActivity）用 tools:node="remove" 删掉了——那是给独立演示 APK 用的，
+          这里保留主入口，否则装 debug 包进不去正式应用。
+        -->
+        <activity
+            android:name=".fuguang.prototype.FuguangWeekPrototypeActivity"
+            android:exported="true"
+            android:label="浮光·一周重排原型"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 同一个原型的网页版（assets/fuguang/week_rearrange.html），用于逐拍对照。 -->
+        <activity
+            android:name=".fuguang.prototype.FuguangWeekWebInteractiveActivity"
+            android:exported="true"
+            android:label="浮光·一周重排网页版">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
     </application>
 </manifest>

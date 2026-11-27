@@ -51,7 +51,7 @@ fun FuguangO1BottomSheet(
                     Box(Modifier.width(32.dp).height(4.dp).background(roles.line, CircleShape))
                 }
                 Text(title, style = type.t17, color = roles.ink)
-                Text(subtitle, style = type.t11, color = roles.ink3)
+                Text(subtitle, style = type.t11, color = roles.ink2)
                 Spacer(Modifier.height(12.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
                     options.take(3).forEach { option ->
@@ -90,12 +90,12 @@ private fun FuguangO1OptionRow(
                     Modifier.size(32.dp).background(if (selected) roles.mainDeep else roles.n3, CircleShape),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(option.indexLabel, style = type.t11.copy(fontWeight = FontWeight.Medium), color = if (selected) roles.surface else roles.ink3)
+                    Text(option.indexLabel, style = type.t11.copy(fontWeight = FontWeight.Medium), color = if (selected) roles.onMain else roles.ink3)
                 }
                 Spacer(Modifier.width(9.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(option.title, style = type.t125.copy(fontWeight = FontWeight.Medium), color = roles.ink)
-                    Text(option.subtitle, style = type.t95, color = roles.ink3)
+                    Text(option.subtitle, style = type.t95, color = roles.ink2)
                 }
                 if (option.recommended) FuguangB2Badge("推荐", FuguangBadgeKind.TARGET)
             }

@@ -11,11 +11,31 @@ import kotlin.math.sqrt
 
 private data class Oklch(val l: Double, val c: Double, val h: Double)
 
-internal fun deriveRoles(seeds: FuguangSeeds): FuguangRoles {
+internal fun deriveRoles(seeds: FuguangSeeds, surface: Color): FuguangRoles {
     val ink = seeds.ink.toOklch()
     val paper = seeds.paper.toOklch()
     val main = seeds.main.toOklch()
     val accent = seeds.accent.toOklch()
+    val bubbleAi = Oklch(
+        l = (paper.l - 0.045).coerceIn(0.0, 1.0),
+        c = accent.c * 0.40,
+        h = accent.h,
+    )
+    val bubbleUser = Oklch(
+        l = (paper.l - 0.035).coerceIn(0.0, 1.0),
+        c = main.c * 0.325,
+        h = main.h,
+    )
+    val bubbleAiEdge = Oklch(
+        l = 0.780,
+        c = bubbleAi.c * 1.02,
+        h = bubbleAi.h,
+    )
+    val bubbleUserEdge = Oklch(
+        l = 0.780,
+        c = bubbleUser.c * 1.02,
+        h = bubbleUser.h,
+    )
     return FuguangRoles(
         ink = seeds.ink,
         ink2 = ink.transform(ink.l * 1.752, ink.c + 0.0193, ink.h + 21.8),
@@ -37,7 +57,12 @@ internal fun deriveRoles(seeds: FuguangSeeds): FuguangRoles {
         accentDeep = accent.transform(accent.l * 0.56, accent.c - 0.0013, accent.h - 6.7),
         accentDeep2 = accent.transform(accent.l * 0.510, accent.c - 0.0146, accent.h - 8.5),
         accentTint = accent.transform(accent.l + (1 - accent.l) * 0.517, accent.c * 0.416, accent.h + 0.5),
-        surface = Color.White,
+        surface = surface,
+        bubbleAi = bubbleAi.toColor(),
+        bubbleUser = bubbleUser.toColor(),
+        bubbleAiEdge = bubbleAiEdge.toColor(),
+        bubbleUserEdge = bubbleUserEdge.toColor(),
+        onMain = Color.White,
         danger = Color(0xFF9B4A3E),
     )
 }

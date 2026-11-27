@@ -107,7 +107,7 @@ private fun FuguangWeekDayCard(day: FuguangWeekDayCardUi) {
                     Spacer(Modifier.width(7.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(entry.title, style = type.t125.copy(fontSize = 11.5.sp), color = roles.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(entry.location, style = type.t8.copy(fontSize = 8.5.sp), color = roles.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(entry.location, style = type.t8.copy(fontSize = 8.5.sp), color = roles.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }

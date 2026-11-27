@@ -18,10 +18,10 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ShowChart
 import androidx.compose.material.icons.filled.CalendarToday
-import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.ChatBubbleOutline
-import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material3.Icon
@@ -48,9 +48,8 @@ import androidx.compose.ui.unit.sp
 fun FuguangS1NavigationBar(
     name: String,
     roleLabel: String,
-    goalLabel: String,
+    summaryLabel: String,
     modifier: Modifier = Modifier,
-    pendingCount: Int? = null,
     onBack: (() -> Unit)? = null,
     onMore: (() -> Unit)? = null,
 ) {
@@ -80,15 +79,11 @@ fun FuguangS1NavigationBar(
                     Text(
                         text = roleLabel,
                         style = type.t95,
-                        color = roles.ink3,
+                        color = roles.ink2,
                         maxLines = 1,
                     )
                 }
-                FuguangS2GoalCapsule(goalLabel)
-                if (pendingCount != null) {
-                    Spacer(Modifier.width(5.dp))
-                    FuguangB2Badge("${pendingCount}项", FuguangBadgeKind.COUNT)
-                }
+                FuguangS2GoalCapsule(summaryLabel)
                 if (onMore != null) {
                     IconButton(onClick = onMore, modifier = Modifier.size(34.dp)) {
                         Icon(Icons.Filled.MoreHoriz, "更多", tint = roles.ink3, modifier = Modifier.size(18.dp))
@@ -199,7 +194,7 @@ fun FuguangS4SendButton(
         color = if (enabled) roles.mainDeep else roles.n3,
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Text("↑", color = if (enabled) roles.surface else roles.ink4, fontSize = 15.sp)
+            Text("↑", color = if (enabled) roles.onMain else roles.ink4, fontSize = 15.sp)
         }
     }
 }
@@ -217,46 +212,47 @@ fun FuguangS5TabBar(
     val dims = fuguangDims()
     val items = remember {
         listOf(
-            FuguangTabItem("对话", Icons.Filled.ChatBubbleOutline),
             FuguangTabItem("日程", Icons.Filled.CalendarToday),
-            FuguangTabItem("专注", Icons.Filled.CenterFocusStrong),
-            FuguangTabItem("回顾", Icons.Filled.History),
+            FuguangTabItem("目标树", Icons.Filled.AccountTree),
+            FuguangTabItem("统计", Icons.AutoMirrored.Filled.ShowChart),
+            FuguangTabItem("对话", Icons.Filled.ChatBubbleOutline),
         )
     }
     Surface(modifier = modifier.fillMaxWidth(), color = roles.paper) {
-        Row(
-            modifier = Modifier.height(dims.tabBarHeight).padding(horizontal = 8.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            items.forEachIndexed { index, item ->
-                val selected = selectedIndex == index
-                Surface(
-                    onClick = { onSelect(index) },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                    color = roles.paper,
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Box(
-                            modifier = Modifier
-                                .width(40.dp)
-                                .height(24.dp)
-                                .background(if (selected) roles.mainDeep else roles.paper, RoundedCornerShape(12.dp)),
-                            contentAlignment = Alignment.Center,
+        Column {
+            Box(Modifier.fillMaxWidth().height(dims.hairline).background(roles.line))
+            Row(
+                modifier = Modifier.height(dims.tabBarHeight).padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                items.forEachIndexed { index, item ->
+                    val selected = selectedIndex == index
+                    Surface(
+                        onClick = { onSelect(index) },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(8.dp),
+                        color = roles.paper,
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
                         ) {
                             Icon(
                                 imageVector = item.icon,
                                 contentDescription = item.label,
-                                tint = if (selected) roles.surface else roles.ink3,
-                                modifier = Modifier.size(16.dp),
+                                tint = if (selected) roles.mainDeep else roles.ink3,
+                                modifier = Modifier.size(14.dp),
+                            )
+                            Text(
+                                text = item.label,
+                                style = type.t95.copy(
+                                    fontSize = 9.sp,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                ),
+                                color = if (selected) roles.mainDeep else roles.ink3,
                             )
                         }
-                        Text(
-                            text = item.label,
-                            style = type.t95.copy(fontSize = 9.sp),
-                            color = if (selected) roles.mainDeep else roles.ink3,
-                        )
                     }
                 }
             }

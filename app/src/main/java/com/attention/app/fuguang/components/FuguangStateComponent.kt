@@ -65,7 +65,7 @@ fun FuguangA1State(
         Spacer(Modifier.height(10.dp))
         Text(title, style = type.t125.copy(fontWeight = FontWeight.Medium), color = roles.ink, textAlign = TextAlign.Center)
         Spacer(Modifier.height(4.dp))
-        Text(description, style = type.t95.copy(fontSize = 10.5.sp), color = roles.ink3, textAlign = TextAlign.Center)
+        Text(description, style = type.t95.copy(fontSize = 10.5.sp), color = roles.ink2, textAlign = TextAlign.Center)
         if (mode == FuguangStateMode.LOADING) {
             Spacer(Modifier.height(10.dp))
             Box(Modifier.fillMaxWidth(0.58f).height(7.dp).background(roles.n3, CircleShape))

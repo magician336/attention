@@ -40,6 +40,11 @@ data class FuguangRoles(
     val accentDeep2: Color,
     val accentTint: Color,
     val surface: Color,
+    val bubbleAi: Color,
+    val bubbleUser: Color,
+    val bubbleAiEdge: Color,
+    val bubbleUserEdge: Color,
+    val onMain: Color,
     val danger: Color,
 )
 
@@ -47,18 +52,16 @@ enum class FuguangThemeName(val label: String) {
     GILDED("浮光跃金"),
     BLUSH("先帝最爱"),
     GUAVA("青提芭乐"),
-    WALDEN("瓦尔登"),
-    ISLAND("孤岛"),
-    MINT("薄荷可颂"),
+    WALDEN("瓦尔登湖"),
+    ISLAND("椰风海岛"),
 }
 
 object FuguangThemeSeeds {
-    private val gilded = FuguangSeeds(hex(0x2F302B), hex(0xF7F4EA), hex(0x799B84), hex(0xF1D996))
-    private val blush = FuguangSeeds(hex(0x44262E), hex(0xFBF3EC), hex(0xF0708C), hex(0xF5C7C9))
-    private val guava = FuguangSeeds(hex(0x4F2028), hex(0xFBF7EC), hex(0xF17596), hex(0xE4F6A9))
-    private val walden = FuguangSeeds(hex(0x153540), hex(0xF4F8F7), hex(0x4DA4C3), hex(0xCCE7D9))
-    private val island = FuguangSeeds(hex(0x16324F), hex(0xF6F7F2), hex(0x225DAB), hex(0xCADEC3))
-    private val mint = FuguangSeeds(hex(0x3D2C26), hex(0xF9F4EA), hex(0x8D6C63), hex(0xFCD3D5))
+    private val gilded = FuguangSeeds(hex(0x2F302B), hex(0xF3EDD9), hex(0x799B84), hex(0xF1D996))
+    private val blush = FuguangSeeds(hex(0x44262E), hex(0xFAEADC), hex(0xF0708C), hex(0xF5C7C9))
+    private val guava = FuguangSeeds(hex(0x4F2028), hex(0xF5ECD7), hex(0xF17596), hex(0xE4F6A9))
+    private val walden = FuguangSeeds(hex(0x153540), hex(0xDFE7E5), hex(0x4DA4C3), hex(0xCCE7D9))
+    private val island = FuguangSeeds(hex(0x16324F), hex(0xECEEE4), hex(0x225DAB), hex(0xCADEC3))
 
     fun seedsFor(theme: FuguangThemeName): FuguangSeeds = when (theme) {
         FuguangThemeName.GILDED -> gilded
@@ -66,12 +69,21 @@ object FuguangThemeSeeds {
         FuguangThemeName.GUAVA -> guava
         FuguangThemeName.WALDEN -> walden
         FuguangThemeName.ISLAND -> island
-        FuguangThemeName.MINT -> mint
+    }
+
+    internal fun surfaceFor(theme: FuguangThemeName): Color = when (theme) {
+        FuguangThemeName.GILDED -> hex(0xFBF8ED)
+        FuguangThemeName.BLUSH -> hex(0xFFF6EE)
+        FuguangThemeName.GUAVA -> hex(0xFCF7EC)
+        FuguangThemeName.WALDEN -> hex(0xECF1F0)
+        FuguangThemeName.ISLAND -> hex(0xF7F8F3)
     }
 }
 
 object FuguangDerivedThemes {
-    private val cache = FuguangThemeName.entries.associateWith { deriveRoles(FuguangThemeSeeds.seedsFor(it)) }
+    private val cache = FuguangThemeName.entries.associateWith {
+        deriveRoles(FuguangThemeSeeds.seedsFor(it), FuguangThemeSeeds.surfaceFor(it))
+    }
     fun rolesFor(theme: FuguangThemeName): FuguangRoles = cache.getValue(theme)
 }
 
@@ -92,9 +104,9 @@ data class FuguangDimensions(
     val hairline: Dp = 1.dp,
     val navHeight: Dp = 58.dp,
     val goalHeight: Dp = 25.dp,
-    val inputHeight: Dp = 38.dp,
-    val sendSize: Dp = 38.dp,
-    val tabBarHeight: Dp = 52.dp,
+    val inputHeight: Dp = 34.dp,
+    val sendSize: Dp = 32.dp,
+    val tabBarHeight: Dp = 46.dp,
     val avatarSize: Dp = 25.dp,
     val bubbleMaxWidth: Dp = 270.dp,
     val cardWidth: Dp = 300.dp,

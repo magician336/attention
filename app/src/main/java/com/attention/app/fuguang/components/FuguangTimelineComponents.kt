@@ -111,7 +111,7 @@ fun FuguangT3ScheduleBlock(
                     Text(
                         block.subtitle,
                         style = type.t95.copy(fontSize = 8.5.sp),
-                        color = colors.text.copy(alpha = 0.72f),
+                        color = roles.ink2,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )

@@ -42,6 +42,12 @@ enum class FuguangScheduleState {
     CANCELLED,
 }
 
+enum class FuguangAdjustmentChange {
+    ADDED,
+    MOVED,
+    PENDING,
+}
+
 @Immutable
 data class FuguangScheduleBlockUi(
     val id: String,
@@ -68,7 +74,8 @@ data class FuguangAdjustmentItemUi(
     val id: String,
     val title: String,
     val detail: String,
-    val accepted: Boolean,
+    val accepted: Boolean = true,
+    val change: FuguangAdjustmentChange = FuguangAdjustmentChange.PENDING,
 )
 
 @Immutable

@@ -50,7 +50,7 @@ fun FuguangB1Button(
     }
     val foreground = when {
         !enabled -> roles.ink4
-        kind == FuguangButtonKind.PRIMARY -> roles.surface
+        kind == FuguangButtonKind.PRIMARY -> roles.onMain
         else -> roles.mainDeep
     }
     Surface(
@@ -78,6 +78,39 @@ fun FuguangB1Button(
 }
 
 @Composable
+fun FuguangAdjustmentBadge(
+    change: FuguangAdjustmentChange,
+    modifier: Modifier = Modifier,
+) {
+    val roles = fuguangRoles()
+    val type = fuguangType()
+    val dims = fuguangDims()
+    val label = when (change) {
+        FuguangAdjustmentChange.ADDED -> "新增"
+        FuguangAdjustmentChange.MOVED -> "挪走"
+        FuguangAdjustmentChange.PENDING -> "待定"
+    }
+    val background = when (change) {
+        FuguangAdjustmentChange.ADDED -> roles.accentTint
+        FuguangAdjustmentChange.MOVED -> roles.mainTint
+        FuguangAdjustmentChange.PENDING -> roles.n3
+    }
+    val foreground = when (change) {
+        FuguangAdjustmentChange.ADDED -> roles.accentDeep
+        FuguangAdjustmentChange.MOVED -> roles.mainDeep
+        FuguangAdjustmentChange.PENDING -> roles.ink2
+    }
+    Surface(modifier = modifier.height(dims.badgeHeight), shape = CircleShape, color = background) {
+        Box(
+            modifier = Modifier.padding(horizontal = 9.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(label, style = type.t95.copy(fontWeight = FontWeight.Medium), color = foreground)
+        }
+    }
+}
+
+@Composable
 fun FuguangB2Badge(
     label: String,
     kind: FuguangBadgeKind,
@@ -89,12 +122,12 @@ fun FuguangB2Badge(
     val background = when (kind) {
         FuguangBadgeKind.TARGET -> roles.accentTint
         FuguangBadgeKind.COUNT -> roles.mainTint
-        FuguangBadgeKind.NEUTRAL -> roles.n2
+        FuguangBadgeKind.NEUTRAL -> roles.n3
     }
     val foreground = when (kind) {
         FuguangBadgeKind.TARGET -> roles.accentDeep
         FuguangBadgeKind.COUNT -> roles.mainInk
-        FuguangBadgeKind.NEUTRAL -> roles.ink3
+        FuguangBadgeKind.NEUTRAL -> roles.ink2
     }
     Surface(modifier = modifier.height(dims.badgeHeight), shape = CircleShape, color = background) {
         Row(

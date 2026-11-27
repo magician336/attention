@@ -170,13 +170,13 @@ internal fun FuguangChatPage(
                     },
                 ),
         ) {
-            // S1 导航条（内含 S2 目标胶囊与 B2 计数徽标）。「更多」= 开新对话，落到 A1 空态。
+            // S1 导航条（内含 S2 目标胶囊）。「更多」= 开新对话，落到 A1 空态。
+            // 组件包 11-15 版把 goalLabel 并成 summaryLabel，并去掉导航条上的计数徽标
+            // （待确认条数改由日程块上的 AdjustmentBadge 表达），因此只传胶囊文案。
             FuguangS1NavigationBar(
                 name = FuguangChatDemoData.agentName,
                 roleLabel = FuguangChatDemoData.agentRole,
-                goalLabel = FuguangChatDemoData.goalLabel,
-                // B2 计数徽标：只有还有待确认的调整时才出现，规格上限 99+
-                pendingCount = adjustment.items.count { it.accepted }.takeIf { adjustment.status == "待确认" },
+                summaryLabel = FuguangChatDemoData.goalLabel,
                 onMore = {
                     messages.clear()
                     if (!liveMode) {

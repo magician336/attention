@@ -1,8 +1,9 @@
 package com.attention.app.fuguang.components
 
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -60,7 +61,7 @@ fun FuguangC1Avatar(
                 modifier = Modifier.size(dims.avatarSize).clip(CircleShape),
             )
             state == FuguangAvatarState.GLOW -> Box(Modifier.size(8.dp).background(roles.accentDeep, CircleShape))
-            fallback.isNotEmpty() -> Text(fallback, style = type.t95.copy(fontSize = 11.sp), color = roles.surface)
+            fallback.isNotEmpty() -> Text(fallback, style = type.t95.copy(fontSize = 11.sp), color = roles.onMain)
         }
     }
 }
@@ -88,17 +89,20 @@ fun FuguangC2AiBubble(
         } else {
             Spacer(Modifier.size(dims.avatarSize))
         }
+        val aiShape = RoundedCornerShape(topStart = 5.dp, topEnd = 15.dp, bottomEnd = 15.dp, bottomStart = 15.dp)
         Surface(
-            modifier = Modifier.widthIn(max = dims.bubbleMaxWidth),
-            shape = RoundedCornerShape(topStart = 5.dp, topEnd = 15.dp, bottomEnd = 15.dp, bottomStart = 15.dp),
-            color = roles.surface,
+            modifier = Modifier
+                .widthIn(max = dims.bubbleMaxWidth)
+                .border(1.dp, roles.bubbleAiEdge, aiShape),
+            shape = aiShape,
+            color = roles.bubbleAi,
         ) {
             Column(
                 modifier = Modifier.padding(horizontal = 13.dp, vertical = 9.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 visible.forEach { segment ->
-                    Text(bubbleText(segment, roles.mainDeep), style = type.t135, color = roles.ink)
+                    Text(bubbleText(segment, roles.accentDeep2), style = type.t135, color = roles.ink)
                 }
                 if (overflow) {
                     Text(
@@ -115,9 +119,6 @@ fun FuguangC2AiBubble(
     }
 }
 
-/** 折叠阈值：超过 4 段就收起，与规范 P11「正文超过 4 行要折叠」一致。 */
-private const val COLLAPSED_SEGMENT_LIMIT = 4
-
 @Composable
 fun FuguangC3UserBubble(
     text: String,
@@ -127,10 +128,13 @@ fun FuguangC3UserBubble(
     val type = fuguangType()
     val dims = fuguangDims()
     Box(modifier = modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+        val userShape = RoundedCornerShape(topStart = 15.dp, topEnd = 5.dp, bottomEnd = 15.dp, bottomStart = 15.dp)
         Surface(
-            modifier = Modifier.widthIn(max = dims.bubbleMaxWidth),
-            shape = RoundedCornerShape(topStart = 15.dp, topEnd = 5.dp, bottomEnd = 15.dp, bottomStart = 15.dp),
-            color = roles.mainSoft,
+            modifier = Modifier
+                .widthIn(max = dims.bubbleMaxWidth)
+                .border(1.dp, roles.bubbleUserEdge, userShape),
+            shape = userShape,
+            color = roles.bubbleUser,
         ) {
             Text(
                 text = text,
@@ -152,3 +156,6 @@ private fun bubbleText(segment: FuguangTextSegment, emphasisColor: Color) = buil
         }
     }
 }
+
+/** 折叠阈值：超过 4 段收起，与规范 P11「正文超过 4 行要折叠」一致。 */
+private const val COLLAPSED_SEGMENT_LIMIT = 4
